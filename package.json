@@ -1,0 +1,23 @@
+{
+  "name": "mobile-automation",
+  "version": "1.0.0",
+  "description": "End-to-end mobile automation using Appium + WebdriverIO (POM)",
+  "scripts": {
+    "launch": "cross-env DEVICE_TYPE=real1     node tests/launchApp.test.js",
+    "launch:emulator": "cross-env DEVICE_TYPE=emulator node tests/launchApp.test.js",
+    "forgotpwd": "cross-env DEVICE_TYPE=real     node tests/forgotPassword.test.js",
+    "forgotpwd:emulator": "cross-env DEVICE_TYPE=emulator node tests/forgotPassword.test.js",
+    "login": "cross-env DEVICE_TYPE=real     node tests/login.test.js",
+    "login:emulator": "cross-env DEVICE_TYPE=emulator node tests/login.test.js",
+    "ncforgotpwd": "cross-env DEVICE_TYPE=real     node tests/NCforgotpassword.js",
+    "ncforgotpwd:emulator": "cross-env DEVICE_TYPE=emulator node tests/NCforgotpassword.js"
+  },
+  "dependencies": {
+    "googleapis": "^144.0.0",
+    "imapflow": "^1.4.3",
+    "webdriverio": "^9.0.0"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
+  }
+}
