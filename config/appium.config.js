@@ -18,6 +18,7 @@ const capabilities = {
     'appium:appActivity':       'com.iouring.globecapital.MainActivity',
     'appium:noReset':           device.noReset,
     'appium:newCommandTimeout': 60,
+    'appium:waitForIdleTimeout': 1000,
 };
 
 // Only add avdName for emulator so Appium can auto-launch it

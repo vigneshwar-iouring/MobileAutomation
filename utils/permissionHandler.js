@@ -8,16 +8,17 @@ const permissionHandler = {
         ];
 
         let dismissed = 0;
+        const overallStart = Date.now();
 
         for (let attempt = 0; attempt < 5; attempt++) {
             let found = false;
             for (const selector of selectors) {
                 try {
-                    const btn = await driver.$(selector);
-                    if (await btn.isDisplayed()) {
+                    const [btn] = await driver.$$(selector);
+                    if (btn && await btn.isDisplayed()) {
                         await btn.click();
                         console.log(`Permission popup dismissed (attempt ${attempt + 1})`);
-                        await driver.pause(1000);
+                        await driver.pause(500);
                         dismissed++;
                         found = true;
                         break;
@@ -26,6 +27,8 @@ const permissionHandler = {
             }
             if (!found) break;
         }
+
+        console.log(`dismissAllPermissions took ${Date.now() - overallStart}ms total (dismissed ${dismissed})`);
 
         if (dismissed === 0) {
             console.log('No permission popups found');

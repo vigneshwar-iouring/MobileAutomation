@@ -4,8 +4,8 @@ class SplashPage extends BasePage {
     constructor(driver) {
         super(driver);
 
-        this.loginButton   = 'android=new UiSelector().textContains("Login")';
-        this.splashLogo    = 'android=new UiSelector().className("android.widget.ImageView").instance(0)';
+        this.loginButton = 'android=new UiSelector().textContains("Login")';
+        this.splashLogo = 'android=new UiSelector().className("android.widget.ImageView").instance(0)';
         this.getStartedBtn = 'android=new UiSelector().textContains("Get Started")';
     }
 
@@ -22,8 +22,8 @@ class SplashPage extends BasePage {
     }
 
     async isAppLoaded() {
-        const loginVisible = await this.isElementVisible(this.loginButton, 8000);
-        const logoVisible  = await this.isElementVisible(this.splashLogo, 3000);
+        const loginVisible = await this.isElementVisible(this.loginButton, 5000);
+        const logoVisible = await this.isElementVisible(this.splashLogo, 3000);
         return loginVisible || logoVisible;
     }
 

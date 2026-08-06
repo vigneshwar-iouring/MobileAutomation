@@ -37,7 +37,7 @@
         "<node_internals>/**"
       ],
       "env": {
-        "DEVICE_TYPE": "real1"
+        "DEVICE_TYPE": "real"
       }
     }
   ]
