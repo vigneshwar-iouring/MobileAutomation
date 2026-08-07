@@ -65,6 +65,13 @@ class QuotesPage extends BasePage {
         this.watchlistButton = 'android=new UiSelector().description("WATCHLIST")';
         this.buyButton = 'android=new UiSelector().description("BUY")';
         this.sellButton = 'android=new UiSelector().description("SELL")';
+
+        // The call-detail dialog has TWO "BUY" elements: a non-clickable View tagging the call's
+        // own transaction type, and the actual clickable Button. A plain description("BUY") match
+        // returns the tag first (document order) and silently no-ops on click - className narrows
+        // it to the real button. The Quotes screen's own BUY has no such duplicate, so buyButton
+        // above still works fine there.
+        this.dialogBuyButton = 'android=new UiSelector().className("android.widget.Button").description("BUY")';
         this.swipeUpForDetails = 'android=new UiSelector().description("Swipe up for Stock Details")';
         this.advancedOptionsIcon = 'android=new UiSelector().description("Advanced Options")';
         this.addToBasketOption = 'android=new UiSelector().description("Add To Basket")';
@@ -75,6 +82,11 @@ class QuotesPage extends BasePage {
     async openQuote() {
         await this.click(this.quoteButton);
         console.log('Opened Quotes screen');
+    }
+
+    async clickDialogBuy() {
+        await this.click(this.dialogBuyButton);
+        console.log('Clicked BUY on the call-detail dialog');
     }
 
     // Unlike the Quotes screen, this dialog's fields have no field name embedded in their own

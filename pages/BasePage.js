@@ -11,6 +11,10 @@ class BasePage {
 
     async enterText(selector, text, timeout = 3000) {
         const el = await this.findElement(selector, timeout);
+        // Focusing before typing matters here: setValue() without a prior click can update the
+        // EditText's own text (so it reads back correctly right after) without the app's own
+        // form state ever seeing a change event - so on submit it still treats the field as empty.
+        await el.click();
         await el.clearValue();
         await el.setValue(text);
     }
@@ -151,6 +155,22 @@ class BasePage {
         const el = await this.driver.$(`android=new UiSelector().description("${target.desc}")`);
         await el.click();
         return target.desc;
+    }
+
+    // Finds the described element immediately to the right of `labelNode`, within the same row -
+    // the layout used by e.g. Order Pad's "Approx margin:"/"Avail:" and the NEFT/RTGS/IMPS
+    // dialog's "Beneficiary"/"Bank Name" rows, where a label and its value are side-by-side
+    // siblings rather than stacked in separate label/value rows.
+    findInlineValue(nodes, labelNode, rowTolerance = 15) {
+        const sameRow = nodes.filter(n => n !== labelNode && Math.abs(n.y1 - labelNode.y1) <= rowTolerance && n.x1 > labelNode.x1);
+        if (!sameRow.length) return null;
+        sameRow.sort((a, b) => a.x1 - b.x1);
+        return sameRow[0].desc.trim();
+    }
+
+    parseCurrency(text) {
+        if (!text) return NaN;
+        return parseFloat(text.replace(/[₹,\s]/g, ''));
     }
 
     // Polls the page source for `text` for a short window - used for toasts (e.g. "Added to

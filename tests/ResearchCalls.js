@@ -63,16 +63,18 @@ async function runSymbolQuoteFlow(driver, researchCalls, label) {
     const callDetails = await quotesPage.readCallDetails(firstCard.rawDesc);
     await quotesPage.validateEndDate(callDetails);
 
+    // Tapping the symbol opens a call-detail dialog (BUY/QUOTE/WATCHLIST) before the Quotes screen
+    // even exists - Step 7's BUY click belongs to that dialog, not the Quotes screen's own BUY.
+    console.log('Step 7: Clicking BUY on the call-detail dialog...');
+    await quotesPage.clickDialogBuy();
+    await verifyOrderPad(driver, symbol, 'Buy', 'BUY #1', { matchContains });
+
     await quotesPage.openQuote();
     const onQuotes = await quotesPage.isDisplayed();
     console.log(`Quotes screen displayed: ${onQuotes}`);
 
     console.log('Step 6: Reading quote details...');
     await quotesPage.readQuoteDetails();
-
-    console.log('Step 7: Clicking BUY...');
-    await quotesPage.clickBuy();
-    await verifyOrderPad(driver, symbol, 'Buy', 'BUY #1', { matchContains });
 
     console.log('Step 8: Expanding Quotes screen and scrolling to bottom...');
     await quotesPage.clickSwipeUpIfAvailable();

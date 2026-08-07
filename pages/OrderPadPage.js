@@ -29,21 +29,6 @@ class OrderPadPage extends BasePage {
         return null;
     }
 
-    // "Approx margin:" and "Avail:" sit inline with their value as the next element to the right
-    // in the same row (unlike the call-detail dialog's label-row/value-row-below layout) - so this
-    // just takes the nearest described element to the label's right within the same row.
-    findInlineValue(nodes, labelNode, rowTolerance = 15) {
-        const sameRow = nodes.filter(n => n !== labelNode && Math.abs(n.y1 - labelNode.y1) <= rowTolerance && n.x1 > labelNode.x1);
-        if (!sameRow.length) return null;
-        sameRow.sort((a, b) => a.x1 - b.x1);
-        return sameRow[0].desc.trim();
-    }
-
-    parseCurrency(text) {
-        if (!text) return NaN;
-        return parseFloat(text.replace(/[₹,\s]/g, ''));
-    }
-
     async getApproxMargin() {
         const nodes = await this.getDescribedElements();
         const labelNode = nodes.find(n => n.desc.trim() === 'Approx margin:');
