@@ -43,6 +43,19 @@
     /*{
       "type": "node",
       "request": "launch",
+      "name": "Logout — Real Device",
+      "program": "${workspaceFolder}/tests/logout.test.js",
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "env": {
+        "DEVICE_TYPE": "real"
+      }
+    }*/
+    /*{
+      "type": "node",
+      "request": "launch",
       "name": "Research Calls — Real Device",
       "program": "${workspaceFolder}/tests/ResearchCalls.js",
       "console": "integratedTerminal",
@@ -63,7 +76,20 @@
         "<node_internals>/**"
       ],
       "env": {
-        "DEVICE_TYPE": "real"
+        "DEVICE_TYPE": "real1"
+      }
+    }
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "News — Real Device",
+      "program": "${workspaceFolder}/tests/News.js",
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "env": {
+        "DEVICE_TYPE": "real1"
       }
     }
   ]
