@@ -11,6 +11,8 @@ console.log(`Logging this run to: ${logFile}`);
 // ── Credentials ─────────────────────────────────────────────────────
 const LOGIN_ID = 'TEMPMF11';
 const PASSWORD = 'Globe@4321';
+const LOGIN_ID2 = 'HOGC1103';
+const PASSWORD2 = 'Jaya@0004';
 const DEVICE_PASSWORD = '11111'; // device screen-lock PIN, used to confirm biometric enrollment
 // ─────────────────────────────────────────────────────────────────────
 
