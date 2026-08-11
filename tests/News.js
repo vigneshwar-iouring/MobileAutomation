@@ -50,9 +50,10 @@ async function run() {
             await newsPage.clickTab(tabName);
             await driver.pause(1000);
 
-            console.log('Step 5: Scrolling down 2 times...');
+            console.log('Step 5: Scrolling down 2 times, then up 1 time...');
             await newsPage.scrollDown();
             await newsPage.scrollDown();
+            await newsPage.scrollUp();
 
             console.log(`Step 6: Checking latest news date/time and tag consistency for "${tabName}"...`);
             const summary = await newsPage.getFeedSummary(tabName);

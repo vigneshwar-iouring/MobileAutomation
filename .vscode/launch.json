@@ -26,7 +26,7 @@
       "env": {
         "DEVICE_TYPE": "real"
       }
-    }*/
+    },*/
     /*{
       "type": "node",
       "request": "launch",
@@ -39,7 +39,7 @@
       "env": {
         "DEVICE_TYPE": "real"
       }
-    }*/
+    },*/
     /*{
       "type": "node",
       "request": "launch",
@@ -52,7 +52,7 @@
       "env": {
         "DEVICE_TYPE": "real"
       }
-    }*/
+    },*/
     /*{
       "type": "node",
       "request": "launch",
@@ -65,8 +65,8 @@
       "env": {
         "DEVICE_TYPE": "real"
       }
-    }*/
-    {
+    },*/
+    /*{
       "type": "node",
       "request": "launch",
       "name": "Funds/Margin — Real Device",
@@ -76,10 +76,10 @@
         "<node_internals>/**"
       ],
       "env": {
-        "DEVICE_TYPE": "real1"
+        "DEVICE_TYPE": "real"
       }
-    }
-    {
+    },*/
+    /*{
       "type": "node",
       "request": "launch",
       "name": "News — Real Device",
@@ -89,7 +89,20 @@
         "<node_internals>/**"
       ],
       "env": {
-        "DEVICE_TYPE": "real1"
+        "DEVICE_TYPE": "real"
+      }
+    }*/
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "MutualFunds — Real Device",
+      "program": "${workspaceFolder}/tests/MutualFunds.js",
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "env": {
+        "DEVICE_TYPE": "real"
       }
     }
   ]

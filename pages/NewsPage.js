@@ -101,6 +101,13 @@ class NewsPage extends BasePage {
         console.log(`Clicked "${name}" tab`);
     }
 
+    // Overrides BasePage.scrollUp(selector, maxScrolls), which boundary-scrolls a list until it
+    // stops changing - the feed here is one static content-desc blob, not a list, and the flow
+    // only wants a single swipe up (matching the single-swipe scrollDown() already used per tab).
+    async scrollUp() {
+        await this.swipe('up');
+    }
+
     async isNoDataFound() {
         const source = await this.driver.getPageSource();
         return /no data found|no news found/i.test(source);

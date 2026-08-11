@@ -157,6 +157,17 @@ class BasePage {
         return target.desc;
     }
 
+    // Taps the center of a described element's own bounds directly, bypassing selector-based
+    // lookup - needed when two elements share identical content-desc text (e.g. a Mutual Fund
+    // detail screen's "Peer Comparison" and "Funds in this Category" sections both render
+    // "Return period button. Currently showing 1 Year Return values...." whenever both default to
+    // the same period) and a plain description() selector would hit whichever comes first.
+    async tapNode(node) {
+        const x = Math.round((node.x1 + node.x2) / 2);
+        const y = Math.round((node.y1 + node.y2) / 2);
+        await this.driver.action('pointer').move({ duration: 0, x, y }).down().up().perform();
+    }
+
     // Finds the described element immediately to the right of `labelNode`, within the same row -
     // the layout used by e.g. Order Pad's "Approx margin:"/"Avail:" and the NEFT/RTGS/IMPS
     // dialog's "Beneficiary"/"Bank Name" rows, where a label and its value are side-by-side
@@ -166,6 +177,19 @@ class BasePage {
         if (!sameRow.length) return null;
         sameRow.sort((a, b) => a.x1 - b.x1);
         return sameRow[0].desc.trim();
+    }
+
+    // Finds the nearest described element directly below `labelNode` in the same x-column - the
+    // layout used by e.g. a Mutual Fund detail screen's NAV/Annualised header, where a label sits
+    // above its value in a separate row rather than beside it in the same one (findInlineValue).
+    // >= rather than > on the y-comparison: some layouts (e.g. an NFO's "Minimum Investment
+    // Amount") stack the value with zero gap, its y1 landing exactly on the label's y2, and a
+    // strict > would exclude the real value and fall through to something further down instead.
+    findValueBelow(nodes, labelNode, xTolerance = 30) {
+        const below = nodes.filter(n => n !== labelNode && n.y1 >= labelNode.y2 && Math.abs(n.x1 - labelNode.x1) <= xTolerance);
+        if (!below.length) return null;
+        below.sort((a, b) => a.y1 - b.y1);
+        return below[0].desc.trim();
     }
 
     parseCurrency(text) {
