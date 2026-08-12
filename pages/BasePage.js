@@ -1,6 +1,39 @@
+const { execFileSync } = require('child_process');
+
 class BasePage {
     constructor(driver) {
         this.driver = driver;
+    }
+
+    getDeviceUdid() {
+        const caps = this.driver.capabilities || {};
+        return caps['appium:udid'] || caps.udid;
+    }
+
+    // Some custom-drawn controls (e.g. a Jetpack Compose canvas whose own accessibility label
+    // literally says "Double tap to search") never register as clicked via Appium's click(),
+    // setValue(), or even the `mobile: doubleClickGesture` command - all three were tried against
+    // the Mutual Funds Explore search bar and left it completely inert. A raw adb double-tap (two
+    // separate `input tap` processes, whose own spawn latency happens to land inside Android's
+    // double-tap timing window) reaches the same gesture detector a real finger would, and is the
+    // only method observed to actually focus/open the keyboard for that control.
+    adbDoubleTap(x, y) {
+        const udid = this.getDeviceUdid();
+        const args = ['-s', udid, 'shell', 'input', 'tap', String(x), String(y)];
+        execFileSync('adb', args);
+        execFileSync('adb', args);
+    }
+
+    adbTypeText(text) {
+        const udid = this.getDeviceUdid();
+        execFileSync('adb', ['-s', udid, 'shell', 'input', 'text', text]);
+    }
+
+    adbBackspace(times) {
+        const udid = this.getDeviceUdid();
+        for (let i = 0; i < times; i++) {
+            execFileSync('adb', ['-s', udid, 'shell', 'input', 'keyevent', '67']);
+        }
     }
 
     async findElement(selector, timeout = 3000) {

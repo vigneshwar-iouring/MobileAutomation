@@ -99,6 +99,7 @@ class MutualFundsPage extends BasePage {
         this.categorySolutionsCard = 'android=new UiSelector().descriptionContains("category.")';
         this.categoryTag = 'android=new UiSelector().descriptionContains("Double tap to view funds under this tag")';
         this.addFilterButton = 'android=new UiSelector().descriptionContains("Add filter button")';
+        this.localSearchBar = 'android=new UiSelector().description("Search bar., Double tap to search from funds listed below.")';
     }
 
     async isOnMutualFundsScreen(timeout = 1500) {
@@ -827,6 +828,33 @@ class MutualFundsPage extends BasePage {
         const nodes = await this.getDescribedElements();
         const node = nodes.find(n => /^\d+\s+Results$/i.test(n.desc.trim()));
         return node ? Number(node.desc.match(/\d+/)[0]) : null;
+    }
+
+    // The local search bar on a filtered fund list screen (e.g. Equity/All) is a custom-drawn
+    // Compose control that ignores Appium's click()/setValue()/mobile: doubleClickGesture entirely -
+    // only a genuine adb-level double-tap (see BasePage.adbDoubleTap) opens its keyboard, after
+    // which adb's own text-injection reaches it like real typing does (verified live: results count
+    // dropped from 1012 to 42, all matching "SBI").
+    async searchLocalFundList(query, timeout = 5000) {
+        const nodes = await this.getDescribedElements();
+        const node = nodes.find(n => n.desc.startsWith('Search bar.'));
+        if (!node) throw new Error('Local search bar not found on this screen');
+        const x = Math.round((node.x1 + node.x2) / 2);
+        const y = Math.round((node.y1 + node.y2) / 2);
+        this.adbDoubleTap(x, y);
+        await this.pause(800);
+        this.adbTypeText(query);
+        await this.pause(1200);
+        console.log(`Typed "${query}" into local search bar`);
+    }
+
+    // Erases the typed query by backspacing character-by-character (per instruction: not by
+    // locating/tapping a clear/X control) - verified live: 3 backspaces after "SBI" restored the
+    // full unfiltered "1012 Results" list.
+    async clearLocalSearch(charCount) {
+        this.adbBackspace(charCount);
+        await this.pause(1000);
+        console.log(`Cleared local search bar by backspacing ${charCount} character(s)`);
     }
 
     // The "+" icon that reopens the tag list on top of the currently filtered fund list, letting a

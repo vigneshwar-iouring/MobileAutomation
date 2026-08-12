@@ -37,7 +37,20 @@ async function run() {
         console.log(`"All" tag results: ${allResultsCount}`);
         console.log(`Count check: category card (${categoryCount}) vs "All" results (${allResultsCount}) - ${categoryCount !== null && categoryCount === allResultsCount ? 'PASS (match)' : 'FAIL (mismatch)'}`);
 
-        console.log('\nStep 6: Clicking + and selecting the next tag observed after "All"...');
+        console.log('\nStep 6: Searching "SBI" in the local search bar and verifying SBI funds are listed...');
+        const searchQuery = 'SBI';
+        await mutualFundsPage.searchLocalFundList(searchQuery);
+        const searchResultNames = await mutualFundsPage.getSearchResultNames();
+        console.log(`Results after searching "${searchQuery}": ${searchResultNames.join(', ')}`);
+        const allMatchSbi = searchResultNames.length > 0 && searchResultNames.every(name => name.toUpperCase().includes(searchQuery));
+        console.log(`SBI search check: ${allMatchSbi ? 'PASS (all results are SBI funds)' : 'FAIL'}`);
+
+        console.log('\nStep 6b: Clearing the search bar by backspacing...');
+        await mutualFundsPage.clearLocalSearch(searchQuery.length);
+        const clearedResultsCount = await mutualFundsPage.getFilteredResultsCount();
+        console.log(`Results after clearing search: ${clearedResultsCount}`);
+
+        console.log('\nStep 7: Clicking + and selecting the next tag observed after "All"...');
         await mutualFundsPage.clickAddFilterButton();
         await driver.pause(800);
         const nextTag = tags[1];
@@ -46,11 +59,12 @@ async function run() {
         const nextTagResultsCount = await mutualFundsPage.getFilteredResultsCount();
         console.log(`"${nextTag}" tag results: ${nextTagResultsCount}`);
 
-        console.log('\nStep 7: Selecting 3Y and 5Y return periods...');
+        console.log('\nStep 8: Selecting 3Y and 5Y return periods...');
         await mutualFundsPage.changeSectionReturnPeriod('Equity', '3 Years Return');
         await mutualFundsPage.changeSectionReturnPeriod('Equity', '5 Years Return');
 
         await mutualFundsPage.goBackFromFundList();
+        await mutualFundsPage.clickCategoryCard('Equity');
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);
