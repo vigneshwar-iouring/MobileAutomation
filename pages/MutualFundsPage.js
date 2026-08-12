@@ -97,6 +97,8 @@ class MutualFundsPage extends BasePage {
         // Each card reads "<Name> category. <description>.. Available: <N> funds.}, Double tap to
         // show the tags in this category." - " category." is a distinctive, stable substring.
         this.categorySolutionsCard = 'android=new UiSelector().descriptionContains("category.")';
+        this.categoryTag = 'android=new UiSelector().descriptionContains("Double tap to view funds under this tag")';
+        this.addFilterButton = 'android=new UiSelector().descriptionContains("Add filter button")';
     }
 
     async isOnMutualFundsScreen(timeout = 1500) {
@@ -785,6 +787,60 @@ class MutualFundsPage extends BasePage {
         console.log(`Category Solutions - ${headers.length} header(s) found:`);
         headers.forEach(h => console.log(`  - ${h}`));
         return headers;
+    }
+
+    async scrollExploreToTop(maxScrolls = 15) {
+        await this.scrollToBoundary(this.categorySolutionsCard, 'up', { maxScrolls });
+        console.log('Scrolled to top of Explore tab');
+    }
+
+    // Reads "Available: <N> funds" straight off the (collapsed) category card - the ground truth
+    // to compare against the fund list's own "<N> Results" once its "All" tag is selected.
+    async getCategoryFundCount(categoryName) {
+        const nodes = await this.getDescribedElements();
+        const card = nodes.find(n => n.desc.startsWith(`${categoryName} category.`));
+        if (!card) return null;
+        const m = card.desc.match(/Available:\s*(\d+)\s*funds/i);
+        return m ? Number(m[1]) : null;
+    }
+
+    // Tapping a category card toggles its tag list open/closed in place (verified live: its own
+    // content-desc switches between "...Double tap to show the tags..." and "...hide the tags...").
+    async clickCategoryCard(categoryName, timeout = 5000) {
+        await this.click(`android=new UiSelector().descriptionContains("${categoryName} category")`, timeout);
+        console.log(`Clicked "${categoryName}" category card`);
+    }
+
+    // Tags render in a fixed order once a category is expanded - "All" is always first.
+    async getCategoryTags() {
+        const nodes = await this.getDescribedElements();
+        return nodes.filter(n => n.desc.includes('Double tap to view funds under this tag')).map(n => n.desc.split('.')[0].trim());
+    }
+
+    async clickCategoryTag(tagName, timeout = 5000) {
+        await this.click(`android=new UiSelector().description("${tagName}., Double tap to view funds under this tag.")`, timeout);
+        console.log(`Clicked "${tagName}" tag`);
+    }
+
+    // "<N> Results" on the filtered fund list screen reached by selecting a category tag.
+    async getFilteredResultsCount() {
+        const nodes = await this.getDescribedElements();
+        const node = nodes.find(n => /^\d+\s+Results$/i.test(n.desc.trim()));
+        return node ? Number(node.desc.match(/\d+/)[0]) : null;
+    }
+
+    // The "+" icon that reopens the tag list on top of the currently filtered fund list, letting a
+    // different tag be selected without leaving the screen (verified live: selecting a new tag
+    // there replaces the active filter and updates the results count in place).
+    async clickAddFilterButton(timeout = 5000) {
+        await this.click(this.addFilterButton, timeout);
+        console.log('Clicked "Add filter" (+) button');
+    }
+
+    async goBackFromFundList() {
+        await this.driver.back();
+        await this.pause(1000);
+        console.log('Navigated back from fund list');
     }
 }
 
