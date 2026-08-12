@@ -92,11 +92,37 @@
         "DEVICE_TYPE": "real"
       }
     }*/
+    /*{
+      "type": "node",
+      "request": "launch",
+      "name": "MutualFunds Home — Real Device",
+      "program": "${workspaceFolder}/tests/MutualFunds/Home.test.js",
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "env": {
+        "DEVICE_TYPE": "real"
+      }
+    },*/
+    /*{
+      "type": "node",
+      "request": "launch",
+      "name": "MutualFunds Explore — Real Device",
+      "program": "${workspaceFolder}/tests/MutualFunds/Explore.test.js",
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "env": {
+        "DEVICE_TYPE": "real"
+      }
+    },*/
     {
       "type": "node",
       "request": "launch",
-      "name": "MutualFunds — Real Device",
-      "program": "${workspaceFolder}/tests/MutualFunds.test.js",
+      "name": "Derivative-Technicals — Real Device",
+      "program": "${workspaceFolder}/tests/ResearchCalls/Derivative/Technical.test.js",
       "console": "integratedTerminal",
       "skipFiles": [
         "<node_internals>/**"

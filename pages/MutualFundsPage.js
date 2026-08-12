@@ -91,6 +91,12 @@ class MutualFundsPage extends BasePage {
         this.nfoCard = 'android=new UiSelector().descriptionContains("Open Date")';
         this.oneTimeButton = 'android=new UiSelector().descriptionContains("One Time button")';
         this.startSipButton = 'android=new UiSelector().descriptionContains("Start Systematic Investment Plan")';
+
+        this.exploreTab = 'android=new UiSelector().descriptionContains("Explore")';
+        this.categorySolutionsLabel = 'android=new UiSelector().description("Category Solutions")';
+        // Each card reads "<Name> category. <description>.. Available: <N> funds.}, Double tap to
+        // show the tags in this category." - " category." is a distinctive, stable substring.
+        this.categorySolutionsCard = 'android=new UiSelector().descriptionContains("category.")';
     }
 
     async isOnMutualFundsScreen(timeout = 1500) {
@@ -759,6 +765,26 @@ class MutualFundsPage extends BasePage {
             await this.pause(800);
             return null;
         }
+    }
+
+    async clickExploreTab(timeout = 5000) {
+        await this.click(this.exploreTab, timeout);
+        console.log('Clicked Explore tab');
+    }
+
+    // Same boundary-scroll + `seen` accumulation pattern as ResearchCalls.countSymbols - scrolls
+    // until the visible set of category cards stops changing, collecting every distinct one along
+    // the way (stableEntryId truncates each card down to just its category name), so the final
+    // count reflects everything under Category Solutions rather than just what's on screen at rest.
+    async countCategorySolutionsHeaders(maxScrolls = 15) {
+        await this.findElement(this.categorySolutionsLabel, 8000);
+        const seen = new Set();
+        await this.scrollToBoundary(this.categorySolutionsCard, 'down', { maxScrolls, seen });
+
+        const headers = [...seen];
+        console.log(`Category Solutions - ${headers.length} header(s) found:`);
+        headers.forEach(h => console.log(`  - ${h}`));
+        return headers;
     }
 }
 

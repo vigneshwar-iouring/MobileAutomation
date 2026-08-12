@@ -1,6 +1,6 @@
-const DriverManager = require('../driver/DriverManager');
-const { MutualFundsPage } = require('../pages/MutualFundsPage');
-const { createLogger } = require('../utils/logger');
+const DriverManager = require('../../driver/DriverManager');
+const { MutualFundsPage } = require('../../pages/MutualFundsPage');
+const { createLogger } = require('../../utils/logger');
 
 const { logFile } = createLogger('MutualFunds');
 console.log(`Logging this run to: ${logFile}`);
@@ -12,6 +12,8 @@ async function run() {
 
         console.log('Step 1: Opening Mutual Funds (bottom navigation)...');
         await mutualFundsPage.openMutualFunds();
+
+        console.log('\nMutual Fund - Home');
 
         console.log('\nStep 2: Selecting Home tab and reading portfolio summary...');
         await mutualFundsPage.clickHomeTab();

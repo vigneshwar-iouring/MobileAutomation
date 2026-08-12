@@ -76,9 +76,13 @@ class BasePage {
     // scroll never detects "nothing changed" and burns through every one of maxScrolls every time
     // instead of stopping as soon as the real boundary is reached. Truncating at "Last traded
     // price" the same way handles it identically.
+    //
+    // " category." (Explore tab's Category Solutions cards, e.g. "Equity category. Large-Cap
+    // Funds...") reduces to just the category name for the same reason a caller would want the
+    // stable id here: it's what should actually get counted/printed, not the full description.
     stableEntryId(desc) {
         if (!desc) return desc;
-        for (const marker of ['Returns %', 'Last traded price']) {
+        for (const marker of ['Returns %', 'Last traded price', ' category.']) {
             const idx = desc.indexOf(marker);
             if (idx !== -1) return desc.slice(0, idx);
         }

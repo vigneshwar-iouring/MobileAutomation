@@ -1,12 +1,5 @@
-const fs = require('fs');
-const DriverManager = require('../driver/DriverManager');
-const SplashPage = require('../pages/SplashPage');
-const LoginPage = require('../pages/LoginPage');
-const permissionHandler = require('../utils/permissionHandler');
-const ResearchCalls = require('../pages/ResearchCalls');
-const QuotesPage = require('../pages/QuotesPage');
-const OrderPadPage = require('../pages/OrderPadPage');
-const { createLogger } = require('../utils/logger');
+const QuotesPage = require('../../pages/QuotesPage');
+const OrderPadPage = require('../../pages/OrderPadPage');
 
 function logSection(title) {
     const line = '='.repeat(60);
@@ -101,12 +94,9 @@ async function runSymbolQuoteFlow(driver, researchCalls, label) {
 }
 
 // Counts the current tab, then - only when it actually has symbols - runs the full quote flow on
-// its first one. One call covers every tab (present and future) the same way. Results are
-// recorded under `group` (Equity/Derivative/Commodity) so the whole run can be summarized grouped
-// by asset class at the end, instead of only as a flat step-by-step log.
-async function countAndRunQuoteFlow(driver, researchCalls, group, label, results, opts) {
+// its first one.
+async function countAndRunQuoteFlow(driver, researchCalls, label, opts) {
     const count = await countTab(researchCalls, label, opts);
-    results.push({ group, label, count });
     if (count > 0) {
         await runSymbolQuoteFlow(driver, researchCalls, label);
     } else {
@@ -115,63 +105,4 @@ async function countAndRunQuoteFlow(driver, researchCalls, group, label, results
     return count;
 }
 
-function printSummary(results) {
-    logSection('SUMMARY');
-    for (const group of [...new Set(results.map(r => r.group))]) {
-        console.log(`${group}:`);
-        for (const r of results.filter(r => r.group === group)) {
-            const sub = r.label.includes('-') ? r.label.split('-')[1].trim() : r.label;
-            console.log(`  ${sub}: ${r.count} symbol(s)${r.count === 0 ? ' (No Data Found)' : ''}`);
-        }
-    }
-}
-
-async function run() {
-    const driver = await DriverManager.getDriver();
-    try {
-        const splashPage = new SplashPage(driver);
-        const researchCalls = new ResearchCalls(driver);
-        const results = [];
-
-        console.log('Step 1: Clicking hamburger menu...');
-        await researchCalls.clickHamburgerMenu();
-
-        console.log('Step 2: Clicking Research option...');
-        await researchCalls.clickResearchOption();
-        await researchCalls.waitForContent();
-
-        logSection('EQUITY');
-        await researchCalls.clickFundamentalTab();
-        await countAndRunQuoteFlow(driver, researchCalls, 'Equity', 'Equity - Fundamental', results, { skipScrollUp: true });
-
-        await researchCalls.clickTechnicalTab();
-        await countAndRunQuoteFlow(driver, researchCalls, 'Equity', 'Equity - Technical', results);
-
-        logSection('DERIVATIVE');
-        await researchCalls.clickDerivativeTab();
-        await researchCalls.clickTechnicalTab();
-        await countAndRunQuoteFlow(driver, researchCalls, 'Derivative', 'Derivative - Technical', results);
-
-        await researchCalls.clickStrategiesTab();
-        await countAndRunQuoteFlow(driver, researchCalls, 'Derivative', 'Derivative - Strategies', results);
-
-        logSection('COMMODITY');
-        await researchCalls.clickCommodityTab();
-        await researchCalls.clickTechnicalTab();
-        await countAndRunQuoteFlow(driver, researchCalls, 'Commodity', 'Commodity - Technical', results);
-
-        await researchCalls.clickStrategiesTab();
-        await countAndRunQuoteFlow(driver, researchCalls, 'Commodity', 'Commodity - Strategies', results);
-
-        printSummary(results);
-
-        await researchCalls.clickClose();
-
-    } catch (err) {
-        console.error('Test failed:', err.message);
-        console.error(err.stack);
-    } finally {
-        await DriverManager.closeDriver();
-    };
-}
-run();
+module.exports = { logSection, countTab, verifyOrderPad, runSymbolQuoteFlow, countAndRunQuoteFlow };
