@@ -41,8 +41,11 @@ function parsePortfolioSummary(text) {
     const xirrMatch = text.match(/Extended Internal Rate of Return:\s*([\d.]+%)/);
     // Return percentage capture excludes the trailing "." - that's the sentence's own full stop
     // (e.g. "Return percentage: 4."), not part of the number, and [\d.]+ would otherwise swallow it.
-    const totalReturnMatch = text.match(/Total Return\nAmount:\s*₹?([\d,]+\.?\d*)\.\s*Return percentage:\s*(\d+(?:\.\d+)?)/);
-    const dayReturnMatch = text.match(/DAY Return %\nAmount:\s*₹?([\d,]+\.?\d*)\.\s*Return percentage:\s*(\d+(?:\.\d+)?)/);
+    // A leading "-" sits right after the ₹ symbol on a down day/loss (e.g. "₹-11.71", "-0.17") -
+    // both captures allow for it, since a plain [\d,]+ would fail to match at all on a loss and
+    // silently fall through to null instead of reporting the negative value.
+    const totalReturnMatch = text.match(/Total Return\nAmount:\s*₹?(-?[\d,]+\.?\d*)\.\s*Return percentage:\s*(-?\d+(?:\.\d+)?)/);
+    const dayReturnMatch = text.match(/DAY Return %\nAmount:\s*₹?(-?[\d,]+\.?\d*)\.\s*Return percentage:\s*(-?\d+(?:\.\d+)?)/);
 
     return {
         Current: currentMatch ? `₹${currentMatch[1]}` : null,
@@ -150,11 +153,14 @@ class MutualFundsPage extends BasePage {
         console.log('Clicked "High Returns" under Handpick Collections');
     }
 
-    // "Trending Funds" is the last section on the Home tab (verified live - scrolling to the true
-    // page boundary lands exactly there, nothing renders below it), so a generic boundary-scroll
-    // reaches it reliably without needing a section-specific selector.
+    // "Trending Funds" is the last section on the Home tab, so reaching it is the same as
+    // reaching the bottom - but scrollToSection stops the moment its label+button appear rather
+    // than waiting for the fund list below to finish loading/paginating, which is both correct and
+    // far faster than a boundary-scroll (verified live: boundary-scrolling the whole fund-card set
+    // took ~58s; boundary-scrolling the whole screen's every element took ~180s - both dominated by
+    // swipes spent waiting on content this method doesn't actually need yet).
     async scrollHomeToBottom(maxScrolls = 20) {
-        await this.scrollToBoundary('android=new UiSelector().descriptionMatches(".+")', 'down', { maxScrolls });
+        await this.scrollToSection('Trending Funds', maxScrolls);
         console.log('Scrolled to bottom of Mutual Funds Home tab');
     }
 

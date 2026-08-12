@@ -32,8 +32,8 @@ async function run() {
         let sinceUid = await getLatestUid();
 
         console.log('Step 3: Entering login ID and password...');
-        await loginPage.enterLoginId(LOGIN_ID);
-        await loginPage.enterPassword(PASSWORD);
+        await loginPage.enterLoginId(LOGIN_ID2);
+        await loginPage.enterPassword(PASSWORD2);
         await loginPage.clickLogin();
         await driver.pause(3000);
 

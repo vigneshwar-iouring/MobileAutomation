@@ -68,10 +68,21 @@ class BasePage {
     // price moved, so a boundary is never detected and the automation keeps swiping. Truncating at
     // the first "Returns %" keeps only what's fixed when the call is published (symbol, target,
     // company name) - still unique per entry, but immune to the ticker.
+    //
+    // The same problem hits a generic full-screen boundary-scroll (any descriptionMatches(".+")
+    // selector) even harder: every screen in this app has a fixed Nifty/Sensex index ticker
+    // ("Index Nifty 50. Last traded price: 24471.70...") that's always present regardless of
+    // scroll depth and updates continuously, so its signature contribution never repeats - the
+    // scroll never detects "nothing changed" and burns through every one of maxScrolls every time
+    // instead of stopping as soon as the real boundary is reached. Truncating at "Last traded
+    // price" the same way handles it identically.
     stableEntryId(desc) {
         if (!desc) return desc;
-        const idx = desc.indexOf('Returns %');
-        return idx === -1 ? desc : desc.slice(0, idx);
+        for (const marker of ['Returns %', 'Last traded price']) {
+            const idx = desc.indexOf(marker);
+            if (idx !== -1) return desc.slice(0, idx);
+        }
+        return desc;
     }
 
     // Joins every currently-visible matching element's stable id into one string. Comparing this
