@@ -1,0 +1,22 @@
+#!/bin/bash
+
+###
+#In this script input we are validating the commit-message provided by the author.
+# The validation are
+	# Input should be greater than 10 character without any unwanted spaces.
+# Input of the script of script will be taken from the file COMMIT_MSG by git which comes in $1.
+# Removing unwanted spaces and assigning to $content.
+# And checking for character length less than 10 if so then we are throwing the error and blocking the commit.
+# If length greater then we are overwriteing back the trimed and space replaced message to COMMIT_MSG file.
+# Finally in user will see the trimmed message as commit message.
+###
+
+content=`awk '{$1=$1};1' <$1`
+count=${#content} 
+if [[ $count -lt 10 ]]
+then
+	echo "Your commit message is less than 10 character please add proper message"
+	exit 1
+else
+	echo $content>$1
+fi

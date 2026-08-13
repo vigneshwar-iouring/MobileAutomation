@@ -1,12 +1,2 @@
 node_modules/
-allure-results/
-allure-report/
-reports/screenshots/
-.env
-apps/
 logs/
-.DS_Store
-.idea/
-ui_dump.xml
-ui_dumps/
-.claude/settings.local.json
