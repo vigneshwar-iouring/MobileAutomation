@@ -65,7 +65,20 @@ class MutualFundsPage extends BasePage {
         // Only the Mutual Funds screen itself has a Home/Explore/Portfolio/Accounts tab strip -
         // its presence is what tells "already on this screen" apart from "on some other tab".
         this.homeTab = 'android=new UiSelector().descriptionContains("Home")';
+        // "Tab 3 of 4" is as distinctive for Portfolio as "Tab 1 of 4" is for Home - a plain
+        // descriptionContains("Portfolio") would also match the bottom floating nav's own
+        // "Portfolio" button and the "Mutual Funds Portfolio Summary" card.
+        this.portfolioTab = 'android=new UiSelector().descriptionContains("Tab 3 of 4")';
         this.portfolioSummary = 'android=new UiSelector().descriptionContains("Mutual Funds Portfolio Summary")';
+        this.activeSipsTile = 'android=new UiSelector().descriptionContains("Active SIPs")';
+        // Fund cards on the Portfolio page (below the Active SIPs tile) are, unlike Manage SIP's
+        // cards, genuinely clickable=true - a plain click opens the holding detail bottom sheet.
+        this.portfolioFundCard = 'android=new UiSelector().descriptionContains("Invest Amount")';
+        this.actionsButton = 'android=new UiSelector().descriptionContains("Actions button")';
+        this.redeemFundOption = 'android=new UiSelector().description("Redeem Fund")';
+        this.switchFundOption = 'android=new UiSelector().description("Switch Fund")';
+        this.transactionDetailsOption = 'android=new UiSelector().description("Transaction Details")';
+        this.fundOverviewOption = 'android=new UiSelector().description("Fund Overview")';
 
         this.highReturnsCollection = 'android=new UiSelector().descriptionContains("High Returns")';
         // Every fund card in a collection list (Handpick Collections, Peer Comparison, etc.) ends
@@ -126,17 +139,251 @@ class MutualFundsPage extends BasePage {
         console.log('Clicked Home tab');
     }
 
+    async clickPortfolioTab(timeout = 5000) {
+        await this.click(this.portfolioTab, timeout);
+        console.log('Clicked Portfolio tab');
+    }
+
+    // Shared by the Home tab and the dedicated Portfolio tab - both render the same merged
+    // "Mutual Funds Portfolio Summary." content-desc (verified live: identical text on both).
     async readPortfolioSummary(timeout = 8000) {
         const el = await this.findElement(this.portfolioSummary, timeout);
         const raw = (await el.getAttribute('content-desc')) || '';
         const text = raw.replace(/&#10;/g, '\n').replace(/&amp;/g, '&');
         const summary = parsePortfolioSummary(text);
 
-        console.log('--- Mutual Funds Portfolio Summary (Home tab) ---');
+        console.log('--- Mutual Funds Portfolio Summary ---');
         for (const [field, value] of Object.entries(summary)) {
             console.log(`  ${field}: ${value}`);
         }
         return summary;
+    }
+
+    // "2 Active SIPs ₹1500.00, Double tap to view active plans." on the Portfolio tab - read before
+    // navigating away, so it can be compared against the Manage SIP list screen's own card count.
+    async getActiveSipsCount(timeout = 5000) {
+        const el = await this.findElement(this.activeSipsTile, timeout);
+        const desc = (await el.getAttribute('content-desc')) || '';
+        const m = desc.match(/(\d+)\s+Active SIPs/i);
+        return m ? Number(m[1]) : null;
+    }
+
+    async clickActiveSipsTile(timeout = 5000) {
+        await this.click(this.activeSipsTile, timeout);
+        console.log('Clicked "Active SIPs" tile');
+    }
+
+    // Each card on the Manage SIP list reads "<Fund Name>\nFrequency\n<due day text>\nSystematic
+    // Investment Plan Amount.\n₹<amount>" as one merged content-desc.
+    parseSipCard(desc) {
+        const lines = desc.split('\n').map(l => l.trim());
+        const freqIdx = lines.indexOf('Frequency');
+        const amountLabelIdx = lines.findIndex(l => l.startsWith('Systematic Investment Plan Amount'));
+        return {
+            name: lines[0],
+            frequency: freqIdx >= 0 ? lines[freqIdx + 1] : null,
+            amount: amountLabelIdx >= 0 ? lines[amountLabelIdx + 1] : null,
+        };
+    }
+
+    // Returns the Manage SIP list's cards in document (top-to-bottom) order, each carrying its own
+    // node bounds - needed by clickManageSipCard since the card body itself isn't clickable.
+    async getManageSipCards() {
+        const nodes = await this.getDescribedElements();
+        return nodes.filter(n => n.desc.includes('\nFrequency\n')).map(n => ({ ...this.parseSipCard(n.desc), node: n }));
+    }
+
+    // A Manage SIP card's own body is not clickable (verified live: Appium click()/tapNode() on its
+    // center, and even a raw adb double-tap, all left the screen unchanged) - the real tap target is
+    // a hidden, unlabeled (NAF) chevron Button nested inside it, consistently inset 45px from the
+    // card's right/bottom edges with a fixed 132px square (measured live from the raw accessibility
+    // XML on two differently-sized cards - both matched this offset exactly).
+    async clickManageSipCard(cardNode) {
+        const x = cardNode.node ? cardNode.node.x2 - 111 : cardNode.x2 - 111;
+        const y = cardNode.node ? cardNode.node.y2 - 111 : cardNode.y2 - 111;
+        this.adbTap(x, y);
+        console.log(`Tapped SIP card chevron: "${(cardNode.name || cardNode.desc || '').split('\n')[0]}"`);
+    }
+
+    // The SIP Detail screen renders each field as a separate label node with its value directly
+    // below it in the same x-column (findValueBelow), except the fund name (first node, unlabeled)
+    // and the SIP ID label, which literally reads "Systematic Investment Plan I D." (note the
+    // spaced-out "I D.").
+    async readSipDetail(timeout = 8000) {
+        await this.findElement('android=new UiSelector().description("Systematic Investment Plan Detail.")', timeout);
+        const nodes = await this.getDescribedElements();
+
+        const dueDateLabel = nodes.find(n => n.desc.startsWith('Systematic Investment Plan Due Date'));
+        // The fund name is the one unlabeled node immediately above the Due Date label (verified
+        // live: no other content sits between them).
+        const dueDateIdx = nodes.indexOf(dueDateLabel);
+        const name = dueDateIdx > 0 ? nodes[dueDateIdx - 1].desc.trim() : null;
+        const amountLabel = nodes.find(n => n.desc.startsWith('Systematic Investment Plan Amount'));
+        const mandateBankLabel = nodes.find(n => n.desc.trim() === 'Mandate Bank');
+        const mandateIdLabel = nodes.find(n => n.desc.trim() === 'Mandate ID');
+        const sipIdLabel = nodes.find(n => n.desc.startsWith('Systematic Investment Plan I D'));
+
+        const detail = {
+            name,
+            dueDate: dueDateLabel ? this.findValueBelow(nodes, dueDateLabel) : null,
+            amount: amountLabel ? this.findValueBelow(nodes, amountLabel) : null,
+            sipId: sipIdLabel ? this.findValueBelow(nodes, sipIdLabel) : null,
+            mandateBank: mandateBankLabel ? this.findValueBelow(nodes, mandateBankLabel) : null,
+            mandateId: mandateIdLabel ? this.findValueBelow(nodes, mandateIdLabel) : null,
+        };
+
+        console.log('--- SIP Detail ---');
+        for (const [field, value] of Object.entries(detail)) {
+            console.log(`  ${field}: ${value}`);
+        }
+        return detail;
+    }
+
+    // Instalment history rows ("<Nth> Instalment", "SUCCESS"/status, "Date: ..., Amount: ₹...")
+    // are the last content on the SIP Detail screen, so boundary-scrolling on them reaches bottom.
+    async scrollSipDetailToBottom(maxScrolls = 15) {
+        await this.scrollToBoundary('android=new UiSelector().descriptionContains("Instalment")', 'down', { maxScrolls });
+        console.log('Scrolled to bottom of SIP Detail screen');
+    }
+
+    // Two back-presses out of SIP Detail: one pops back to the Manage SIP list, the second pops
+    // that to land back on the Portfolio tab (verified live - no intermediate screen either hop).
+    async goBackFromSipDetail() {
+        await this.driver.back();
+        await this.pause(1000);
+        await this.driver.back();
+        await this.pause(1000);
+        console.log('Navigated back from SIP Detail to Portfolio page');
+    }
+
+    // Returns the Portfolio page's own fund holding cards (below the Active SIPs tile) in
+    // document order - distinct from Manage SIP's cards, which live on a different screen.
+    async getPortfolioFundCards() {
+        const nodes = await this.getDescribedElements();
+        return nodes.filter(n => n.desc.includes('Invest Amount') && n.desc.includes('Current Value'));
+    }
+
+    async clickPortfolioFundCard(cardNode, timeout = 5000) {
+        const el = await this.driver.$(`android=new UiSelector().description("${cardNode.desc}")`);
+        await el.waitForDisplayed({ timeout });
+        await el.click();
+        console.log(`Clicked fund card: "${cardNode.desc.split('\n')[0]}"`);
+    }
+
+    // Opens as a bottom sheet ("Scrim" is its first node) over the Portfolio page, laid out as a
+    // grid of 2-3 label/value columns per row. findValueBelow (label directly above its value in
+    // the same x-column) does NOT work here - verified live: middle/right-column values are offset
+    // well past the label's own x-tolerance (e.g. "Current Value" label x1=408 vs its own value
+    // "₹2639.00" x1=454, a 46px gap that's bigger than the tolerance and lands on the WRONG node,
+    // the next row's label at a closer x). Grouping nodes into rows by y1 proximity and pairing a
+    // label row with the value row right after it (same column count, matched by x-sorted index)
+    // sidesteps the x-offset entirely.
+    async readFundHoldingDetail(timeout = 8000) {
+        await this.findElement(this.actionsButton, timeout);
+        const nodes = await this.getDescribedElements();
+        const scrimIdx = nodes.findIndex(n => n.desc === 'Scrim');
+        const name = scrimIdx >= 0 && nodes[scrimIdx + 1] ? nodes[scrimIdx + 1].desc.trim() : null;
+        const category = scrimIdx >= 0 && nodes[scrimIdx + 2] ? nodes[scrimIdx + 2].desc.trim() : null;
+
+        const startIdx = nodes.findIndex(n => n.desc.trim() === 'Invest Amount');
+        const endIdx = nodes.findIndex(n => n.desc.includes('Actions button'));
+        const fieldNodes = startIdx >= 0 && endIdx >= 0 ? nodes.slice(startIdx, endIdx) : [];
+
+        const rows = [];
+        for (const n of fieldNodes) {
+            const row = rows.find(r => Math.abs(r[0].y1 - n.y1) < 15);
+            if (row) row.push(n); else rows.push([n]);
+        }
+        rows.forEach(r => r.sort((a, b) => a.x1 - b.x1));
+
+        const fieldMap = {};
+        for (let i = 0; i + 1 < rows.length; i += 2) {
+            const [labelRow, valueRow] = [rows[i], rows[i + 1]];
+            labelRow.forEach((labelNode, idx) => {
+                fieldMap[labelNode.desc.trim()] = valueRow[idx] ? valueRow[idx].desc.trim() : null;
+            });
+        }
+
+        const detail = {
+            name,
+            category,
+            investAmount: fieldMap['Invest Amount'] || null,
+            currentValue: fieldMap['Current Value'] || null,
+            returnPercent: fieldMap['Return (%)'] || null,
+            xirr: fieldMap['Extended Internal Rate of Return.'] || null,
+            dayChange: fieldMap['Day Change'] || null,
+            dayChangePercent: fieldMap['Day Change (%)'] || null,
+            averageNav: fieldMap['Average Net Asset Value'] || null,
+            currentNav: fieldMap['Current Net Asset Value'] || null,
+            balanceUnits: fieldMap['Balance Units'] || null,
+            folioNumber: fieldMap['Folio Number'] || null,
+            dividend: fieldMap['Dividend'] || null,
+        };
+
+        console.log('--- Fund Holding Detail ---');
+        for (const [field, value] of Object.entries(detail)) {
+            console.log(`  ${field}: ${value}`);
+        }
+        return detail;
+    }
+
+    async clickActionsButton(timeout = 5000) {
+        await this.click(this.actionsButton, timeout);
+        console.log('Clicked "Actions" button');
+    }
+
+    async clickRedeemFund(timeout = 5000) {
+        await this.click(this.redeemFundOption, timeout);
+        console.log('Clicked "Redeem Fund"');
+    }
+
+    // "Folio No:" and its value are adjacent in document order on the Redemption screen.
+    async readRedeemFolioNumber(timeout = 5000) {
+        await this.findElement('android=new UiSelector().description("Redemption")', timeout);
+        const nodes = await this.getDescribedElements();
+        const idx = nodes.findIndex(n => n.desc.trim() === 'Folio No:');
+        return idx >= 0 && nodes[idx + 1] ? nodes[idx + 1].desc.trim() : null;
+    }
+
+    async clickRedeemAll(timeout = 5000) {
+        await this.click('android=new UiSelector().description("Redeem All")', timeout);
+        console.log('Clicked "Redeem All"');
+    }
+
+    async clickSwitchFund(timeout = 5000) {
+        await this.click(this.switchFundOption, timeout);
+        console.log('Clicked "Switch Fund"');
+    }
+
+    async clickTransactionDetails(timeout = 5000) {
+        await this.click(this.transactionDetailsOption, timeout);
+        console.log('Clicked "Transaction Details"');
+    }
+
+    async clickFundOverview(timeout = 5000) {
+        await this.click(this.fundOverviewOption, timeout);
+        console.log('Clicked "Fund Overview"');
+    }
+
+    // Each of Redeem Fund/Switch Fund/Transaction Details/Fund Overview is opened from, and a
+    // single back-press returns straight to, the same Actions menu sheet - verified live for all
+    // four (Fund Overview is a full screen with its own "Back" button, unlike the other three
+    // which use "Close", but a hardware back-press behaves identically for all of them).
+    async goBackToActionsMenu() {
+        await this.driver.back();
+        await this.pause(1200);
+        console.log('Navigated back to Actions menu');
+    }
+
+    // Two back-presses out of the Actions menu: one closes it back to the holding detail sheet,
+    // the second closes that sheet back to the Portfolio page (verified live - no other screen in
+    // between either hop).
+    async goBackFromActionsMenuToPortfolio() {
+        await this.driver.back();
+        await this.pause(1000);
+        await this.driver.back();
+        await this.pause(1000);
+        console.log('Navigated back from Actions menu to Portfolio page');
     }
 
     // The Handpick Collections tile reads "High Returns\n12\nFunds" - read before navigating away,

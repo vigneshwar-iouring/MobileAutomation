@@ -24,6 +24,11 @@ class BasePage {
         execFileSync('adb', args);
     }
 
+    adbTap(x, y) {
+        const udid = this.getDeviceUdid();
+        execFileSync('adb', ['-s', udid, 'shell', 'input', 'tap', String(x), String(y)]);
+    }
+
     adbTypeText(text) {
         const udid = this.getDeviceUdid();
         execFileSync('adb', ['-s', udid, 'shell', 'input', 'text', text]);
