@@ -9,6 +9,14 @@ class LoginPage extends BasePage {
         this.passwordField = 'android=new UiSelector().className("android.widget.EditText").instance(1)';
         this.loginButton = 'android=new UiSelector().description("LOGIN")';
 
+        // Shown in place of the OTP screen when the credentials themselves are wrong - checking for
+        // this right after LOGIN avoids misreporting the failure downstream (e.g. as "OTP not
+        // fetched", since no OTP email is ever sent for a rejected login). It's a Toast, which
+        // vanishes from the accessibility tree well under a second after appearing - a single
+        // isElementVisible() check (or one taken after an up-front pause) reliably misses it, so
+        // isLoginErrorShown() below polls the raw page source via BasePage.waitForToast instead.
+        this.loginErrorText = 'Incorrect User ID or Password';
+
         // OTP Verification screen (shown after LOGIN, and again after ENABLE NOW below) - a
         // single EditText, same as the login/password fields' pattern of being the only input on
         // screen at that point.
@@ -23,6 +31,11 @@ class LoginPage extends BasePage {
         // Android's own "confirm device credential" dialog (com.android.systemui), shown as the
         // biometric-enrollment fallback - not part of the app under test.
         this.deviceCredentialInput = 'android=new UiSelector().resourceId("com.android.systemui:id/auth_credential_input")';
+
+        // "Risk Disclosure on Derivatives" prompt - shown only on an account's very first login,
+        // never again afterwards. Guarded the same way as Enable Globe Secure above.
+        this.riskDisclosureHeading = 'android=new UiSelector().textContains("Risk Disclosure")';
+        this.iUnderstandButton = 'android=new UiSelector().textContains("I Understand")';
 
         this.homeHamburgerMenu = 'android=new UiSelector().description("Hamburger menu, Double tap to open the hamburger menu")';
 
@@ -52,6 +65,10 @@ class LoginPage extends BasePage {
         console.log('Clicked LOGIN');
     }
 
+    async isLoginErrorShown(timeout = 4000) {
+        return await this.waitForToast(this.loginErrorText, { timeout, interval: 150 });
+    }
+
     // Shared by both OTP screens (login, and Enable Globe Secure) - clears first since a stale
     // digit left over from a previous screen would otherwise get prepended to the new OTP.
     async enterOtp(otp) {
@@ -74,6 +91,15 @@ class LoginPage extends BasePage {
 
     async isDeviceCredentialPromptShown(timeout = 5000) {
         return await this.isElementVisible(this.deviceCredentialInput, timeout);
+    }
+
+    async isRiskDisclosureShown(timeout = 3000) {
+        return await this.isElementVisible(this.riskDisclosureHeading, timeout);
+    }
+
+    async acknowledgeRiskDisclosure() {
+        await this.click(this.iUnderstandButton);
+        console.log('Clicked "I Understand" on Risk Disclosure on Derivatives popup');
     }
 
     // The system credential field rejects setValue() outright ("Cannot set the element...") -

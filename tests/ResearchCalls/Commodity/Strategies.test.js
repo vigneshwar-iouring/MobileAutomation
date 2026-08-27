@@ -1,6 +1,10 @@
 const DriverManager = require('../../../driver/DriverManager');
 const ResearchCalls = require('../../../pages/ResearchCalls');
 const { logSection, countAndRunQuoteFlow } = require('../shared');
+const { createLogger } = require('../../../utils/logger');
+
+const { logFile } = createLogger('ResearchCalls-Commodity-Strategies');
+console.log(`Logging this run to: ${logFile}`);
 
 async function run() {
     const driver = await DriverManager.getDriver();

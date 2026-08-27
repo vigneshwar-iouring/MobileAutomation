@@ -27,7 +27,7 @@
         "DEVICE_TYPE": "real"
       }
     },*/
-    {
+    /*{
       "type": "node",
       "request": "launch",
       "name": "Login With OTP - Real Device",
@@ -39,7 +39,7 @@
       "env": {
         "DEVICE_TYPE": "real"
       }
-    },
+    },*/
     /*{
       "type": "node",
       "request": "launch",
@@ -56,8 +56,34 @@
     /*{
       "type": "node",
       "request": "launch",
-      "name": "Research Calls — Real Device",
-      "program": "${workspaceFolder}/tests/ResearchCalls.js",
+      "name": "Mutual Funds — All (Real Device)",
+      "program": "${workspaceFolder}/tests/MutualFunds/RunAll.test.js",
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "env": {
+        "DEVICE_TYPE": "real"
+      }
+    },*/
+    /*{
+      "type": "node",
+      "request": "launch",
+      "name": "Research Calls — All (Real Device)",
+      "program": "${workspaceFolder}/tests/ResearchCalls/RunAll.test.js",
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "env": {
+        "DEVICE_TYPE": "real"
+      }
+    },*/
+    /*{
+      "type": "node",
+      "request": "launch",
+      "name": "Research-Commodity-Strategies — Real Device",
+      "program": "${workspaceFolder}/tests/ResearchCalls/Commodity/Strategies.test.js",
       "console": "integratedTerminal",
       "skipFiles": [
         "<node_internals>/**"
@@ -83,7 +109,7 @@
       "type": "node",
       "request": "launch",
       "name": "Funds/Margin — Real Device",
-      "program": "${workspaceFolder}/tests/Funds.js",
+      "program": "${workspaceFolder}/tests/Funds.test.js",
       "console": "integratedTerminal",
       "skipFiles": [
         "<node_internals>/**"
@@ -96,7 +122,7 @@
       "type": "node",
       "request": "launch",
       "name": "News — Real Device",
-      "program": "${workspaceFolder}/tests/News.js",
+      "program": "${workspaceFolder}/tests/News.test.js",
       "console": "integratedTerminal",
       "skipFiles": [
         "<node_internals>/**"

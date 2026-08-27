@@ -17,7 +17,7 @@ async function run() {
 
         console.log('Step 2: Clicking Funds...');
         await fundsPage.openFunds();
-        await driver.pause(1000);
+        await driver.pause(3000);
 
         console.log('Step 3: Reading margin summary...');
         await fundsPage.readMarginSummary();

@@ -43,6 +43,8 @@ async function run() {
             throw new Error('News screen did not load within 10 seconds');
         }
 
+        const emptyResult = { raw: null, date: null, latestTime: null, isPastOrNow: null, entryCount: 0, distinctTags: [], mismatches: [] };
+
         // Tabs are selected one by one (in fixed left-to-right order) rather than by swiping the
         // tab strip - clicking each tab is what actually scrolls later tabs into view.
         for (const tabName of newsPage.tabNames) {
@@ -50,10 +52,29 @@ async function run() {
             await newsPage.clickTab(tabName);
             await driver.pause(1000);
 
-            console.log('Step 5: Scrolling down 2 times, then up 1 time...');
+            // Check for data before doing any scrolling/search - skips that work entirely on an
+            // empty tab instead of scrolling a feed that was never going to have anything to read.
+            if (await newsPage.isNoDataFound()) {
+                console.log(`No Data Found for "${tabName}" - skipping scroll and search`);
+                results.push({ tab: tabName, ...emptyResult });
+                continue;
+            }
+
+            console.log('Step 5: Scrolling down 2 times, then up 2 time...');
             await newsPage.scrollDown();
             await newsPage.scrollDown();
             await newsPage.scrollUp();
+            await newsPage.scrollUp();
+
+            if (tabName === 'All') {
+                console.log('Step 5b: Opening search bar and searching "Manufacturing"...');
+                await newsPage.clickSearchBar();
+                await newsPage.searchNews('Manufacturing');
+                await driver.pause(3000);
+                await newsPage.verifyNewsSearchResults('Manufacturing');
+                await newsPage.closeSearch();
+                await driver.pause(1000);
+            }
 
             console.log(`Step 6: Checking latest news date/time and tag consistency for "${tabName}"...`);
             const summary = await newsPage.getFeedSummary(tabName);
