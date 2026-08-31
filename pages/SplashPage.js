@@ -1,4 +1,5 @@
 const BasePage = require('./BasePage');
+const { APP_PACKAGE } = require('../config/appium.config');
 
 class SplashPage extends BasePage {
     constructor(driver) {
@@ -10,14 +11,14 @@ class SplashPage extends BasePage {
     }
 
     async launch() {
-        await this.driver.activateApp('com.iouring.globecapital.dev');
+        await this.driver.activateApp(APP_PACKAGE);
         console.log('App activated');
     }
 
     async relaunch() {
-        await this.driver.terminateApp('com.iouring.globecapital.dev');
+        await this.driver.terminateApp(APP_PACKAGE);
         await this.driver.pause(1000);
-        await this.driver.activateApp('com.iouring.globecapital.dev');
+        await this.driver.activateApp(APP_PACKAGE);
         console.log('App relaunched from scratch');
     }
 

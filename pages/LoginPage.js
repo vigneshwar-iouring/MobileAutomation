@@ -33,9 +33,11 @@ class LoginPage extends BasePage {
         this.deviceCredentialInput = 'android=new UiSelector().resourceId("com.android.systemui:id/auth_credential_input")';
 
         // "Risk Disclosure on Derivatives" prompt - shown only on an account's very first login,
-        // never again afterwards. Guarded the same way as Enable Globe Secure above.
-        this.riskDisclosureHeading = 'android=new UiSelector().textContains("Risk Disclosure")';
-        this.iUnderstandButton = 'android=new UiSelector().textContains("I Understand")';
+        // never again afterwards. Guarded the same way as Enable Globe Secure above. Rendered
+        // as plain Views with the label in content-desc (text is empty), not a native TextView,
+        // so this has to match on description rather than text.
+        this.riskDisclosureHeading = 'android=new UiSelector().descriptionContains("RISK DISCLOSURE")';
+        this.iUnderstandButton = 'android=new UiSelector().descriptionContains("I Understand")';
 
         this.homeHamburgerMenu = 'android=new UiSelector().description("Hamburger menu, Double tap to open the hamburger menu")';
 

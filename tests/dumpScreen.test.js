@@ -1,12 +1,13 @@
 const DriverManager = require('../driver/DriverManager');
+const { APP_PACKAGE } = require('../config/appium.config');
 
 async function run() {
     const driver = await DriverManager.getDriver();
 
     try {
-        await driver.terminateApp('com.iouring.globecapital.dev');
+        await driver.terminateApp(APP_PACKAGE);
         await driver.pause(1000);
-        await driver.activateApp('com.iouring.globecapital.dev');
+        await driver.activateApp(APP_PACKAGE);
         await driver.pause(5000);
 
         const source = await driver.getPageSource();

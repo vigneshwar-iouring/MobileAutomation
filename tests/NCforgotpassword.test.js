@@ -10,8 +10,8 @@ const { createLogger } = require('../utils/logger');
 const { logFile } = createLogger('NCforgotpassword');
 console.log(`Logging this run to: ${logFile}`);
 
-const NEW_PASSWORD = 'Globe@123';
-const CONFIRM_PASSWORD = 'Globe@123';
+const NEW_PASSWORD = 'Globe@4321';
+const CONFIRM_PASSWORD = 'Globe@4321';
 
 //Scenario 1 - Validation of Forgot password with empty Login ID
 async function scenario1_EmptyLoginId(driver, splashPage, loginPage, forgotPage) {

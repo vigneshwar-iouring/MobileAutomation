@@ -15,6 +15,8 @@ async function run() {
         if (!(await loginPage.isLoggedIn())) {
             console.log('Not currently logged in - nothing to do');
             return;
+        } else {
+            console.log('Logged in state - proceeding to logout...');
         }
 
         console.log('Step 2: Logging out...');

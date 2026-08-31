@@ -9,10 +9,12 @@ const { logFile } = createLogger('loginWithOtp');
 console.log(`Logging this run to: ${logFile}`);
 
 // ── Credentials ─────────────────────────────────────────────────────
-const LOGIN_ID = 'TEMPMF11';
-const PASSWORD = 'Globe@1234';
+const LOGIN_ID = 'TEMPMF2';
+const PASSWORD = 'Globe@9876';
 const LOGIN_ID2 = 'HOGC1103';
 const PASSWORD2 = 'Jaya@0004';
+const LOGIN_ID3 = 'TEMPMF2';
+const PASSWORD3 = 'Globe@9876';
 const DEVICE_PASSWORD = '11111'; // device screen-lock PIN, used to confirm biometric enrollment
 // ─────────────────────────────────────────────────────────────────────
 
@@ -40,8 +42,8 @@ async function run() {
 
         currentStep = 'Step 3: Entering login ID and password...';
         console.log(currentStep);
-        await loginPage.enterLoginId(LOGIN_ID);
-        await loginPage.enterPassword(PASSWORD);
+        await loginPage.enterLoginId(LOGIN_ID2);
+        await loginPage.enterPassword(PASSWORD2);
         await loginPage.clickLogin();
 
         // Wrong credentials show a Toast here instead of advancing to OTP - it vanishes from the
@@ -84,11 +86,16 @@ async function run() {
             }
         }
 
-        // "Risk Disclosure on Derivatives" is shown only on an account's very first login, right
-        // after the biometric device-credential step above. If it's observed, acknowledge it; if
-        // not, proceed with the flow as-is.
+        // "Risk Disclosure on Derivatives" is shown only on an account's very first login, but
+        // surfaces once the app lands on the default Watchlist screen post-login - not right
+        // after the biometric device-credential step. Give the app time to reach that screen
+        // before checking, so the popup isn't missed while it's still navigating there.
+        currentStep = 'Step 9: Waiting for Watchlist screen to load...';
+        console.log(currentStep);
+        await driver.pause(2000);
+
         currentStep = 'Step 9: Checking Risk Disclosure on Derivatives popup...';
-        if (await loginPage.isRiskDisclosureShown()) {
+        if (await loginPage.isRiskDisclosureShown(2000)) {
             console.log('Step 9: Risk Disclosure on Derivatives popup shown - clicking "I Understand"...');
             await loginPage.acknowledgeRiskDisclosure();
             await driver.pause(1000);
