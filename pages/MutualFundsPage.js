@@ -80,7 +80,6 @@ class MutualFundsPage extends BasePage {
         this.transactionDetailsOption = 'android=new UiSelector().description("Transaction Details")';
         this.fundOverviewOption = 'android=new UiSelector().description("Fund Overview")';
 
-        this.highReturnsCollection = 'android=new UiSelector().descriptionContains("High Returns")';
         // Every fund card in a collection list (Handpick Collections, Peer Comparison, etc.) ends
         // its content-desc the same way - "<Name>. Categories: ...% ., Double tap to view details."
         this.fundCard = 'android=new UiSelector().descriptionContains("Double tap to view details")';
@@ -389,24 +388,39 @@ class MutualFundsPage extends BasePage {
     // The Handpick Collections tile reads "High Returns\n12\nFunds" - read before navigating away,
     // so it can be compared against the list screen's own count after the tap.
     async getHighReturnsTileCount(timeout = 5000) {
-        const el = await this.findElement(this.highReturnsCollection, timeout);
-        const desc = (await el.getAttribute('content-desc')) || '';
-        const m = desc.match(/(\d+)\s+Funds/i);
-        return m ? Number(m[1]) : null;
+        return this.getCollectionTileCount('High Returns', timeout);
     }
 
     // The list screen's own header is a standalone "<N> Funds" element (distinct from any fund
     // card's "Fund of Funds" category text, which also happens to contain the word "Funds").
     async getHighReturnsListCount(timeout = 5000) {
+        return this.getCollectionListCount(timeout);
+    }
+
+    async clickHighReturnsCollection(timeout = 5000) {
+        return this.clickCollection('High Returns', timeout);
+    }
+
+    // Generic versions of the three methods above, for the other Handpick Collections tiles
+    // ("Debt", "Tax Saving", "Large Cap", "Mid Cap", "Small Cap") which follow the same
+    // "<Name>\n<N>\nFunds" tile format and "<N> Funds" list header.
+    async getCollectionTileCount(name, timeout = 5000) {
+        const el = await this.findElement(`android=new UiSelector().descriptionContains("${name}")`, timeout);
+        const desc = (await el.getAttribute('content-desc')) || '';
+        const m = desc.match(/(\d+)\s+Funds/i);
+        return m ? Number(m[1]) : null;
+    }
+
+    async getCollectionListCount(timeout = 5000) {
         await this.findElement(this.fundCard, timeout);
         const nodes = await this.getDescribedElements();
         const headerNode = nodes.find(n => /^\d+\s+Funds$/i.test(n.desc.trim()));
         return headerNode ? Number(headerNode.desc.match(/\d+/)[0]) : null;
     }
 
-    async clickHighReturnsCollection(timeout = 5000) {
-        await this.click(this.highReturnsCollection, timeout);
-        console.log('Clicked "High Returns" under Handpick Collections');
+    async clickCollection(name, timeout = 5000) {
+        await this.click(`android=new UiSelector().descriptionContains("${name}")`, timeout);
+        console.log(`Clicked "${name}" under Handpick Collections`);
     }
 
     // "Trending Funds" is the last section on the Home tab, so reaching it is the same as
@@ -736,6 +750,63 @@ class MutualFundsPage extends BasePage {
         return after;
     }
 
+    // A collection list screen (e.g. High Returns) carries its own return-period filter pill
+    // above the fund list - unlike the Annualised box or the section widgets above, its
+    // content-desc is just the short label itself ("1Y Returns", "3Y Returns", ...), with no
+    // "Return period button..." wrapper text. Its dropdown, however, lists the same long-form
+    // options ("1 Year Return", "3 Years Return", ...) the section picker methods already know
+    // how to read and select, so this reuses getSectionReturnPeriodOptions/selectSectionReturnPeriod.
+    async getListReturnPeriod(timeout = 5000) {
+        const el = await this.findElement('android=new UiSelector().descriptionMatches("^\\d+Y Returns$")', timeout);
+        return ((await el.getAttribute('content-desc')) || '').trim();
+    }
+
+    async openListReturnPeriodPicker(timeout = 5000) {
+        await this.click('android=new UiSelector().descriptionMatches("^\\d+Y Returns$")', timeout);
+        console.log('Opened return period picker (fund list)');
+    }
+
+    // Cycles every option in the list's return-period picker (skipping whichever one is already
+    // selected by default), the same way cycleSectionReturnPeriods does for the section widgets -
+    // matched by leading digit ("1Y Returns" vs. "1 Year Return") since the pill and its dropdown
+    // options use different label formats for the same period.
+    async cycleListReturnPeriods() {
+        const before = await this.getListReturnPeriod();
+        console.log(`List return period - currently showing: ${before}`);
+        const beforeNum = (before.match(/\d+/) || [])[0];
+
+        await this.openListReturnPeriodPicker();
+        const options = await this.getSectionReturnPeriodOptions();
+        console.log(`List return period - available options: ${options.join(', ') || '(none found)'}`);
+
+        let pickerOpen = options.length > 0;
+        const results = [];
+        for (const option of options) {
+            const optionNum = (option.match(/\d+/) || [])[0];
+            if (optionNum === beforeNum) {
+                console.log(`List return period - "${option}" already selected by default - not re-clicking`);
+                if (pickerOpen) {
+                    await this.dismissReturnPeriodPicker();
+                    pickerOpen = false;
+                }
+                results.push({ period: option, skipped: true });
+                continue;
+            }
+
+            if (!pickerOpen) {
+                await this.openListReturnPeriodPicker();
+            }
+            await this.selectSectionReturnPeriod(option);
+            pickerOpen = false;
+            await this.pause(1000);
+
+            const after = await this.getListReturnPeriod();
+            console.log(`List return period - selected "${option}", pill now reads: "${after}"`);
+            results.push({ period: option, currentPeriod: after });
+        }
+        return results;
+    }
+
     // Category tabs ("Equity", "Debt", "Hybrid" under Trending Funds) are short, exact-text
     // elements - distinct from the Handpick Collections tile that happens to share the same word
     // (e.g. "Debt\nTab...\n23\nFunds" vs. the plain "Debt" tab here), so an exact description()
@@ -1042,6 +1113,15 @@ class MutualFundsPage extends BasePage {
         console.log('Scrolled to top of Explore tab');
     }
 
+    // One incremental scroll-down step on the Explore tab - used between categories so the next
+    // one isn't left sitting right at the bottom edge of the screen (same borderline-visible
+    // positioning that caused its tag list to fail to render for "Index Fund").
+    async scrollExploreDown() {
+        await this.swipe('down');
+        await this.pause(500);
+        console.log('Scrolled down on Explore tab');
+    }
+
     // Reads "Available: <N> funds" straight off the (collapsed) category card - the ground truth
     // to compare against the fund list's own "<N> Results" once its "All" tag is selected.
     async getCategoryFundCount(categoryName) {
@@ -1052,11 +1132,50 @@ class MutualFundsPage extends BasePage {
         return m ? Number(m[1]) : null;
     }
 
+    // Cards further down the Category Solutions list (Index Fund, Funds of Funds, Solution
+    // Oriented) aren't on-screen yet after collapsing a prior category - scrolls down until the
+    // target card is visible. A no-op (no swipes) if it's already on-screen.
+    async scrollToCategoryCard(categoryName, maxScrolls = 10) {
+        const selector = `android=new UiSelector().descriptionContains("${categoryName} category")`;
+        for (let i = 0; i < maxScrolls; i++) {
+            if (await this.isElementVisible(selector, 1000)) {
+                console.log(`Scrolled to "${categoryName}" category card`);
+                return true;
+            }
+            await this.swipe('down');
+            await this.pause(400);
+        }
+        const found = await this.isElementVisible(selector, 1000);
+        if (!found) console.log(`"${categoryName}" category card not found after ${maxScrolls} scrolls`);
+        return found;
+    }
+
     // Tapping a category card toggles its tag list open/closed in place (verified live: its own
     // content-desc switches between "...Double tap to show the tags..." and "...hide the tags...").
     async clickCategoryCard(categoryName, timeout = 5000) {
         await this.click(`android=new UiSelector().descriptionContains("${categoryName} category")`, timeout);
         console.log(`Clicked "${categoryName}" category card`);
+    }
+
+    // For a category card near the bottom of the screen (Index Fund, Funds of Funds, Solution
+    // Oriented), expanding it doesn't mount its tag list right away - like the section widgets
+    // elsewhere on this screen, the tags only render once scrolled into view. Matched generically
+    // (not by the "All" tag specifically) since not every category has one - "Index Fund" expands
+    // to a single tag chip named "Index Fund" itself, with no "All" at all. A no-op if any tag is
+    // already visible.
+    async scrollToCategoryTags(maxScrolls = 10) {
+        const selector = 'android=new UiSelector().descriptionContains("Double tap to view funds under this tag")';
+        for (let i = 0; i < maxScrolls; i++) {
+            if (await this.isElementVisible(selector, 1000)) {
+                console.log('Scrolled to category tag list');
+                return true;
+            }
+            await this.swipe('down');
+            await this.pause(400);
+        }
+        const found = await this.isElementVisible(selector, 1000);
+        if (!found) console.log(`Category tag list not found after ${maxScrolls} scrolls`);
+        return found;
     }
 
     // Tags render in a fixed order once a category is expanded - "All" is always first.

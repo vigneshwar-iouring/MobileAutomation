@@ -65,6 +65,68 @@ async function run() {
 
         await mutualFundsPage.goBackFromFundList();
         await mutualFundsPage.clickCategoryCard('Equity');
+
+        console.log('\nStep 9: Repeating for each remaining category below Equity (All -> search "SBI" -> verify -> clear -> + -> next tag, excluding "Index Fund")...');
+        const remainingCategories = ['Debt', 'Hybrid', 'Index Fund', 'Funds of Funds', 'Solution Oriented'];
+
+        for (const category of remainingCategories) {
+            console.log(`\n--- Category: ${category} ---`);
+            await mutualFundsPage.scrollToCategoryCard(category);
+            await mutualFundsPage.clickCategoryCard(category);
+            await driver.pause(1000);
+            await mutualFundsPage.scrollToCategoryTags();
+            const categoryTags = await mutualFundsPage.getCategoryTags();
+            console.log(`${category} tags (in order): ${categoryTags.join(', ')}`);
+
+            // Not every category has an "All" tag - "Index Fund" expands to a single tag chip
+            // named "Index Fund" itself instead, so the first tag found is clicked generically.
+            const firstTag = categoryTags[0];
+            if (!firstTag) {
+                console.log(`${category} - no tags found - skipping to next category`);
+                await mutualFundsPage.scrollToCategoryCard(category);
+                await mutualFundsPage.clickCategoryCard(category);
+                await mutualFundsPage.scrollExploreDown();
+                continue;
+            }
+            await mutualFundsPage.clickCategoryTag(firstTag);
+            await driver.pause(1500);
+
+            await mutualFundsPage.searchLocalFundList(searchQuery);
+            const results = await mutualFundsPage.getSearchResultNames();
+            console.log(`Results after searching "${searchQuery}": ${results.join(', ')}`);
+            const allMatch = results.length > 0 && results.every(name => name.toUpperCase().includes(searchQuery));
+            console.log(`${category} - SBI search check: ${allMatch ? 'PASS (all results are SBI funds)' : 'FAIL'}`);
+
+            await mutualFundsPage.clearLocalSearch(searchQuery.length);
+            await driver.pause(500);
+
+            // "Index Fund" only ever has the one tag (itself) - there's no second tag to add via
+            // "+", so that step is skipped entirely and this goes straight back to Explore. With
+            // no "+"/tag tap afterward to close it as a side effect, the keyboard left open by
+            // clearLocalSearch's backspacing would otherwise eat the very first back-press below
+            // (dismissing the keyboard instead of navigating), so it's hidden explicitly here.
+            if (category === 'Index Fund') {
+                console.log(`${category} - only tag available - skipping "+" step`);
+                await driver.hideKeyboard().catch(() => {});
+            } else {
+                await mutualFundsPage.clickAddFilterButton();
+                await driver.pause(800);
+                const nextCategoryTag = categoryTags.slice(1).find(t => t !== 'Index Fund');
+                if (nextCategoryTag) {
+                    await mutualFundsPage.clickCategoryTag(nextCategoryTag);
+                    await driver.pause(1500);
+                    const nextCategoryTagCount = await mutualFundsPage.getFilteredResultsCount();
+                    console.log(`${category} - "${nextCategoryTag}" tag results: ${nextCategoryTagCount}`);
+                } else {
+                    console.log(`${category} - no eligible tag found after "All" (excluding "Index Fund") - skipping`);
+                }
+            }
+
+            await mutualFundsPage.goBackFromFundList();
+            await mutualFundsPage.scrollToCategoryCard(category);
+            await mutualFundsPage.clickCategoryCard(category);
+            await mutualFundsPage.scrollExploreDown();
+        }
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);

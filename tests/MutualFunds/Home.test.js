@@ -54,18 +54,32 @@ async function run() {
         console.log('\nStep 10: Scrolling to the bottom and repeating for "Funds in this Category" (if applicable)...');
         await mutualFundsPage.cycleSectionReturnPeriods('Funds in this Category', { scrollToBottom: true });
 
-        console.log('\nStep 11: Navigating back to Home...');
+        console.log('\nStep 11: Navigating back to the High Returns list and cycling its return period filter (1Y default, 3Y, 5Y)...');
+        await mutualFundsPage.goBackFromFundDetail();
+        await mutualFundsPage.cycleListReturnPeriods();
+
+        console.log('\nStep 12: Navigating back to Home...');
         await mutualFundsPage.navigateBackToHome();
 
-        console.log('\nStep 12: Clicking search icon near Handpick Collections and searching "tata"...');
+        console.log('\nStep 13: For each remaining Handpick Collection (Debt, Tax Saving, Large Cap, Mid Cap, Small Cap), opening it and verifying tile count matches list header count...');
+        for (const collectionName of ['Debt', 'Tax Saving', 'Large Cap', 'Mid Cap', 'Small Cap']) {
+            const collectionTileCount = await mutualFundsPage.getCollectionTileCount(collectionName);
+            await mutualFundsPage.clickCollection(collectionName);
+            await driver.pause(1000);
+            const collectionListCount = await mutualFundsPage.getCollectionListCount();
+            console.log(`${collectionName} count - tile: ${collectionTileCount}, list header: ${collectionListCount} - ${collectionTileCount !== null && collectionTileCount === collectionListCount ? 'PASS (match)' : 'FAIL (mismatch)'}`);
+            await mutualFundsPage.navigateBackToHome();
+        }
+
+        console.log('\nStep 14: Clicking search icon near Handpick Collections and searching "tata"...');
         await mutualFundsPage.clickSearchIcon();
         await mutualFundsPage.searchMutualFunds('tata');
         await mutualFundsPage.verifySearchResults('tata');
 
-        console.log('\nStep 13: Navigating back to Home again...');
+        console.log('\nStep 15: Navigating back to Home again...');
         await mutualFundsPage.navigateBackToHome();
 
-        console.log('\nStep 14: Opening "Invest in New Fund Offering", scrolling to the bottom, and tapping the last fund...');
+        console.log('\nStep 16: Opening "Invest in New Fund Offering", scrolling to the bottom, and tapping the last fund...');
         await mutualFundsPage.clickNfoBanner();
         await driver.pause(1000);
         await mutualFundsPage.scrollNfoListToBottom();
@@ -74,10 +88,10 @@ async function run() {
         const nfoDates = await mutualFundsPage.readNfoDates();
         await mutualFundsPage.verifyNfoRemainingTime(nfoDates);
 
-        console.log('\nStep 15: Printing Minimum Investment Amount...');
+        console.log('\nStep 17: Printing Minimum Investment Amount...');
         await mutualFundsPage.readNfoMinInvestAmount();
 
-        console.log('\nStep 16: Scrolling to bottom then top, then verifying One Time and Start SIP order pads...');
+        console.log('\nStep 18: Scrolling to bottom then top, then verifying One Time and Start SIP order pads...');
         await mutualFundsPage.scrollScreenToBottomThenTop();
 
         await mutualFundsPage.clickOneTimeButton();
@@ -86,10 +100,10 @@ async function run() {
 
         await mutualFundsPage.attemptStartSipFlow('Start SIP');
 
-        console.log('\nStep 17: Navigating back to Home...');
+        console.log('\nStep 19: Navigating back to Home...');
         await mutualFundsPage.navigateBackToHome();
 
-        console.log('\nStep 18: Scrolling to bottom, changing return period to 3Y, then visiting the first fund in Equity, Debt and Hybrid...');
+        console.log('\nStep 20: Scrolling to bottom, changing return period to 3Y, then visiting the first fund in Equity, Debt and Hybrid...');
         await mutualFundsPage.scrollHomeToBottom();
         await mutualFundsPage.changeSectionReturnPeriod('Trending Funds', '3 Years Return');
 
