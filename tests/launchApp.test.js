@@ -1,9 +1,9 @@
 const DriverManager = require('../driver/DriverManager');
 const SplashPage = require('../pages/SplashPage');
 const permissionHandler = require('../utils/permissionHandler');
-const { createLogger } = require('../utils/logger');
+const { createLogger, getFailedTCs } = require('../utils/logger');
 
-const { logFile } = createLogger('launchApp');
+const { logFile, entries } = createLogger('launchApp');
 console.log(`Logging this run to: ${logFile}`);
 
 async function run() {
@@ -14,23 +14,34 @@ async function run() {
 
         await splashPage.launch();
         await splashPage.pause(3000);
-        console.log('Step 1: App launched');
+        console.log('TC 1: App launched');
 
         await permissionHandler.dismissAllPermissions(driver);
         await splashPage.pause(1500);
-        console.log('Step 2: Permissions handled');
+        console.log('TC 2: Permissions handled');
 
         const appLoaded = await splashPage.isAppLoaded();
         if (appLoaded) {
-            console.log('Step 3: App loaded successfully — Launch test PASSED');
+            console.log('TC 3: App loaded successfully — Launch test PASSED');
         } else {
-            console.log('Step 3: App load not verified — check element selectors');
+            console.log('TC 3: App load not verified — check element selectors');
         }
 
     } catch (err) {
         console.error('Test failed:', err.message);
     } finally {
         await DriverManager.closeDriver();
+
+        const failedTCs = getFailedTCs(entries);
+        if (failedTCs.length) {
+            console.log('\n=== Failed Test Cases ===');
+            failedTCs.forEach(f => {
+                console.log(`${f.tc}:`);
+                f.messages.forEach(m => console.log(`  - ${m}`));
+            });
+        } else {
+            console.log('\nAll test cases passed.');
+        }
     }
 }
 

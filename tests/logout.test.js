@@ -1,8 +1,8 @@
 const DriverManager = require('../driver/DriverManager');
 const LoginPage = require('../pages/LoginPage');
-const { createLogger } = require('../utils/logger');
+const { createLogger, getFailedTCs } = require('../utils/logger');
 
-const { logFile } = createLogger('logout');
+const { logFile, entries } = createLogger('logout');
 console.log(`Logging this run to: ${logFile}`);
 
 async function run() {
@@ -11,7 +11,7 @@ async function run() {
     try {
         const loginPage = new LoginPage(driver);
 
-        console.log('Step 1: Checking logged-in state...');
+        console.log('TC 1: Checking logged-in state...');
         if (!(await loginPage.isLoggedIn())) {
             console.log('Not currently logged in - nothing to do');
             return;
@@ -19,7 +19,7 @@ async function run() {
             console.log('Logged in state - proceeding to logout...');
         }
 
-        console.log('Step 2: Logging out...');
+        console.log('TC 2: Logging out...');
         await loginPage.logout();
         await driver.pause(2000);
 
@@ -31,6 +31,17 @@ async function run() {
         console.error(err.stack);
     } finally {
         await DriverManager.closeDriver();
+
+        const failedTCs = getFailedTCs(entries);
+        if (failedTCs.length) {
+            console.log('\n=== Failed Test Cases ===');
+            failedTCs.forEach(f => {
+                console.log(`${f.tc}:`);
+                f.messages.forEach(m => console.log(`  - ${m}`));
+            });
+        } else {
+            console.log('\nAll test cases passed.');
+        }
     }
 }
 

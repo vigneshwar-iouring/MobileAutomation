@@ -22,6 +22,7 @@ const MODULE_REGISTRY = [
     { group: 'Mutual Funds', label: 'Home', testName: 'MutualFunds' },
     { group: 'Mutual Funds', label: 'Explore', testName: 'MutualFundsExplore' },
     { group: 'Mutual Funds', label: 'Portfolio', testName: 'MutualFundsPortfolio' },
+    { group: 'Mutual Funds', label: 'Accounts', testName: 'MutualFundsAccounts' },
     { group: 'Research Calls', label: 'Equity - Fundamental', testName: 'ResearchCalls-Equity-Fundamental' },
     { group: 'Research Calls', label: 'Equity - Technical', testName: 'ResearchCalls-Equity-Technical' },
     { group: 'Research Calls', label: 'Derivative - Technical', testName: 'ResearchCalls-Derivative-Technical' },
@@ -67,6 +68,7 @@ function pageShell(title, body) {
   tr.error td { color:#c62828; font-weight:600; }
   tr.step td { background:#eef5ff; }
   h2 { margin-top: 28px; margin-bottom: 8px; }
+  .error-msg { color:#c62828; font-weight:600; margin-top:4px; }
 </style>
 </head>
 <body>
@@ -75,9 +77,15 @@ ${body}
 </html>`;
 }
 
+// Rendered under a FAIL status wherever a report shows one - the header/summary line explaining
+// which error the test actually failed on, instead of making the reader open the full step log.
+function errorMsgHtml(status, errorMessage) {
+    return status === 'FAIL' && errorMessage ? `<div class="error-msg">Failed on: ${escapeHtml(errorMessage)}</div>` : '';
+}
+
 // Writes one test's own step-by-step HTML report (called automatically when the process exits -
 // see logger.js). Status is FAIL whenever any console.error() line was logged during the run.
-function writeHtmlReport({ testName, startTime, endTime, status, entries }) {
+function writeHtmlReport({ testName, startTime, endTime, status, entries, errorMessage }) {
     ensureDir(REPORTS_DIR);
     const rows = entries.map(e => `
         <tr class="${e.level}">
@@ -91,6 +99,7 @@ function writeHtmlReport({ testName, startTime, endTime, status, entries }) {
   <div class="meta">
     ${new Date(startTime).toLocaleString()} &rarr; ${new Date(endTime).toLocaleString()} (${fmtDuration(endTime - startTime)})
     &nbsp; <span class="status ${status}">${status}</span>
+    ${errorMsgHtml(status, errorMessage)}
   </div>
   <table>
     <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
@@ -117,23 +126,23 @@ function writeReportData({ testName, startTime, endTime, status, entries }) {
 // Drops a small JSON summary for this test run, only when it's part of a suite run (RunAll.test.js
 // sets REPORT_RUN_ID before spawning its children) - a standalone single-file run has nothing to
 // aggregate into, so it just gets its own HTML report and skips this.
-function writeSummary({ testName, startTime, endTime, status, logFile, reportFile }) {
+function writeSummary({ testName, startTime, endTime, status, logFile, reportFile, errorMessage }) {
     const runId = process.env.REPORT_RUN_ID;
     if (!runId) return;
 
     const dir = path.join(SUMMARIES_DIR, runId);
     ensureDir(dir);
     const file = path.join(dir, `${testName.replace(/[\\/]/g, '_')}_${startTime}.json`);
-    fs.writeFileSync(file, JSON.stringify({ testName, startTime, endTime, status, logFile, reportFile }, null, 2));
+    fs.writeFileSync(file, JSON.stringify({ testName, startTime, endTime, status, logFile, reportFile, errorMessage }, null, 2));
 }
 
 // Records this test's most recent result, independent of any suite run - this is what the module
 // dashboard (buildModuleDashboard) and the compiled report (buildCompiledReport) both read to find
 // each module's latest status/detail.
-function writeLatestPointer({ testName, startTime, endTime, status, reportFile, dataFile }) {
+function writeLatestPointer({ testName, startTime, endTime, status, reportFile, dataFile, errorMessage }) {
     ensureDir(LATEST_DIR);
     const file = path.join(LATEST_DIR, `${testName.replace(/[\\/]/g, '_')}.json`);
-    fs.writeFileSync(file, JSON.stringify({ testName, startTime, endTime, status, reportFile, dataFile }, null, 2));
+    fs.writeFileSync(file, JSON.stringify({ testName, startTime, endTime, status, reportFile, dataFile, errorMessage }, null, 2));
 }
 
 // Builds reports/index.html - one high-level page listing every module in MODULE_REGISTRY with its
@@ -163,7 +172,7 @@ function buildModuleDashboard() {
         return {
             group: m.group,
             label: m.label,
-            statusHtml: `<span class="status ${latest.status}">${latest.status}</span>`,
+            statusHtml: `<span class="status ${latest.status}">${latest.status}</span>${errorMsgHtml(latest.status, latest.errorMessage)}`,
             lastRun: new Date(latest.endTime).toLocaleString(),
             link
         };
@@ -255,6 +264,7 @@ function buildCompiledReport() {
   <h2>${escapeHtml(m.group)} - ${escapeHtml(m.label)} <span class="status ${latest.status}">${latest.status}</span></h2>
   <div class="meta">
     ${new Date(latest.startTime).toLocaleString()} &rarr; ${new Date(latest.endTime).toLocaleString()} (${fmtDuration(latest.endTime - latest.startTime)})
+    ${errorMsgHtml(latest.status, latest.errorMessage)}
   </div>
   <table>
     <thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead>
@@ -314,11 +324,13 @@ function buildSuiteReport(runId, suiteName) {
     const suiteStart = Math.min(...modules.map(m => m.startTime));
     const suiteEnd = Math.max(...modules.map(m => m.endTime));
     const overallStatus = modules.every(m => m.status === 'PASS') ? 'PASS' : 'FAIL';
+    // The suite stops at the first module that fails (see RunAll.test.js), so there's at most one.
+    const failedModule = modules.find(m => m.status === 'FAIL');
 
     const rows = modules.map(m => `
         <tr>
             <td>${escapeHtml(m.testName)}</td>
-            <td><span class="status ${m.status}">${m.status}</span></td>
+            <td><span class="status ${m.status}">${m.status}</span>${errorMsgHtml(m.status, m.errorMessage)}</td>
             <td>${fmtDuration(m.endTime - m.startTime)}</td>
             <td><a href="${path.basename(m.reportFile)}">Report</a></td>
         </tr>`).join('\n');
@@ -329,6 +341,7 @@ function buildSuiteReport(runId, suiteName) {
     ${new Date(suiteStart).toLocaleString()} &rarr; ${new Date(suiteEnd).toLocaleString()} (${fmtDuration(suiteEnd - suiteStart)})
     &nbsp; <span class="status ${overallStatus}">${overallStatus}</span>
     &nbsp; ${modules.length} module(s)
+    ${failedModule ? errorMsgHtml('FAIL', `${failedModule.testName} - ${failedModule.errorMessage}`) : ''}
   </div>
   <table>
     <thead><tr><th>Module</th><th>Status</th><th>Duration</th><th>Report</th></tr></thead>

@@ -195,6 +195,34 @@ class BasePage {
         return nodes;
     }
 
+    // Same as getDescribedElements above, but keyed on the "text" attribute instead of
+    // "content-desc" - some widgets (date pickers, native calendar fields) render their value as
+    // plain text with an empty content-desc, so they're invisible to a content-desc-only scan.
+    async getTextElements() {
+        const src = await this.driver.getPageSource();
+        const tags = src.match(/<[\w.]+[^>]*>/g) || [];
+        const nodes = [];
+        for (const tag of tags) {
+            const textMatch = tag.match(/\stext="([^"]*)"/);
+            const boundsMatch = tag.match(/bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"/);
+            if (!textMatch || !textMatch[1] || !boundsMatch) continue;
+            const text = textMatch[1]
+                .replace(/&#10;/g, '\n')
+                .replace(/&quot;/g, '"')
+                .replace(/&apos;/g, "'")
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&amp;/g, '&');
+            nodes.push({
+                text,
+                x1: Number(boundsMatch[1]), y1: Number(boundsMatch[2]),
+                x2: Number(boundsMatch[3]), y2: Number(boundsMatch[4]),
+                clickable: /clickable="true"/.test(tag),
+            });
+        }
+        return nodes;
+    }
+
     // Clicks the Nth (1-based) clickable, described row in a top-to-bottom list/picker dialog -
     // e.g. a basket or watchlist selector - without needing a per-item selector. `exclude` filters
     // out non-item rows (a "New X" creation affordance) that aren't real list entries.

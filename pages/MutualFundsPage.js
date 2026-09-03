@@ -26,6 +26,15 @@ function parseRemainingDaysText(text) {
     return m ? Number(m[1]) : null;
 }
 
+// The Capital Gain Report's "Choose Financial Year" field reads like "Apr 2026-Mar 2027" - India's
+// financial year always runs April to March, so the expected label for any date is computable
+// directly rather than needing to parse+compare a range.
+function getExpectedFinancialYearLabel(referenceDate = new Date()) {
+    const year = referenceDate.getFullYear();
+    const fyStartYear = referenceDate.getMonth() >= MONTHS.APR ? year : year - 1;
+    return `Apr ${fyStartYear}-Mar ${fyStartYear + 1}`;
+}
+
 function daysBetween(from, to) {
     const oneDayMs = 24 * 60 * 60 * 1000;
     return Math.round((to.getTime() - from.getTime()) / oneDayMs);
@@ -69,6 +78,17 @@ class MutualFundsPage extends BasePage {
         // descriptionContains("Portfolio") would also match the bottom floating nav's own
         // "Portfolio" button and the "Mutual Funds Portfolio Summary" card.
         this.portfolioTab = 'android=new UiSelector().descriptionContains("Tab 3 of 4")';
+        // Same disambiguation reasoning as portfolioTab above - "Tab 4 of 4" is unique to this tab.
+        this.accountsTab = 'android=new UiSelector().descriptionContains("Tab 4 of 4")';
+        this.reportsMenuButton = 'android=new UiSelector().description("Reports button., Double tap to go to Reports page")';
+        this.reportsHeader = 'android=new UiSelector().description("Reports")';
+        this.downloadButton = 'android=new UiSelector().description("DOWNLOAD")';
+        this.orderBookMenuButton = 'android=new UiSelector().description("Order Book button., Double tap to go to Order Book page")';
+        this.orderBookHeader = 'android=new UiSelector().description("Order Book")';
+        this.bankMenuButton = 'android=new UiSelector().description("Bank button., Double tap to go to Bank page")';
+        this.banksHeader = 'android=new UiSelector().description("Banks")';
+        this.autopayMenuButton = 'android=new UiSelector().description("Auto Pay button., Double tap to go to Auto Pay page")';
+        this.autopayHeader = 'android=new UiSelector().description("Autopay")';
         this.portfolioSummary = 'android=new UiSelector().descriptionContains("Mutual Funds Portfolio Summary")';
         this.activeSipsTile = 'android=new UiSelector().descriptionContains("Active SIPs")';
         // Fund cards on the Portfolio page (below the Active SIPs tile) are, unlike Manage SIP's
@@ -103,6 +123,7 @@ class MutualFundsPage extends BasePage {
         this.nfoCard = 'android=new UiSelector().descriptionContains("Open Date")';
         this.oneTimeButton = 'android=new UiSelector().descriptionContains("One Time button")';
         this.startSipButton = 'android=new UiSelector().descriptionContains("Start Systematic Investment Plan")';
+        this.submitButton = 'android=new UiSelector().description("SUBMIT")';
 
         this.exploreTab = 'android=new UiSelector().descriptionContains("Explore")';
         this.categorySolutionsLabel = 'android=new UiSelector().description("Category Solutions")';
@@ -141,6 +162,168 @@ class MutualFundsPage extends BasePage {
     async clickPortfolioTab(timeout = 5000) {
         await this.click(this.portfolioTab, timeout);
         console.log('Clicked Portfolio tab');
+    }
+
+    async clickAccountsTab(timeout = 5000) {
+        await this.click(this.accountsTab, timeout);
+        console.log('Clicked Accounts tab');
+    }
+
+    async clickReportsMenu(timeout = 5000) {
+        await this.click(this.reportsMenuButton, timeout);
+        console.log('Clicked Reports menu button');
+    }
+
+    async getReportsHeader(timeout = 5000) {
+        const el = await this.findElement(this.reportsHeader, timeout);
+        return ((await el.getAttribute('content-desc')) || '').trim();
+    }
+
+    // Each report option renders as a collapsible section reading "<Name>, Collapsed" or
+    // "<Name>, Expanded" - the trailing state is stripped off to get just the report name.
+    async getReportOptions() {
+        const nodes = await this.getDescribedElements();
+        return nodes
+            .filter(n => /Report, (Collapsed|Expanded)$/.test(n.desc.trim()))
+            .map(n => n.desc.split(',')[0].trim());
+    }
+
+    // Tapping a report's row toggles it open/closed in place, same as a category card - clicking
+    // again on an already-expanded report collapses it.
+    async clickReportOption(name, timeout = 5000) {
+        await this.click(`android=new UiSelector().descriptionContains("${name}")`, timeout);
+        console.log(`Clicked "${name}" report option`);
+    }
+
+    // Only Holdings Report shows an "As on <DD/MM/YYYY>" date once expanded - Portfolio Summary
+    // and Capital Gain Report don't render a date at all (verified live).
+    async getReportAsOnDate(timeout = 5000) {
+        await this.findElement('android=new UiSelector().descriptionMatches("^As on \\d{2}/\\d{2}/\\d{4}$")', timeout);
+        const nodes = await this.getDescribedElements();
+        const node = nodes.find(n => /^As on \d{2}\/\d{2}\/\d{4}$/.test(n.desc.trim()));
+        if (!node) return null;
+        const m = node.desc.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        return m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])) : null;
+    }
+
+    // Portfolio Summary Report's Start/End Date fields render as plain text with an empty
+    // content-desc (verified live), so they're read via getTextElements rather than
+    // getDescribedElements. Both fields show the identical "03 Sep 2026" format with no other
+    // distinguishing label text in the accessibility tree, so Start vs. End is resolved by
+    // left-to-right position (Start Date sits to the left of End Date on screen).
+    async getPortfolioSummaryDates(timeout = 5000) {
+        const dateSelector = 'android=new UiSelector().textMatches("^\\d{1,2} [A-Za-z]{3,9} \\d{4}$")';
+        await this.findElement(dateSelector, timeout);
+        const nodes = await this.getTextElements();
+        const dateNodes = nodes
+            .filter(n => /^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}$/.test(n.text.trim()))
+            .sort((a, b) => a.x1 - b.x1);
+        const [startNode, endNode] = dateNodes;
+        return {
+            startDate: startNode ? parseNfoDate(startNode.text) : null,
+            endDate: endNode ? parseNfoDate(endNode.text) : null,
+        };
+    }
+
+    // Capital Gain Report's "Choose Financial Year" value is likewise plain text with an empty
+    // content-desc (e.g. "Apr 2026-Mar 2027").
+    async getCapitalGainFinancialYear(timeout = 5000) {
+        const fySelector = 'android=new UiSelector().textMatches("^[A-Za-z]{3} \\d{4}-[A-Za-z]{3} \\d{4}$")';
+        await this.findElement(fySelector, timeout);
+        const nodes = await this.getTextElements();
+        const fyNode = nodes.find(n => /^[A-Za-z]{3}\s+\d{4}-[A-Za-z]{3}\s+\d{4}$/.test(n.text.trim()));
+        return fyNode ? fyNode.text.trim() : null;
+    }
+
+    async clickDownloadButton(timeout = 5000) {
+        await this.click(this.downloadButton, timeout);
+        console.log('Clicked DOWNLOAD button');
+    }
+
+    async clickOrderBookMenu(timeout = 5000) {
+        await this.click(this.orderBookMenuButton, timeout);
+        console.log('Clicked Order Book menu button');
+    }
+
+    async getOrderBookHeader(timeout = 5000) {
+        const el = await this.findElement(this.orderBookHeader, timeout);
+        return ((await el.getAttribute('content-desc')) || '').trim();
+    }
+
+    // The date range reads like "27 Aug 2026 - 03 Sep 2026" - reusing parseNfoDate since it
+    // already handles this "DD Mon YYYY" format (its optional ordinal suffix simply doesn't match
+    // here, which is fine).
+    async getOrderBookDateRange(timeout = 5000) {
+        const selector = 'android=new UiSelector().descriptionMatches("^\\d{1,2} [A-Za-z]{3,9} \\d{4} - \\d{1,2} [A-Za-z]{3,9} \\d{4}$")';
+        const el = await this.findElement(selector, timeout);
+        const desc = ((await el.getAttribute('content-desc')) || '').trim();
+        const [startText, endText] = desc.split(' - ');
+        return {
+            startDate: startText ? parseNfoDate(startText) : null,
+            endDate: endText ? parseNfoDate(endText) : null,
+        };
+    }
+
+    async goBackFromOrderBook() {
+        await this.driver.back();
+        await this.pause(1000);
+        console.log('Navigated back from Order Book to Accounts tab');
+    }
+
+    async clickBankMenu(timeout = 5000) {
+        await this.click(this.bankMenuButton, timeout);
+        console.log('Clicked Bank menu button');
+    }
+
+    async getBanksHeader(timeout = 5000) {
+        const el = await this.findElement(this.banksHeader, timeout);
+        return ((await el.getAttribute('content-desc')) || '').trim();
+    }
+
+    // Bank rows read like "HDFC BANK\nAccount Number ending with 4 1 1 6" - the primary bank's
+    // radio indicator is a purely visual fill with no accessibility signal behind it (verified
+    // live: both getAttribute('selected') and the WebDriver isSelected() command read false/false
+    // for every bank regardless of which one is actually selected on screen), so this only
+    // returns the bank names - selection state can't be determined through automation here.
+    async getBankList(timeout = 5000) {
+        const found = await this.isElementVisible('android=new UiSelector().descriptionContains("Account Number ending with")', timeout);
+        if (!found) return [];
+        const nodes = await this.getDescribedElements();
+        return nodes
+            .filter(n => n.desc.includes('Account Number ending with'))
+            .map(n => n.desc.split('\n')[0].trim());
+    }
+
+    async goBackFromBank() {
+        await this.driver.back();
+        await this.pause(1000);
+        console.log('Navigated back from Bank to Accounts tab');
+    }
+
+    async clickAutopayMenu(timeout = 5000) {
+        await this.click(this.autopayMenuButton, timeout);
+        console.log('Clicked Auto Pay menu button');
+    }
+
+    // Autopay mandates read like "HDFC BANK . Account number ending with 4 1 1 6\nACTIVE\n
+    // <mandate id>\nCreated on <date>" - "Created on" is a stable, unique marker for these rows
+    // (unlike the Bank screen's "Account Number ending with", these use lowercase "number", and
+    // "Created on" doesn't appear anywhere else on this screen).
+    async getAutopayList(timeout = 5000) {
+        const found = await this.isElementVisible('android=new UiSelector().descriptionContains("Created on")', timeout);
+        if (!found) return [];
+        const nodes = await this.getDescribedElements();
+        return nodes.filter(n => n.desc.includes('Created on')).map(n => n.desc);
+    }
+
+    async isAutopayEmptyMessageShown(timeout = 3000) {
+        return this.isElementVisible('android=new UiSelector().descriptionContains("You do not have Autopay Active")', timeout);
+    }
+
+    async goBackFromAutopay() {
+        await this.driver.back();
+        await this.pause(1000);
+        console.log('Navigated back from Auto Pay to Accounts tab');
     }
 
     // Shared by the Home tab and the dedicated Portfolio tab - both render the same merged
@@ -515,6 +698,49 @@ class MutualFundsPage extends BasePage {
             console.log(`  ${field}: ${value}`);
         }
         return result;
+    }
+
+    // The fund detail chart's period tabs read like "threeMonths chart period.\nTab 1 of 7" - a
+    // newline, not a space, separates "chart period." from "Tab N of M" (verified live). Only the
+    // tab position and the "of <N>" total are guaranteed to stay stable across periods (the
+    // period name itself, e.g. "threeMonths", isn't known in advance for every tab), so these are
+    // matched by position rather than by name.
+    async getChartPeriodTabCount(timeout = 5000) {
+        await this.findElement('android=new UiSelector().descriptionMatches(".+ chart period\\.\\s*Tab \\d+ of \\d+$")', timeout);
+        const nodes = await this.getDescribedElements();
+        const tabNode = nodes.find(n => /chart period\.\s*Tab \d+ of \d+$/.test(n.desc.trim()));
+        if (!tabNode) return 0;
+        const m = tabNode.desc.match(/Tab \d+ of (\d+)$/);
+        return m ? Number(m[1]) : 0;
+    }
+
+    async clickChartPeriodTab(tabNumber, timeout = 5000) {
+        const selector = `android=new UiSelector().descriptionMatches(".+ chart period\\.\\s*Tab ${tabNumber} of \\d+$")`;
+        const el = await this.findElement(selector, timeout);
+        const desc = (await el.getAttribute('content-desc')) || '';
+        const periodName = desc.split(' chart period.')[0].trim();
+        await el.click();
+        console.log(`Clicked chart period tab ${tabNumber}: "${periodName}"`);
+        return periodName;
+    }
+
+    // Cycles every chart period tab in order (1 -> "of <N>"), ending on whichever tab is last -
+    // conventionally "max" on this screen's chart.
+    async cycleChartPeriods() {
+        const total = await this.getChartPeriodTabCount();
+        if (!total) {
+            console.log('Chart period tabs not found - skipping');
+            return [];
+        }
+        console.log(`Chart period tabs found: ${total}`);
+
+        const results = [];
+        for (let i = 1; i <= total; i++) {
+            const periodName = await this.clickChartPeriodTab(i);
+            await this.pause(800);
+            results.push({ tab: i, period: periodName });
+        }
+        return results;
     }
 
     async openAnnualisedReturnPeriodPicker(timeout = 5000) {
@@ -1041,6 +1267,20 @@ class MutualFundsPage extends BasePage {
         console.log('Navigated back from order pad');
     }
 
+    // The amount field always opens pre-filled with a default (the minimum) - clearing it is the
+    // only way to observe SUBMIT's disabled state, since it's enabled by default otherwise.
+    async clearOrderPadAmount(timeout = 5000) {
+        const el = await this.findElement(this.amountInput, timeout);
+        await el.click();
+        await el.clearValue();
+        console.log('Cleared order pad amount');
+    }
+
+    async isSubmitButtonDisabled(timeout = 5000) {
+        const el = await this.findElement(this.submitButton, timeout);
+        return !(await el.isEnabled());
+    }
+
     // One back-press returns from a fund detail screen straight to whatever list opened it (e.g.
     // Trending Funds) - verified live, no intermediate screen to get through first.
     async goBackFromFundDetail() {
@@ -1236,6 +1476,15 @@ class MutualFundsPage extends BasePage {
         await this.pause(1000);
         console.log('Navigated back from fund list');
     }
+
+    // One back-press from the Reports page returns straight to the Accounts tab (verified live) -
+    // navigateBackToHome doesn't apply here since it looks for the Home tab's own Handpick
+    // Collections section, which Accounts never shows.
+    async goBackFromReports() {
+        await this.driver.back();
+        await this.pause(1000);
+        console.log('Navigated back from Reports to Accounts tab');
+    }
 }
 
-module.exports = { MutualFundsPage, parsePortfolioSummary };
+module.exports = { MutualFundsPage, parsePortfolioSummary, getExpectedFinancialYearLabel, daysBetween };

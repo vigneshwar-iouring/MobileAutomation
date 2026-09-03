@@ -1,8 +1,8 @@
 const DriverManager = require('../driver/DriverManager');
 const { NewsPage } = require('../pages/NewsPage');
-const { createLogger } = require('../utils/logger');
+const { createLogger, getFailedTCs } = require('../utils/logger');
 
-const { logFile } = createLogger('News');
+const { logFile, entries } = createLogger('News');
 console.log(`Logging this run to: ${logFile}`);
 
 function printSummary(results) {
@@ -31,13 +31,13 @@ async function run() {
         const newsPage = new NewsPage(driver);
         const results = [];
 
-        console.log('Step 1: Clicking hamburger menu...');
+        console.log('TC 1: Clicking hamburger menu...');
         await newsPage.clickHamburgerMenu();
 
-        console.log('Step 2: Clicking News...');
+        console.log('TC 2: Clicking News...');
         await newsPage.clickNewsOption();
 
-        console.log('Step 3: Waiting up to 10s for the News screen to load...');
+        console.log('TC 3: Waiting up to 10s for the News screen to load...');
         const loaded = await newsPage.waitForLoaded(10000);
         if (!loaded) {
             throw new Error('News screen did not load within 10 seconds');
@@ -48,7 +48,7 @@ async function run() {
         // Tabs are selected one by one (in fixed left-to-right order) rather than by swiping the
         // tab strip - clicking each tab is what actually scrolls later tabs into view.
         for (const tabName of newsPage.tabNames) {
-            console.log(`\nStep 4: Selecting "${tabName}" tab...`);
+            console.log(`\nTC 4: Selecting "${tabName}" tab...`);
             await newsPage.clickTab(tabName);
             await driver.pause(1000);
 
@@ -60,14 +60,14 @@ async function run() {
                 continue;
             }
 
-            console.log('Step 5: Scrolling down 2 times, then up 2 time...');
+            console.log('TC 5: Scrolling down 2 times, then up 2 time...');
             await newsPage.scrollDown();
             await newsPage.scrollDown();
             await newsPage.scrollUp();
             await newsPage.scrollUp();
 
             if (tabName === 'All') {
-                console.log('Step 5b: Opening search bar and searching "Manufacturing"...');
+                console.log('TC 5b: Opening search bar and searching "Manufacturing"...');
                 await newsPage.clickSearchBar();
                 await newsPage.searchNews('Manufacturing');
                 await driver.pause(3000);
@@ -76,20 +76,31 @@ async function run() {
                 await driver.pause(1000);
             }
 
-            console.log(`Step 6: Checking latest news date/time and tag consistency for "${tabName}"...`);
+            console.log(`TC 6: Checking latest news date/time and tag consistency for "${tabName}"...`);
             const summary = await newsPage.getFeedSummary(tabName);
             results.push({ tab: tabName, ...summary });
         }
 
         printSummary(results);
 
-        console.log('\nStep 7: Closing News screen...');
+        console.log('\nTC 7: Closing News screen...');
         await newsPage.clickClose();
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);
     } finally {
         await DriverManager.closeDriver();
+
+        const failedTCs = getFailedTCs(entries);
+        if (failedTCs.length) {
+            console.log('\n=== Failed Test Cases ===');
+            failedTCs.forEach(f => {
+                console.log(`${f.tc}:`);
+                f.messages.forEach(m => console.log(`  - ${m}`));
+            });
+        } else {
+            console.log('\nAll test cases passed.');
+        }
     }
 }
 

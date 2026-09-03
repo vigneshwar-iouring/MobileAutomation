@@ -2,9 +2,9 @@ const DriverManager = require('../driver/DriverManager');
 const SplashPage = require('../pages/SplashPage');
 const LoginPage = require('../pages/LoginPage');
 const permissionHandler = require('../utils/permissionHandler');
-const { createLogger } = require('../utils/logger');
+const { createLogger, getFailedTCs } = require('../utils/logger');
 
-const { logFile } = createLogger('login');
+const { logFile, entries } = createLogger('login');
 console.log(`Logging this run to: ${logFile}`);
 
 async function run() {
@@ -25,6 +25,17 @@ async function run() {
         console.error('Test failed:', err.message);
     } finally {
         await DriverManager.closeDriver();
+
+        const failedTCs = getFailedTCs(entries);
+        if (failedTCs.length) {
+            console.log('\n=== Failed Test Cases ===');
+            failedTCs.forEach(f => {
+                console.log(`${f.tc}:`);
+                f.messages.forEach(m => console.log(`  - ${m}`));
+            });
+        } else {
+            console.log('\nAll test cases passed.');
+        }
     }
 }
 

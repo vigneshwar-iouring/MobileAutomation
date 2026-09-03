@@ -9,7 +9,8 @@ const { buildSuiteReport } = require('../../utils/reportBuilder');
 const SUITE = [
     'Home.test.js',
     'Explore.test.js',
-    'Portfolio.test.js'
+    'Portfolio.test.js',
+    'Accounts.test.js'
 ];
 
 // Every spawned child inherits this via env: process.env below - it's how each module's own HTML

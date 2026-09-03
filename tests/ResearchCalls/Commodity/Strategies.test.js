@@ -1,9 +1,9 @@
 const DriverManager = require('../../../driver/DriverManager');
 const ResearchCalls = require('../../../pages/ResearchCalls');
 const { logSection, countAndRunQuoteFlow } = require('../shared');
-const { createLogger } = require('../../../utils/logger');
+const { createLogger, getFailedTCs } = require('../../../utils/logger');
 
-const { logFile } = createLogger('ResearchCalls-Commodity-Strategies');
+const { logFile, entries } = createLogger('ResearchCalls-Commodity-Strategies');
 console.log(`Logging this run to: ${logFile}`);
 
 async function run() {
@@ -11,10 +11,10 @@ async function run() {
     try {
         const researchCalls = new ResearchCalls(driver);
 
-        console.log('Step 1: Clicking hamburger menu...');
+        console.log('TC 1: Clicking hamburger menu...');
         await researchCalls.clickHamburgerMenu();
 
-        console.log('Step 2: Clicking Research option...');
+        console.log('TC 2: Clicking Research option...');
         await researchCalls.clickResearchOption();
         await researchCalls.waitForContent();
 
@@ -29,6 +29,17 @@ async function run() {
         console.error(err.stack);
     } finally {
         await DriverManager.closeDriver();
+
+        const failedTCs = getFailedTCs(entries);
+        if (failedTCs.length) {
+            console.log('\n=== Failed Test Cases ===');
+            failedTCs.forEach(f => {
+                console.log(`${f.tc}:`);
+                f.messages.forEach(m => console.log(`  - ${m}`));
+            });
+        } else {
+            console.log('\nAll test cases passed.');
+        }
     }
 }
 
