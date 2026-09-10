@@ -9,12 +9,14 @@ const { logFile, entries } = createLogger('loginWithOtp');
 console.log(`Logging this run to: ${logFile}`);
 
 // ── Credentials ─────────────────────────────────────────────────────
-const LOGIN_ID = 'TEMPMF2';
-const PASSWORD = 'Globe@9876';
+const LOGIN_ID = 'TEMPMF11';
+const PASSWORD = 'Globe@1234';
 const LOGIN_ID2 = 'HOGC1103';
-const PASSWORD2 = 'Jaya@0004';
+const PASSWORD2 = 'Jaya@0005';
 const LOGIN_ID3 = 'TEMPMF2';
 const PASSWORD3 = 'Globe@9876';
+const LOGIN_ID4 = 'EKY6998';
+const PASSWORD4 = 'May@2026';
 const DEVICE_PASSWORD = '11111'; // device screen-lock PIN, used to confirm biometric enrollment
 // ─────────────────────────────────────────────────────────────────────
 
@@ -48,8 +50,8 @@ async function run() {
 
         currentStep = 'TC 3: Entering login ID and password...';
         console.log(currentStep);
-        await loginPage.enterLoginId(LOGIN_ID2);
-        await loginPage.enterPassword(PASSWORD2);
+        await loginPage.enterLoginId(LOGIN_ID);
+        await loginPage.enterPassword(PASSWORD);
         await loginPage.clickLogin();
 
         // Wrong credentials show a Toast here instead of advancing to OTP - it vanishes from the
@@ -67,6 +69,31 @@ async function run() {
         const loginOtp = await fetchLatestOtp(sinceUid, 'One time password');
         await loginPage.enterOtp(loginOtp);
         await driver.pause(2000);
+
+        // The OTP field auto-validates on entry (no submit button) - if the fetched OTP was
+        // somehow already stale/wrong by the time it's entered, the screen shows "Incorrect OTP."
+        // in place rather than advancing. Resend and retry with a freshly fetched OTP instead of
+        // failing the run outright.
+        if (await loginPage.isIncorrectOtpShown()) {
+            currentStep = 'TC 5: Incorrect OTP shown - waiting to resend...';
+            console.log(currentStep);
+            const resendEnabled = await loginPage.waitForResendOtpEnabled();
+            if (!resendEnabled) throw new Error('Resend OTP never became enabled after incorrect OTP');
+
+            const resendUid = await getLatestUid();
+            await loginPage.clickResendOtp();
+            await driver.pause(1500);
+
+            currentStep = 'TC 5: Fetching and entering resent OTP...';
+            console.log(currentStep);
+            const resentOtp = await fetchLatestOtp(resendUid, 'One time password');
+            await loginPage.enterOtp(resentOtp);
+            await driver.pause(2000);
+
+            if (await loginPage.isIncorrectOtpShown()) {
+                throw new Error('Resent OTP was also rejected as incorrect');
+            }
+        }
 
         // First-time (or reset) logins are met with a mandatory biometric-lock enrollment prompt,
         // which itself requires a second OTP and a device-credential confirmation. Guarded so this
@@ -102,11 +129,11 @@ async function run() {
 
         currentStep = 'TC 9: Checking Risk Disclosure on Derivatives popup...';
         if (await loginPage.isRiskDisclosureShown(2000)) {
-            console.log('TC 9: Risk Disclosure on Derivatives popup shown - clicking "I Understand"...');
+            console.log('Risk Disclosure on Derivatives popup shown - clicking "I Understand"...');
             await loginPage.acknowledgeRiskDisclosure();
             await driver.pause(1000);
         } else {
-            console.log('TC 9: Risk Disclosure on Derivatives popup not shown - proceeding');
+            console.log('Risk Disclosure on Derivatives popup not shown - proceeding');
         }
 
         currentStep = 'Final check: verifying home screen';

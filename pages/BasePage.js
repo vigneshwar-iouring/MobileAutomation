@@ -144,15 +144,32 @@ class BasePage {
         return ids.join('|');
     }
 
+    // A single WebDriver/UiAutomator2 round trip occasionally never returns (device hiccup, a
+    // stale element reference mid-recomposition, an Appium-server-side stall) - observed live as
+    // scrollToBoundary hanging indefinitely on one swipe/signature call while a brand new session
+    // against the same device worked instantly. Racing against a timeout turns that into a clear,
+    // fast failure instead of an unbounded hang.
+    async withTimeout(promise, ms, label) {
+        let timer;
+        const timeout = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms waiting for: ${label}`)), ms);
+        });
+        try {
+            return await Promise.race([promise, timeout]);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
     // Reusable boundary-aware scroller shared by every tab/direction: swipes `direction` on
     // `selector`'s list until the visible signature stops changing, then stops immediately -
     // no extra confirmation pass beyond the one swipe needed to prove the boundary was reached.
-    async scrollToBoundary(selector, direction, { maxScrolls = 20, settleMs = 300, seen } = {}) {
-        let previousSignature = await this.captureVisibleSignature(selector, seen);
+    async scrollToBoundary(selector, direction, { maxScrolls = 20, settleMs = 300, seen, stepTimeoutMs = 15000 } = {}) {
+        let previousSignature = await this.withTimeout(this.captureVisibleSignature(selector, seen), stepTimeoutMs, 'captureVisibleSignature');
         for (let i = 0; i < maxScrolls; i++) {
-            await this.swipe(direction);
+            await this.withTimeout(this.swipe(direction), stepTimeoutMs, 'swipe');
             await this.driver.pause(settleMs);
-            const signature = await this.captureVisibleSignature(selector, seen);
+            const signature = await this.withTimeout(this.captureVisibleSignature(selector, seen), stepTimeoutMs, 'captureVisibleSignature');
             if (signature === previousSignature) break;
             previousSignature = signature;
         }
@@ -160,6 +177,37 @@ class BasePage {
 
     async scrollUp(selector, maxScrolls = 20) {
         await this.scrollToBoundary(selector, 'up', { maxScrolls });
+    }
+
+    // Same signature-comparison idea as captureVisibleSignature, but built on ONE getPageSource()
+    // fetch (like getDescribedElements) instead of a driver.$$(selector) query followed by one
+    // getAttribute() round trip per matched element. That per-element pattern was observed live to
+    // hang indefinitely against a real screen (Option Chain's OI tab) even though a plain
+    // getPageSource() against that exact same screen returned instantly - so this is the more
+    // reliable choice for any scroll where the caller can express the match as a content-desc regex.
+    async captureVisibleSignatureByDescRegex(regex, seen) {
+        const nodes = await this.getDescribedElements();
+        const ids = [];
+        for (const node of nodes) {
+            if (!regex.test(node.desc)) continue;
+            const id = this.stableEntryId(node.desc);
+            ids.push(id);
+            if (seen && id) seen.add(id);
+        }
+        return ids.join('|');
+    }
+
+    // Regex-driven counterpart to scrollToBoundary, using captureVisibleSignatureByDescRegex above
+    // for its signature capture instead of the per-element query captureVisibleSignature relies on.
+    async scrollToBoundaryByDescRegex(regex, direction, { maxScrolls = 20, settleMs = 300, seen, stepTimeoutMs = 15000 } = {}) {
+        let previousSignature = await this.withTimeout(this.captureVisibleSignatureByDescRegex(regex, seen), stepTimeoutMs, 'captureVisibleSignatureByDescRegex');
+        for (let i = 0; i < maxScrolls; i++) {
+            await this.withTimeout(this.swipe(direction), stepTimeoutMs, 'swipe');
+            await this.driver.pause(settleMs);
+            const signature = await this.withTimeout(this.captureVisibleSignatureByDescRegex(regex, seen), stepTimeoutMs, 'captureVisibleSignatureByDescRegex');
+            if (signature === previousSignature) break;
+            previousSignature = signature;
+        }
     }
 
     async pause(ms) {

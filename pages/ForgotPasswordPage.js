@@ -64,50 +64,6 @@ class ForgotPasswordPage extends BasePage {
         return null;
     }
 
-    async printSetPasswordHeader() {
-        console.log('\n--- Set Password Page Header ---');
-        try {
-            const textViews = await this.driver.$$('android=new UiSelector().className("android.widget.TextView")');
-            for (const el of textViews) {
-                const text = await el.getAttribute('text').catch(() => '');
-                const desc = await el.getAttribute('content-desc').catch(() => '');
-                const value = text || desc;
-                if (value && value.trim()) console.log('  Header text: "' + value.trim() + '"');
-            }
-        } catch (e) {
-            console.log('  (Could not read TextViews: ' + e.message + ')');
-        }
-        try {
-            const views = await this.driver.$$('android=new UiSelector().className("android.view.View")');
-            let printed = 0;
-            for (const el of views) {
-                const desc = await el.getAttribute('content-desc').catch(() => '');
-                if (desc && desc.trim() && printed < 5) {
-                    console.log('  Page element: "' + desc.trim() + '"');
-                    printed++;
-                }
-            }
-        } catch (e) { }
-        console.log('--------------------------------\n');
-    }
-
-    async printFieldNames() {
-        console.log('\n--- Set Password Page: Available Fields ---');
-        try {
-            const fields = await this.driver.$$('android=new UiSelector().className("android.widget.EditText")');
-            if (fields.length === 0) console.log('  (No input fields found)');
-            for (let i = 0; i < fields.length; i++) {
-                const hint = await fields[i].getAttribute('hint').catch(() => '');
-                const text = await fields[i].getAttribute('text').catch(() => '');
-                const desc = await fields[i].getAttribute('content-desc').catch(() => '');
-                console.log('  Field[' + i + ']: hint="' + hint + '"  text="' + text + '"  content-desc="' + desc + '"');
-            }
-        } catch (e) {
-            console.log('  (Could not read fields: ' + e.message + ')');
-        }
-        console.log('------------------------------------------\n');
-    }
-
     async clickLoginIdField() {
         await this.click(this.loginIdInput, 20000);
         console.log('Clicked login ID field');

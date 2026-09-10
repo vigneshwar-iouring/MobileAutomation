@@ -47,39 +47,35 @@ async function run() {
         await driver.pause(3000);
         console.log('Navigated to Set Password page');
 
-        // TC 5: Print page header and available fields
-        await forgotPage.printSetPasswordHeader();
-        await forgotPage.printFieldNames();
-
-        // TC 6: Fetch OTP from Gmail
-        console.log('TC 6: Fetching OTP from Gmail...');
+        // TC 5: Fetch OTP from Gmail
+        console.log('TC 5: Fetching OTP from Gmail...');
         const otp = await fetchLatestOtp(sinceUid, 'One time password');
         console.log(`OTP fetched: ${otp}`);
 
-        // TC 7: Enter OTP digit by digit
-        console.log('TC 7: Entering OTP...');
+        // TC 6: Enter OTP digit by digit
+        console.log('TC 6: Entering OTP...');
         await forgotPage.enterOtp(otp);
         await driver.pause(2000);
 
-        // TC 8: Enter new password — click field first to ensure focus
-        console.log('TC 8: Entering new password...');
+        // TC 7: Enter new password — click field first to ensure focus
+        console.log('TC 7: Entering new password...');
         await forgotPage.enterNewPassword(NEW_PASSWORD);
         await driver.pause(1500);
         console.log(`New password entered: ${NEW_PASSWORD}`);
 
-        // TC 9: Scroll down, enter confirm password — click field first to ensure focus
-        console.log('TC 9: Entering confirm password...');
+        // TC 8: Scroll down, enter confirm password — click field first to ensure focus
+        console.log('TC 8: Entering confirm password...');
         await forgotPage.enterConfirmPassword(CONFIRM_PASSWORD);
         await driver.pause(1500);
         console.log(`Confirm password entered: ${CONFIRM_PASSWORD}`);
 
-        // TC 10: Click Submit only after both passwords are filled
-        console.log('TC 10: Clicking Submit...');
+        // TC 9: Click Submit only after both passwords are filled
+        console.log('TC 9: Clicking Submit...');
         await forgotPage.clickSubmit();
         await driver.pause(4000);
 
-        // TC 11: Click Continue on the success screen
-        console.log('TC 11: Clicking Continue...');
+        // TC 10: Click Continue on the success screen
+        console.log('TC 10: Clicking Continue...');
         await forgotPage.clickContinue();
         console.log('Done — password reset complete');
 

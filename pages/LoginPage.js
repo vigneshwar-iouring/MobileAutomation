@@ -22,6 +22,15 @@ class LoginPage extends BasePage {
         // screen at that point.
         this.otpField = 'android=new UiSelector().className("android.widget.EditText").instance(0)';
 
+        // The OTP field auto-validates on entry (no separate submit button) - a wrong OTP surfaces
+        // this text in place, rather than a Toast like the login-credentials error above.
+        this.incorrectOtpText = 'android=new UiSelector().description("Incorrect OTP.")';
+
+        // Reads "Resend OTP 27" (clickable=false) while the cooldown counts down, then "Resend OTP "
+        // (trailing space, clickable=true) once it expires - matched by shape since the countdown
+        // value changes every second.
+        this.resendOtpButton = 'android=new UiSelector().descriptionMatches("^Resend OTP\\s*$")';
+
         // "Enable Globe Secure" biometric-lock prompt - shown once after the first login OTP and,
         // per the app, mandatory (no skip option was found; pressing back just returns to the
         // previous OTP screen instead of moving forward).
@@ -80,6 +89,26 @@ class LoginPage extends BasePage {
         await el.clearValue().catch(() => {});
         await el.setValue(otp.toString());
         console.log(`Entered OTP: ${otp}`);
+    }
+
+    async isIncorrectOtpShown(timeout = 3000) {
+        return await this.isElementVisible(this.incorrectOtpText, timeout);
+    }
+
+    // Polls for the countdown to expire rather than sleeping a fixed duration upfront - the
+    // cooldown length isn't guaranteed constant, so this waits for the real enabled state instead.
+    async waitForResendOtpEnabled(timeout = 40000, interval = 2000) {
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+            if (await this.isElementVisible(this.resendOtpButton, 500)) return true;
+            await this.driver.pause(interval);
+        }
+        return false;
+    }
+
+    async clickResendOtp() {
+        await this.click(this.resendOtpButton, 5000);
+        console.log('Clicked Resend OTP');
     }
 
     async isEnableGlobeSecureShown(timeout = 3000) {

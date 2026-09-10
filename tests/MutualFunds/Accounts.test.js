@@ -57,7 +57,7 @@ async function run() {
 
         console.log('\nTC 49: Downloading Portfolio Summary Report and verifying the completion toast...');
         await mutualFundsPage.clickDownloadButton();
-        const portfolioToastShown = await mutualFundsPage.waitForToast(DOWNLOAD_TOAST, { timeout: 2000 });
+        const portfolioToastShown = await mutualFundsPage.waitForToast(DOWNLOAD_TOAST, { timeout: 3000 });
         console.log(`Portfolio Summary Report download toast: ${portfolioToastShown ? 'PASS (observed)' : 'FAIL (not observed)'}`);
 
         console.log('\nTC 50: Clicking Portfolio Summary Report again to collapse it...');

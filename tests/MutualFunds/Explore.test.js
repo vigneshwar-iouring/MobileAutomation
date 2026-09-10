@@ -46,7 +46,7 @@ async function run() {
         console.log('\nTC 27: Opening One Time order pad, clearing the amount, closing the keypad, and verifying SUBMIT is disabled...');
         await mutualFundsPage.clickOneTimeButton();
         await mutualFundsPage.clearOrderPadAmount();
-        await driver.hideKeyboard().catch(() => {});
+        await driver.hideKeyboard().catch(() => { });
         const oneTimeSubmitDisabled = await mutualFundsPage.isSubmitButtonDisabled();
         console.log(`One Time - SUBMIT disabled after clearing amount: ${oneTimeSubmitDisabled ? 'PASS' : 'FAIL'}`);
         await mutualFundsPage.goBackFromOrderPad();
@@ -55,7 +55,7 @@ async function run() {
         const sipOpened = await mutualFundsPage.clickStartSipButtonIfApplicable();
         if (sipOpened) {
             await mutualFundsPage.clearOrderPadAmount();
-            await driver.hideKeyboard().catch(() => {});
+            await driver.hideKeyboard().catch(() => { });
             const sipSubmitDisabled = await mutualFundsPage.isSubmitButtonDisabled();
             console.log(`Start SIP - SUBMIT disabled after clearing amount: ${sipSubmitDisabled ? 'PASS' : 'FAIL'}`);
             await mutualFundsPage.goBackFromOrderPad();
@@ -74,7 +74,7 @@ async function run() {
         const allMatchSbi = searchResultNames.length > 0 && searchResultNames.every(name => name.toUpperCase().includes(searchQuery));
         console.log(`SBI search check: ${allMatchSbi ? 'PASS (all results are SBI funds)' : 'FAIL'}`);
 
-        console.log('\nTC 30b: Clearing the search bar by backspacing...');
+        console.log('\nTC 30a: Clearing the search bar by backspacing...');
         await mutualFundsPage.clearLocalSearch(searchQuery.length);
         const clearedResultsCount = await mutualFundsPage.getFilteredResultsCount();
         console.log(`Results after clearing search: ${clearedResultsCount}`);
