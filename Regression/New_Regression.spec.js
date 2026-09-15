@@ -32,16 +32,21 @@ const alertsPage       = require('../pages/Alerts/AlertsPage');
 const nxtOptionPage    = require('../pages/NxtOption/NxtOptionPage');
 const portfolioPage    = require('../pages/Portfolio/PortfolioPage');
 const testData         = require('../data/testData');
-const { purgeStaleOtps }                           = require('../utils/emailOtp');
-const { retryOtpWithDelay, createGmailOtpFetcher } = require('../utils/otpRetry');
+const { getLatestUid, fetchLatestOtp }             = require('../utils/gmailOtpHelper');
 const { clearAndLaunch, dumpScreen }               = require('../utils/helpers');
 
-const GMAIL_CONFIGURED = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
 // Set RESUME_SESSION=1 to skip R1-R7 login and land straight on Watchlist when the
 // app already has a valid session — combine with --mochaOpts.grep to run one test
 // case in isolation, e.g.:
 //   RESUME_SESSION=1 npx wdio run ./config/wdio.android.conf.js --spec ./Regression/New_Regression.spec.js --mochaOpts.grep "R41"
 const RESUME_SESSION = !!process.env.RESUME_SESSION;
+
+// Set PLACE_REAL_ORDERS=1 to let R33-R38 proceed past reading the Quote screen's lower
+// circuit and actually open the OrderPad, submit, and confirm a real order at that
+// price. Defaults to OFF (verification only): each test reads and prints the segment's
+// lower/upper circuit, then returns to Watchlist without ever tapping Buy - these tests
+// place real trades on a live account, so this stays off until explicitly confirmed.
+const PLACE_REAL_ORDERS = !!process.env.PLACE_REAL_ORDERS;
 
 // No dedicated page object exists for this screen yet — app doesn't expose a
 // stable resource-id for it, so we key off common disclosure/consent wording.
@@ -78,20 +83,56 @@ const ORDERS_SEL = {
 // "market movers" sub-tabs (Top Gainers/Top Losers/OI Gainers/OI Losers) — used to
 // reach a representative CDS/MCX symbol without needing to know one by name.
 // Confirmed via real UI dump: each movers row is one content-desc combining the
-// symbol, expiry, segment and price ("... FUT. MCXLast traded price ...").
+// symbol, expiry, segment and price ("... FUT. MCXLast traded price ...", ending
+// "...or swipe right for next category"). The Index ticker banner pinned above the
+// movers list (e.g. "Index USDINR. Expiry: ...") ALSO contains "Double tap to view" and
+// "Last traded price", and sits earlier in the tree, so without the "next category"
+// qualifier it was matched as the "first mover" instead of any real row - landing on
+// whatever that day's index-level ticker happens to be (once an already-expired
+// same-day contract with no order-entry fields at all) rather than an actual movers
+// list entry. The ticker's own ending ("...or swipe right for more options") never
+// contains "next category", so this excludes it cleanly.
 const MARKET_SEL = {
   tabPosition: { Commodity: 3, Currency: 4 },
-  moversRow: '//*[contains(@content-desc,"Double tap to view") and contains(@content-desc,"Last traded price")]',
+  moversRow: '//*[contains(@content-desc,"Double tap to view") and contains(@content-desc,"Last traded price") and contains(@content-desc,"next category")]',
 };
 
-async function submitOtp(label) {
-  if (GMAIL_CONFIGURED) {
-    const fetcher = createGmailOtpFetcher({ user: process.env.GMAIL_USER, password: process.env.GMAIL_APP_PASSWORD });
-    await retryOtpWithDelay({ getOtpFunction: fetcher, label, maxRetries: 3, delaySeconds: 5 });
-  } else {
-    console.log(`\n  📱 ENTER ${label} ON YOUR DEVICE NOW (2 min)\n`);
-    await otpPage.waitForNavigation(120000);
+// Fetches the OTP mail that arrived after `sinceUid` (an inbox snapshot taken right before the
+// action that triggers the email - see R2/R4 below - so a same-second email can't be missed) via
+// this repo's existing gmailOtpHelper/credentials/gmail-config.json, same as tests/loginWithOtp.test.js.
+// One resend-and-retry on rejection, mirroring that file's incorrect-OTP recovery.
+async function submitOtp(label, sinceUid) {
+  // The Enable Globe Secure OTP email was observed live to sometimes take longer than the
+  // default 60s to arrive (unlike the first login OTP, which always arrived within ~15s) - so a
+  // timed-out fetch here falls through to the same resend-and-refetch path used below for an
+  // outright-rejected OTP, rather than failing the whole test on a slow but genuine email.
+  let otp;
+  try {
+    otp = await fetchLatestOtp(sinceUid, 'One time password', 90000);
+  } catch (err) {
+    console.log(`  ⚠️  ${label} email not received in time (${err.message}) - requesting resend...`);
+    const resendUid = await getLatestUid();
+    await otpPage.tapResend();
+    await browser.pause(1500);
+    otp = await fetchLatestOtp(resendUid, 'One time password', 90000);
   }
+  console.log(`  📧 Fetched ${label}: ${otp}`);
+  await otpPage.enterOTP(otp);
+
+  const verified = await otpPage.waitForNavigation(120000);
+  if (verified) return;
+
+  console.log(`  ❌ ${label} was rejected - requesting resend...`);
+  const resendUid = await getLatestUid();
+  await otpPage.tapResend();
+  await browser.pause(1500);
+
+  const resentOtp = await fetchLatestOtp(resendUid, 'One time password', 90000);
+  console.log(`  📧 Fetched resent ${label}: ${resentOtp}`);
+  await otpPage.enterOTP(resentOtp);
+
+  const reverified = await otpPage.waitForNavigation(120000);
+  if (!reverified) throw new Error(`${label} was rejected even after resend`);
 }
 
 // Collapses the "dump the screen for diagnosis, then assert" pattern repeated
@@ -207,14 +248,33 @@ async function logMatchingElementsDiagnostic(selector, label) {
   }
 }
 
-// Places a REAL order — every caller is a segment-specific test that has been
-// explicitly authorized to do so. Assumes the OrderPad is already open with the
-// price field already set to an out-of-range value (e.g. 0.00). Taps BUY; if the
-// DPR/circuit-range guard rejects it (equity segments), parses the lower/upper
-// circuit from the error and retries at the lower circuit price. Either way,
-// continues through any surveillance warning, confirms the order, and verifies it
-// lands in the Orderbook before returning to Watchlist.
-async function placeOrderViaDprBounce(label) {
+// Reads the lower/upper circuit limits directly off the Quote screen (must be called
+// while still on it, BEFORE tapping Buy - the OrderPad screen itself never shows these).
+// Confirmed live that guessing at an out-of-range price and hoping the DPR guard
+// rejects it (the previous "DPR-bounce" approach) is not reliable: at least one
+// segment/symbol (IDEA/NSE) silently substitutes near-market price for an invalid entry
+// instead of rejecting it, so no error ever appears to bounce off of. Reading the real
+// lower circuit directly and entering it as a genuine in-range limit price sidesteps
+// that entirely.
+async function getLowerCircuitFromQuote(label) {
+  await quotePage.expandBottomQuotePanel();
+  await browser.pause(500);
+  let limits = await quotePage.getCircuitLimits();
+  if (!limits) {
+    await quotePage.scrollToRevealFullQuote();
+    limits = await quotePage.getCircuitLimits();
+  }
+  console.log(`  ℹ  Circuit limits: ${limits ? `${limits.lower} - ${limits.upper}` : 'not found'}`);
+  await assertOrDump(!!limits, `${label}: could not read circuit limits from the Quote screen`, 'Circuit limits (Lower circuit / Upper circuit) should be readable on the Quote screen');
+  return limits;
+}
+
+// Assumes the OrderPad is already open. Reads the symbol/segments, enters the given
+// (already-read, genuinely in-range) lower circuit price into the Price field, and
+// verifies it took - stops there, does NOT tap BUY submit. Safe to call unconditionally
+// (no order placed) - the actual submission lives in submitAndConfirmOrder below, gated
+// behind PLACE_REAL_ORDERS.
+async function enterPriceOnOrderPad(label, price) {
   // Captured now, before navigating away — needed later to confirm the placed
   // order actually shows up in the Orderbook.
   const symbolName = await orderPadPage.getSymbolName();
@@ -223,47 +283,37 @@ async function placeOrderViaDprBounce(label) {
   const segments = await orderPadPage.getVisibleSegments();
   console.log(`  ℹ  Segments for this symbol: ${segments.join(', ') || 'none detected'}`);
 
+  const priceEdited = await orderPadPage.setPrice(price);
+  console.log(`  ℹ  Price field cleared and set to the lower circuit (${price}): ${priceEdited}`);
+  await assertOrDump(priceEdited, `${label}: could not click/clear/enter the price field with the lower circuit value`, 'Price field should be editable with the lower circuit value');
+  await browser.pause(300);
+  const priceAfter = await orderPadPage.getPrice();
+  console.log(`  ℹ  Price field now reads: ${priceAfter}`);
+
+  return symbolName;
+}
+
+// Places a REAL order — every caller is a segment-specific test that has been
+// explicitly authorized to do so. Assumes the OrderPad is already open with the price
+// field already set (via enterPriceOnOrderPad above). Taps BUY submit, continues
+// through any surveillance warning, confirms the order, and verifies it lands in the
+// Orderbook before returning to Watchlist.
+async function submitAndConfirmOrder(label, price, symbolName) {
   const buyTapped = await orderPadPage.tapBuySubmit();
-  console.log(`  ℹ  BUY tapped: ${buyTapped}`);
+  console.log(`  ℹ  BUY tapped at lower circuit price (${price}): ${buyTapped}`);
   await assertOrDump(buyTapped, `${label}: could not tap BUY submit on OrderPad`, 'BUY submit button should be tappable on the OrderPad screen');
   await browser.pause(1000);
 
-  const dprVisible = await orderPadPage.isDprErrorVisible(5000);
-  console.log(`  ℹ  DPR / price-range error shown: ${dprVisible}`);
-
+  // The lower circuit is a genuine in-range price, so this should go straight to the
+  // confirmation popup - but still guard against a DPR error, in case the true
+  // enforced band is narrower than what the Quote screen displays.
+  const dprVisible = await orderPadPage.isDprErrorVisible(3000);
   if (dprVisible) {
     const dprMessage = await orderPadPage.getDprErrorMessage();
-    console.log(`  ℹ  DPR error value: ${dprMessage}`);
-
-    const range = orderPadPage.parseDprRange(dprMessage);
-    if (!range) {
-      await dumpScreen(`${label}: could not parse lower/upper circuit from the DPR message`);
-      expect.fail(`Could not parse a lower/upper circuit range out of DPR message: "${dprMessage}"`);
-    }
-    console.log(`  ℹ  Lower circuit: ${range.lower}`);
-    console.log(`  ℹ  Upper circuit: ${range.upper}`);
-
-    // Clear the out-of-range price and re-enter it as the lower circuit value.
-    const priceEdited = await orderPadPage.setPrice(range.lower);
-    console.log(`  ℹ  Price field cleared and set to lower circuit (${range.lower}): ${priceEdited}`);
-    await assertOrDump(priceEdited, `${label}: could not click/clear/enter the price field with the lower circuit value`, 'Price field should be editable with the lower circuit value');
-    await browser.pause(300);
-    const priceAfterCircuit = await orderPadPage.getPrice();
-    console.log(`  ℹ  Price field now reads: ${priceAfterCircuit}`);
-    await assertOrDump(priceAfterCircuit === range.lower, `${label}: price field did not accept the lower circuit value`, `Price field should read ${range.lower} after entering the lower circuit value`);
-
-    // Price is now within the valid DPR range — re-tap BUY. This WILL place a real order.
-    await browser.pause(300);
-    const buyRetapped = await orderPadPage.tapBuySubmit();
-    console.log(`  ℹ  BUY re-tapped with lower circuit price (${range.lower}): ${buyRetapped}`);
-    await assertOrDump(buyRetapped, `${label}: could not re-tap BUY submit with the lower circuit price`, 'BUY submit button should be tappable after correcting the price');
-    await browser.pause(1000);
-  } else {
-    console.log('  ℹ  No DPR error — this segment did not block the out-of-range price. Continuing the order flow (this can place a REAL order).');
+    await dumpScreen(`${label}: unexpected DPR error even at the Quote screen's own lower circuit`);
+    expect.fail(`${label}: BUY at the Quote screen's own lower circuit (${price}) was still rejected: "${dprMessage}"`);
   }
 
-  // Shared continuation regardless of which path (DPR-corrected retry, or no DPR
-  // at all) got us here — both are now proceeding toward a real order.
   await handleSurveillanceIfNeeded(label);
 
   const confirmVisible = await orderPadPage.isConfirmationPopupVisible(5000);
@@ -274,6 +324,25 @@ async function placeOrderViaDprBounce(label) {
   // Full untruncated dump of the popup, regardless of what happens next — the 20/30-item
   // slices used elsewhere have twice now cut off before reaching the real Confirm button.
   await orderPadPage.dumpPageSource(`${label.toLowerCase()}-confirmation-popup-full`);
+
+  // Critical safety check, run before ever tapping Confirm: the price the app is
+  // actually about to submit (read straight off the confirmation popup) must match the
+  // lower circuit price this whole flow entered. Confirmed live that price entry can
+  // silently fail to reach the app's real order state while still reading back
+  // correctly from the field's own accessibility text - the popup's own displayed
+  // price is the one thing that reflects what will actually be submitted.
+  const confirmDetails = await orderPadPage.getConfirmationDetails();
+  const confirmedPrice = confirmDetails.Price;
+  console.log(`  ℹ  Confirmation popup price: ${confirmedPrice}  (expected: ${price})`);
+  if (Number(confirmedPrice) !== Number(price)) {
+    await dumpScreen(`${label}: confirmation popup price mismatch`);
+    // Dismiss the still-open popup and back out to Watchlist before failing - so this
+    // test fails cleanly on its own instead of leaving the app stuck on a confirmation
+    // popup, which would otherwise cascade into every test that runs after it.
+    try { await driver.back(); await browser.pause(500); } catch {}
+    await watchlistPage.goToWatchlist();
+    expect.fail(`${label}: confirmation popup shows price ${confirmedPrice}, expected the lower circuit price ${price} - refusing to tap Confirm`);
+  }
 
   const confirmTapped = await orderPadPage.tapConfirmOrder();
   console.log(`  ℹ  Confirm button tapped: ${confirmTapped}`);
@@ -300,22 +369,31 @@ async function placeOrderViaDprBounce(label) {
   }
 
   // The Orderbook's own API call lags a few seconds behind the UI navigation —
-  // poll instead of reading the page source once right after arriving.
-  let src = await driver.getPageSource();
-  let orderVisible = false;
+  // poll instead of reading the page source once right after arriving. Only checks that
+  // the symbol shows up somewhere in the (default "All") tab - not that it reached any
+  // particular status - and prints whatever status is actually shown (Pending, Executed,
+  // Rejected, ...) for the record.
+  let matchedRow = null;
   await orderPadPage.pollUntil(async () => {
-    src = await driver.getPageSource();
-    orderVisible = symbolName ? src.includes(symbolName) : false;
-    return orderVisible;
+    const rows = await orderbookPage.getOrderRows();
+    matchedRow = rows.find(r => symbolName && r.symbol && r.symbol.trim() === symbolName.trim())
+      || rows.find(r => symbolName && r.raw && r.raw.includes(symbolName));
+    return !!matchedRow;
   }, 12000, 1000);
 
+  const src = await driver.getPageSource();
   const onOrdersScreen = /orderbook|order book|orders/i.test(src);
   console.log(`  ℹ  Landed on an Orders/Orderbook screen: ${onOrdersScreen}`);
   if (!onOrdersScreen) await dumpScreen(`${label}: did not land on an Orders/Orderbook screen`);
   await assertOrDump(onOrdersScreen, `${label}: did not land on an Orders/Orderbook screen`, 'Should land on the Orders/Orderbook screen after confirming the order');
 
+  const orderVisible = !!matchedRow;
   console.log(`  ℹ  "${symbolName}" order visible in the Orderbook: ${orderVisible}`);
-  if (!orderVisible) await dumpScreen(`${label}: "${symbolName}" not found on the Orders/Orderbook screen`);
+  if (matchedRow) {
+    console.log(`  ℹ  "${symbolName}" order status: ${matchedRow.status || 'unknown (row text did not fully parse)'}`);
+  } else {
+    await dumpScreen(`${label}: "${symbolName}" not found on the Orders/Orderbook screen`);
+  }
   await assertOrDump(orderVisible, `${label}: "${symbolName}" order not found on the Orders/Orderbook screen`, `The just-placed ${symbolName} order should be visible on the Orders/Orderbook screen`);
 
   await browser.pause(500);
@@ -325,7 +403,10 @@ async function placeOrderViaDprBounce(label) {
 // Navigates Watchlist -> Market tab -> the given segment tab (Commodity/Currency) ->
 // the given movers sub-tab (default "Top Gainers") -> taps the first symbol row shown.
 // Used for CDS/MCX, where "any symbol" from the segment's movers list is enough.
-async function tapFirstMarketMover(marketTab, subTab = 'Top Gainers') {
+// Uses whichever movers sub-tab is already selected by default (Top Gainers, confirmed
+// live to be "Tab 1 of 5" - the leftmost/default one) rather than explicitly tapping a
+// sub-tab - only switches to fallbackSubTab if that default list turns out to be empty.
+async function tapFirstMarketMover(marketTab, fallbackSubTab = 'Top Losers') {
   await watchlistPage.goToWatchlist();
   await watchlistPage.tapNavMarket();
   await browser.pause(1200);
@@ -335,14 +416,17 @@ async function tapFirstMarketMover(marketTab, subTab = 'Top Gainers') {
   if (!tabTapped) return false;
   await browser.pause(1000);
 
-  if (subTab) {
-    const subTapped = await watchlistPage.findAndTap(`//*[contains(@content-desc,"${subTab}")]`, 5000);
-    if (!subTapped) return false;
-    await browser.pause(1000);
+  let rows = await $$(MARKET_SEL.moversRow);
+  if (!rows.length && fallbackSubTab) {
+    console.log(`  ℹ  No symbols in the default movers list - falling back to "${fallbackSubTab}"`);
+    const subTapped = await watchlistPage.findAndTap(`//*[contains(@content-desc,"${fallbackSubTab}")]`, 5000);
+    if (subTapped) {
+      await browser.pause(1000);
+      rows = await $$(MARKET_SEL.moversRow);
+    }
   }
-
-  const rows = await $$(MARKET_SEL.moversRow);
   if (!rows.length) return false;
+
   const desc = await rows[0].getAttribute('content-desc');
   console.log(`  ℹ  First ${marketTab} mover: ${desc}`);
   await rows[0].click();
@@ -364,6 +448,10 @@ async function swipeIndicesStrip(direction) {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => {
+  // Inbox snapshots taken right before the action that triggers each OTP email (R2/R4 below),
+  // carried forward to the R3/R5 tests that fetch and enter them.
+  let firstOtpSinceUid;
+  let secondOtpSinceUid;
 
   afterEach(function () {
     if (!this.currentTest) return;
@@ -379,9 +467,9 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     if (RESUME_SESSION) {
       // Relaunch without clearing data — restores the existing login session instead
       // of running R1-R7 again.
-      try { await driver.terminateApp(process.env.APP_PACKAGE || 'com.iouring.globecapital.dev'); } catch {}
+      try { await driver.terminateApp(process.env.APP_PACKAGE || 'com.iouring.globecapital'); } catch {}
       await browser.pause(500);
-      try { await driver.activateApp(process.env.APP_PACKAGE || 'com.iouring.globecapital.dev'); } catch {}
+      try { await driver.activateApp(process.env.APP_PACKAGE || 'com.iouring.globecapital'); } catch {}
       await browser.pause(800);
       await handleBiometricIfNeeded(8000);
       await watchlistPage.goToWatchlist();
@@ -390,9 +478,6 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       return;
     }
     await clearAndLaunch();
-    if (GMAIL_CONFIGURED) {
-      await purgeStaleOtps({ user: process.env.GMAIL_USER, password: process.env.GMAIL_APP_PASSWORD });
-    }
     if (!await loginPage.waitForLoginScreen(30000)) {
       await dumpScreen('before: login screen not found');
       throw new Error('Login screen did not appear within 30 s');
@@ -426,6 +511,9 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await loginPage.enterPassword(testData.validUser.password);
     expect(await loginPage.getLoginIdFieldValue(), 'Login ID field should hold entered value')
       .to.equal(testData.validUser.id);
+    // Snapshot the inbox right before LOGIN triggers the first OTP email - not inside R3 - so an
+    // email that arrives in the gap between this test ending and R3 starting still counts as "new".
+    firstOtpSinceUid = await getLatestUid();
     await loginPage.tapLogin();
   });
 
@@ -433,13 +521,15 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     this.timeout(180000);
     const onOTP1 = await otpPage.isLoaded(35000);
     await assertOrDump(onOTP1, 'R3: OTP1 not found', 'First OTP screen should appear after LOGIN');
-    await submitOtp('FIRST OTP');
+    await submitOtp('FIRST OTP', firstOtpSinceUid);
   });
 
   authIt('R4: Verify the Enable now', async function () {
     this.timeout(20000);
     const onSecure = await enableSecurePage.isLoaded(10000);
     await assertOrDump(onSecure, 'R4: Enable Globe Secure screen not found', 'Enable Globe Secure screen should appear');
+    // Same reasoning as firstOtpSinceUid above, for the second OTP email triggered by Enable Now.
+    secondOtpSinceUid = await getLatestUid();
     await enableSecurePage.tapEnableNow();
   });
 
@@ -447,7 +537,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     this.timeout(180000);
     const onOTP2 = await otpPage.isLoaded(20000);
     await assertOrDump(onOTP2, 'R5: OTP2 not found', 'Second OTP screen should appear');
-    await submitOtp('SECOND OTP');
+    await submitOtp('SECOND OTP', secondOtpSinceUid);
     await browser.pause(500);
   });
 
@@ -976,12 +1066,12 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     if (!loaded) await orderbookPage.dumpPageSource('r24-orderbook-not-loaded');
     await assertOrDump(loaded, 'R28: Orderbook screen did not load', 'Orderbook screen should load after tapping the Orders tab');
 
-    // Common controls — search box and filter button, present regardless of tab.
+    // Search box / filter button - confirmed live (only 7 clickable elements on this screen:
+    // the Regular/Basket tabs and the 5 bottom-nav icons) that neither exists on the Orderbook
+    // screen in this app build, so this is informational rather than a hard requirement.
     const searchVisible = await orderbookPage.isSearchBoxVisible();
     const filterVisible = await orderbookPage.isFilterButtonVisible();
     console.log(`  ℹ  Search box visible: ${searchVisible}  |  Filter button visible: ${filterVisible}`);
-    await assertOrDump(searchVisible, 'R28: search box not found on Orderbook', 'Search box should be visible on the Orderbook screen');
-    await assertOrDump(filterVisible, 'R28: filter button not found on Orderbook', 'Filter button should be visible on the Orderbook screen');
 
     // Tab counts, printed up front.
     const counts = await orderbookPage.getAllTabCounts();
@@ -1083,6 +1173,9 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R33: Quote screen did not open for IDEA', 'Quote screen should open after selecting IDEA from search');
 
+    const limits = await getLowerCircuitFromQuote('R33');
+    console.log(`  ℹ  IDEA (NSE) — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
     await assertOrDump(buyTapped, 'R33: could not tap Buy on the Quote screen', 'Buy button should be tappable on the Quote screen');
@@ -1091,12 +1184,16 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const onOrderPad = await orderPadPage.isLoaded(8000);
     await assertOrDump(onOrderPad, 'R33: OrderPad screen did not open for IDEA', 'OrderPad screen should open after tapping Buy');
 
-    const priceEdited = await orderPadPage.setPrice('0.00');
-    console.log(`  ℹ  Price field cleared and set to 0.00: ${priceEdited}`);
-    await assertOrDump(priceEdited, 'R33: could not click/clear/enter the price field', 'Price field should be clickable and editable');
-    await browser.pause(300);
+    const symbolName = await enterPriceOnOrderPad('R33', limits.lower);
 
-    await placeOrderViaDprBounce('R33');
+    if (!PLACE_REAL_ORDERS) {
+      console.log('  ℹ  PLACE_REAL_ORDERS not set - stopping here (price entered, BUY not submitted).');
+      await orderPadPage.goBack();
+      await watchlistPage.goToWatchlist();
+      return;
+    }
+
+    await submitAndConfirmOrder('R33', limits.lower, symbolName);
   });
 
   // Places a REAL order on the BSE segment — RTNPOWER trades on both NSE and BSE, so
@@ -1121,6 +1218,9 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R34: Quote screen did not open for RTNPOWER', 'Quote screen should open after selecting RTNPOWER from search');
 
+    const limits = await getLowerCircuitFromQuote('R34');
+    console.log(`  ℹ  RTNPOWER — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
     await assertOrDump(buyTapped, 'R34: could not tap Buy on the Quote screen', 'Buy button should be tappable on the Quote screen');
@@ -1134,12 +1234,16 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await assertOrDump(bseSelected, 'R34: could not select the BSE exchange toggle', 'BSE exchange toggle should be tappable on the OrderPad screen');
     await browser.pause(300);
 
-    const priceEdited = await orderPadPage.setPrice('0.00');
-    console.log(`  ℹ  Price field cleared and set to 0.00: ${priceEdited}`);
-    await assertOrDump(priceEdited, 'R34: could not click/clear/enter the price field', 'Price field should be clickable and editable');
-    await browser.pause(300);
+    const symbolName = await enterPriceOnOrderPad('R34', limits.lower);
 
-    await placeOrderViaDprBounce('R34');
+    if (!PLACE_REAL_ORDERS) {
+      console.log('  ℹ  PLACE_REAL_ORDERS not set - stopping here (price entered, BUY not submitted).');
+      await orderPadPage.goBack();
+      await watchlistPage.goToWatchlist();
+      return;
+    }
+
+    await submitAndConfirmOrder('R34', limits.lower, symbolName);
   });
 
   // Places a REAL order on the NFO segment — NIFTY 25100 CE. Searches the contract
@@ -1166,6 +1270,9 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R35: Quote screen did not open for NIFTY 25100 CE', 'Quote screen should open after selecting the contract');
 
+    const limits = await getLowerCircuitFromQuote('R35');
+    console.log(`  ℹ  NIFTY 25100 CE — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
     await assertOrDump(buyTapped, 'R35: could not tap Buy on the Quote screen', 'Buy button should be tappable on the Quote screen');
@@ -1174,12 +1281,16 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const onOrderPad = await orderPadPage.isLoaded(8000);
     await assertOrDump(onOrderPad, 'R35: OrderPad screen did not open for NIFTY 25100 CE', 'OrderPad screen should open after tapping Buy');
 
-    const priceEdited = await orderPadPage.setPrice('0.00');
-    console.log(`  ℹ  Price field cleared and set to 0.00: ${priceEdited}`);
-    await assertOrDump(priceEdited, 'R35: could not click/clear/enter the price field', 'Price field should be clickable and editable');
-    await browser.pause(300);
+    const symbolName = await enterPriceOnOrderPad('R35', limits.lower);
 
-    await placeOrderViaDprBounce('R35');
+    if (!PLACE_REAL_ORDERS) {
+      console.log('  ℹ  PLACE_REAL_ORDERS not set - stopping here (price entered, BUY not submitted).');
+      await orderPadPage.goBack();
+      await watchlistPage.goToWatchlist();
+      return;
+    }
+
+    await submitAndConfirmOrder('R35', limits.lower, symbolName);
   });
 
   // Places a REAL order on the BFO segment — SENSEX 77100 CE. Same direct-search
@@ -1203,6 +1314,9 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R36: Quote screen did not open for SENSEX 77100 CE', 'Quote screen should open after selecting the contract');
 
+    const limits = await getLowerCircuitFromQuote('R36');
+    console.log(`  ℹ  SENSEX 77100 CE — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
     await assertOrDump(buyTapped, 'R36: could not tap Buy on the Quote screen', 'Buy button should be tappable on the Quote screen');
@@ -1211,16 +1325,24 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const onOrderPad = await orderPadPage.isLoaded(8000);
     await assertOrDump(onOrderPad, 'R36: OrderPad screen did not open for SENSEX 77100 CE', 'OrderPad screen should open after tapping Buy');
 
-    const priceEdited = await orderPadPage.setPrice('0.00');
-    console.log(`  ℹ  Price field cleared and set to 0.00: ${priceEdited}`);
-    await assertOrDump(priceEdited, 'R36: could not click/clear/enter the price field', 'Price field should be clickable and editable');
-    await browser.pause(300);
+    const symbolName = await enterPriceOnOrderPad('R36', limits.lower);
 
-    await placeOrderViaDprBounce('R36');
+    if (!PLACE_REAL_ORDERS) {
+      console.log('  ℹ  PLACE_REAL_ORDERS not set - stopping here (price entered, BUY not submitted).');
+      await orderPadPage.goBack();
+      await watchlistPage.goToWatchlist();
+      return;
+    }
+
+    await submitAndConfirmOrder('R36', limits.lower, symbolName);
   });
 
-  // Places a REAL order on the CDS segment — Market tab -> Currency -> Top Losers (its
-  // Top Gainers list was empty at exploration time) -> first symbol shown.
+  // Places a REAL order on the CDS segment — Market tab -> Currency -> whichever movers
+  // sub-tab is selected by default (Top Gainers), falling back to Top Losers if that
+  // list is empty -> first symbol shown. Confirmed live that picking the literal first
+  // row without any further check can land on an already-expired same-day contract
+  // (0 LTP, no order-entry fields at all) - a real risk worth knowing about, though not
+  // filtered out here per instruction.
   it('R37: Place a real order for the CDS segment — first Currency market mover, DPR-bounce to the lower circuit', async function () {
     this.timeout(60000);
 
@@ -1231,6 +1353,10 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R37: Quote screen did not open for the Currency mover', 'Quote screen should open after selecting the symbol');
 
+    const limits = await getLowerCircuitFromQuote('R37');
+    const symbolR37 = await quotePage.getSymbolName();
+    console.log(`  ℹ  ${symbolR37 || 'Currency mover'} — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
     await assertOrDump(buyTapped, 'R37: could not tap Buy on the Quote screen', 'Buy button should be tappable on the Quote screen');
@@ -1239,25 +1365,34 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const onOrderPad = await orderPadPage.isLoaded(8000);
     await assertOrDump(onOrderPad, 'R37: OrderPad screen did not open', 'OrderPad screen should open after tapping Buy');
 
-    const priceEdited = await orderPadPage.setPrice('0.00');
-    console.log(`  ℹ  Price field cleared and set to 0.00: ${priceEdited}`);
-    await assertOrDump(priceEdited, 'R37: could not click/clear/enter the price field', 'Price field should be clickable and editable');
-    await browser.pause(300);
+    const symbolName = await enterPriceOnOrderPad('R37', limits.lower);
 
-    await placeOrderViaDprBounce('R37');
+    if (!PLACE_REAL_ORDERS) {
+      console.log('  ℹ  PLACE_REAL_ORDERS not set - stopping here (price entered, BUY not submitted).');
+      await orderPadPage.goBack();
+      await watchlistPage.goToWatchlist();
+      return;
+    }
+
+    await submitAndConfirmOrder('R37', limits.lower, symbolName);
   });
 
-  // Places a REAL order on the MCX segment — Market tab -> Commodity -> Top Gainers ->
-  // first symbol shown.
+  // Places a REAL order on the MCX segment — Market tab -> Commodity -> whichever movers
+  // sub-tab is selected by default (Top Gainers), falling back to Top Losers if that
+  // list is empty -> first symbol shown.
   it('R38: Place a real order for the MCX segment — first Commodity market mover, DPR-bounce to the lower circuit', async function () {
     this.timeout(60000);
 
-    const opened = await tapFirstMarketMover('Commodity', 'Top Gainers');
+    const opened = await tapFirstMarketMover('Commodity', 'Top Losers');
     await assertOrDump(opened, 'R38: could not open a Commodity market mover', 'Should be able to open a symbol from the Commodity market movers list');
     await browser.pause(1000);
 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R38: Quote screen did not open for the Commodity mover', 'Quote screen should open after selecting the symbol');
+
+    const limits = await getLowerCircuitFromQuote('R38');
+    const symbolR38 = await quotePage.getSymbolName();
+    console.log(`  ℹ  ${symbolR38 || 'Commodity mover'} — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
 
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
@@ -1267,12 +1402,16 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const onOrderPad = await orderPadPage.isLoaded(8000);
     await assertOrDump(onOrderPad, 'R38: OrderPad screen did not open', 'OrderPad screen should open after tapping Buy');
 
-    const priceEdited = await orderPadPage.setPrice('0.00');
-    console.log(`  ℹ  Price field cleared and set to 0.00: ${priceEdited}`);
-    await assertOrDump(priceEdited, 'R38: could not click/clear/enter the price field', 'Price field should be clickable and editable');
-    await browser.pause(300);
+    const symbolName = await enterPriceOnOrderPad('R38', limits.lower);
 
-    await placeOrderViaDprBounce('R38');
+    if (!PLACE_REAL_ORDERS) {
+      console.log('  ℹ  PLACE_REAL_ORDERS not set - stopping here (price entered, BUY not submitted).');
+      await orderPadPage.goBack();
+      await watchlistPage.goToWatchlist();
+      return;
+    }
+
+    await submitAndConfirmOrder('R38', limits.lower, symbolName);
   });
 
   // Read-only pass over the Basket screen (Orders -> Basket tab). A saved basket's

@@ -200,6 +200,23 @@ class QuotePage extends BasePage {
     };
   }
 
+  // Confirmed via a real UI dump: one single content-desc carries both values -
+  // "Circuit limits. Lower circuit 13.41. Upper circuit 16.39., Displays the lower and
+  // upper circuit limits." - not two separate attributes, which is what
+  // getFullQuoteFields()'s circuitHigh/circuitLow regexes actually expect (and so don't
+  // match this real format). Used to place a real order at a genuine in-range price
+  // (the lower circuit) instead of guessing at an out-of-range one and hoping for a
+  // DPR rejection to bounce off of - confirmed live that at least one segment/symbol
+  // doesn't reject an out-of-range price at all, silently substituting near-market
+  // price instead.
+  async getCircuitLimits() {
+    try {
+      const src = await driver.getPageSource();
+      const m = src.match(/Circuit limits\. Lower circuit ([\d.]+)\. Upper circuit ([\d.]+)/);
+      return m ? { lower: m[1], upper: m[2] } : null;
+    } catch { return null; }
+  }
+
   // ── 52-Week (visible after scrolling down) ───────────────────────────────────
 
   async get52WeekStatus() {

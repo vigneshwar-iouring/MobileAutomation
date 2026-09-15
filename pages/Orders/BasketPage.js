@@ -11,7 +11,9 @@ const SEL = {
   itemCountText: '//*[contains(@content-desc,"items") and contains(@content-desc,"loaded")]',
   basketItem:    '//*[contains(@content-desc,"Double tap to View option")]',
   executeBtn:    '//*[@content-desc="EXECUTE" or @text="EXECUTE"]',
-  closeBtn:      '//*[@content-desc="Back" or contains(@content-desc,"go back")]',
+  // Confirmed live that the basket detail screen's own dismiss control reads "Close,
+  // Double tap to close" - not "Back"/"go back" like most other screens in this app.
+  closeBtn:      '//*[@content-desc="Back" or contains(@content-desc,"go back") or @content-desc="Close" or contains(@content-desc,"Double tap to close")]',
 };
 
 class BasketPage extends BasePage {

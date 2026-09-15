@@ -139,6 +139,37 @@ class WatchlistIndexPage extends BasePage {
         // up by matching y-position the same way findInlineValue pairs a label to its value.
         this.addSymbolsResultRowRegex = /^(\S+)\nAdd Watchlist, Double tap to open Quote Screen\.$/;
         this.addToWatchlistIconText = 'Double tap to add to watchlist';
+        // On a NON-empty watchlist tab, "Add Symbols" is reached via a persistent search bar
+        // instead of the empty-state's "ADD SYMBOLS" button - its own hint carries a live
+        // "(<current>/<max>)" symbol count (e.g. "Search Symbols\nAdd or search stocks (1/50),
+        // Double tap to open Search Symbols."), confirmed live as the app's per-watchlist cap.
+        this.searchSymbolsBar = '//android.widget.Button[contains(@hint,"Search Symbols")]';
+        this.searchSymbolsCountRegex = /Add or search stocks \((\d+)\/(\d+)\)/;
+        // The Add Symbols overlay's top-right button reads "Cancel" while the keyboard/search is
+        // active and "Done" once it isn't - confirmed live both dismiss the overlay and persist
+        // any adds made, so either label is accepted rather than assuming one.
+        this.searchDoneOrCancelButton = 'android=new UiSelector().descriptionMatches("^(Done|Cancel)$")';
+        this.watchlistUpdatedToastText = 'Watchlist updated Successfully!';
+        // Search results already in the watchlist read "<SYMBOL>\n<SYMBOL>, Double tap to open
+        // Quote Screen." (paired with their own "Remove <SYMBOL> from watchlist" icon instead of
+        // an add one) - the already-added counterpart to addSymbolsResultRowRegex, used only to
+        // build a whole-list scroll signature: a common prefix like "HDFC" can return several
+        // screens of already-added NSE/BSE variants before any addable one appears.
+        this.addSymbolsAlreadyAddedRowRegex = /^(\S+)\n\1, Double tap to open Quote Screen\.$/;
+        // Tapping a watchlist GROUP row on the Manage Watchlist screen (rather than long-pressing
+        // it to drag/reorder) opens a second, unrelated "Edit Watchlist" screen: that specific
+        // group's own SYMBOLS, each with a "Remove <SYMBOL> from watchlist" icon - the same
+        // description text/shape used by the Add Symbols search screen's already-added rows.
+        this.editWatchlistTitle = 'Edit Watchlist';
+        this.removeSymbolFromWatchlistRegex = /^Remove (\S+) from watchlist\. Double tap to remove$/;
+        // The group's name is an inline, directly-editable EditText on Edit Watchlist (pre-filled
+        // with the current name, e.g. "Watchlist1") - not a separate pencil-icon button - so
+        // renaming just means focusing/clearing/typing into it like any other text field.
+        this.editWatchlistNameField = 'android=new UiSelector().className("android.widget.EditText")';
+        // Unlike the Add Symbols overlay (which saves immediately on Done/Cancel), leaving Edit
+        // Watchlist with unsaved changes was confirmed live to show the same "Do You want to Save
+        // the Changes?" DISCARD/CHANGE prompt used elsewhere in this app (see clickDiscardChanges/
+        // clickSaveChanges below) - reusing those rather than duplicating identical selectors.
     }
 
     // Overrides BasePage's stableEntryId to also neutralize fields this screen keeps live-updating:
@@ -308,6 +339,12 @@ class WatchlistIndexPage extends BasePage {
         await input.setValue(query);
         await this.pause(1000);
         console.log(`Typed "${query}" into Add Symbols search`);
+
+        // The on-screen keyboard stays up after typing (setValue doesn't submit/blur the field)
+        // and covers the lower half of the results list, so it's dismissed here rather than left
+        // for every caller to remember on its own.
+        await this.driver.hideKeyboard().catch(() => {});
+        console.log('Dismissed keyboard');
     }
 
     async getAddSymbolsResults() {
@@ -330,6 +367,197 @@ class WatchlistIndexPage extends BasePage {
         await this.tapNode(first.addIconNode);
         console.log(`Clicked "+" to add "${first.symbol}" to watchlist`);
         return first.symbol;
+    }
+
+    // Reads the live "(current/max)" counter out of the search bar's own hint text - only
+    // rendered on a non-empty watchlist tab (the empty-state screen has no search bar at all,
+    // just the "ADD SYMBOLS" button), so this returns null there rather than throwing.
+    async getWatchlistSymbolCount() {
+        const src = await this.driver.getPageSource();
+        const m = src.match(this.searchSymbolsCountRegex);
+        return m ? { current: Number(m[1]), max: Number(m[2]) } : null;
+    }
+
+    async openSearchSymbols(timeout = 5000) {
+        await this.click(this.searchSymbolsBar, timeout);
+        console.log('Opened Search Symbols');
+    }
+
+    async closeSearchSymbols(timeout = 5000) {
+        await this.click(this.searchDoneOrCancelButton, timeout);
+        console.log('Closed Search Symbols');
+    }
+
+    async isWatchlistUpdatedToastShown(timeout = 3000) {
+        return this.waitForToast(this.watchlistUpdatedToastText, { timeout });
+    }
+
+    // Repeatedly taps the "+" icon on the topmost still-addable search result, scrolling for more
+    // once the visible ones run out, until either the query has no addable results left or the
+    // watchlist's own symbol cap is hit. The app enforces that cap silently - tapping "+" past it
+    // leaves the same row in the "Add Watchlist" (not-yet-added) state instead of flipping it to
+    // "already added" (confirmed live: past 50/50 the same row kept reappearing as the topmost
+    // result forever) - so a row that survives two consecutive taps unchanged is read as "cap
+    // reached" and stops the loop, rather than hammering the same tap for the rest of maxIterations.
+    //
+    // "No addable rows visible" is NOT the same as "nothing left to add" - a query like "HDFC"
+    // was observed live to return 6+ screens of already-added NSE/BSE variants before the next
+    // addable one appears, so bailing out as soon as a few scrolls in a row show zero addable rows
+    // (as an earlier version of this method did) stops long before the list is actually exhausted.
+    // Instead, the whole visible row set (added + addable) is signature-compared across scrolls,
+    // the same "did the screen actually change" check scrollToBoundary uses elsewhere - only once
+    // THAT stops changing has the true end of the results been reached.
+    async addSearchResultsUntilCapped(maxIterations = 300) {
+        const added = [];
+        let previousTopSymbol = null;
+        let stallCount = 0;
+        let previousRowSignature = null;
+        let noProgressScrolls = 0;
+
+        for (let i = 0; i < maxIterations; i++) {
+            const nodes = await this.getDescribedElements();
+            const addableRows = nodes
+                .filter(n => this.addSymbolsResultRowRegex.test(n.desc))
+                .sort((a, b) => a.y1 - b.y1)
+                .map(row => ({
+                    symbol: row.desc.match(this.addSymbolsResultRowRegex)[1],
+                    addIconNode: nodes.find(n => n.desc === this.addToWatchlistIconText && Math.abs(n.y1 - row.y1) <= 40),
+                }));
+            const rowSignature = nodes
+                .filter(n => this.addSymbolsResultRowRegex.test(n.desc) || this.addSymbolsAlreadyAddedRowRegex.test(n.desc))
+                .map(n => n.desc)
+                .join('|');
+
+            if (!addableRows.length) {
+                if (rowSignature === previousRowSignature) {
+                    noProgressScrolls++;
+                    if (noProgressScrolls >= 3) {
+                        console.log('Reached the end of the search results with nothing left to add');
+                        break;
+                    }
+                } else {
+                    noProgressScrolls = 0;
+                }
+                previousRowSignature = rowSignature;
+                await this.scrollDown();
+                await this.pause(400);
+                continue;
+            }
+            noProgressScrolls = 0;
+            previousRowSignature = rowSignature;
+
+            const first = addableRows[0];
+            if (first.symbol === previousTopSymbol) {
+                stallCount++;
+                if (stallCount >= 2) {
+                    console.log(`"${first.symbol}" didn't leave the results after 2 taps - watchlist cap likely reached`);
+                    break;
+                }
+            } else {
+                stallCount = 0;
+            }
+            previousTopSymbol = first.symbol;
+
+            if (!first.addIconNode) {
+                await this.scrollDown();
+                await this.pause(400);
+                continue;
+            }
+            await this.tapNode(first.addIconNode);
+            added.push(first.symbol);
+            console.log(`Added "${first.symbol}" (${added.length} added so far)`);
+            await this.pause(700);
+        }
+        return added;
+    }
+
+    async openManageWatchlist(timeout = 5000) {
+        await this.click(this.manageWatchlistIcon, timeout);
+        console.log('Opened Manage Watchlist');
+    }
+
+    // Tapping near the row's left/name area rather than dead-center - the same row also carries a
+    // long-press-to-drag gesture for reordering, and a plain tap too close to the drag handle risks
+    // being read as the start of a drag instead of an "open" tap.
+    async openEditWatchlistForGroup(groupName) {
+        const nodes = await this.getDescribedElements();
+        const row = nodes.find(n => n.desc.startsWith(`${groupName}.`));
+        if (!row) throw new Error(`"${groupName}" row not found on Manage Watchlist screen`);
+        const tapX = Math.round(row.x1 + 0.15 * (row.x2 - row.x1));
+        const tapY = Math.round((row.y1 + row.y2) / 2);
+        await this.driver.action('pointer').move({ duration: 0, x: tapX, y: tapY }).down().up().perform();
+        console.log(`Opened Edit Watchlist for "${groupName}"`);
+    }
+
+    async isOnEditWatchlistScreen(timeout = 3000) {
+        return this.isElementVisible(`android=new UiSelector().description("${this.editWatchlistTitle}")`, timeout);
+    }
+
+    async getEditWatchlistRemovableSymbols() {
+        const nodes = await this.getDescribedElements();
+        return nodes
+            .filter(n => this.removeSymbolFromWatchlistRegex.test(n.desc))
+            .sort((a, b) => a.y1 - b.y1)
+            .map(n => ({ symbol: n.desc.match(this.removeSymbolFromWatchlistRegex)[1], node: n }));
+    }
+
+    async removeFirstEditWatchlistSymbol() {
+        const symbols = await this.getEditWatchlistRemovableSymbols();
+        if (!symbols.length) throw new Error('No removable symbols found on Edit Watchlist screen');
+        const first = symbols[0];
+        await this.tapNode(first.node);
+        console.log(`Tapped Remove for "${first.symbol}"`);
+        return first.symbol;
+    }
+
+    async removeEditWatchlistSymbol(symbol) {
+        const symbols = await this.getEditWatchlistRemovableSymbols();
+        const target = symbols.find(s => s.symbol === symbol);
+        if (!target) throw new Error(`"${symbol}" not found among removable symbols`);
+        await this.tapNode(target.node);
+        console.log(`Tapped Remove for "${symbol}"`);
+    }
+
+    async isSymbolRemovedToastShown(symbol, timeout = 3000) {
+        return this.waitForToast(`${symbol} Removed`, { timeout });
+    }
+
+    // Same merged toast+Undo node pattern as clickUndoOnToast (indices) - "<SYMBOL> Removed
+    // \nUndo" in one node, "Undo" sitting at roughly 90% across its width (message left-aligned,
+    // "Undo" right-aligned Material Design snackbar convention). The toast is short-lived, so this
+    // must be called immediately after removeFirstEditWatchlistSymbol()/removeEditWatchlistSymbol().
+    async clickUndoOnSymbolRemovedToast(symbol, timeout = 3000) {
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+            const nodes = await this.getDescribedElements();
+            const toast = nodes.find(n => n.desc.startsWith(`${symbol} Removed`) && n.desc.includes('Undo'));
+            if (toast) {
+                const tapX = Math.round(toast.x1 + 0.90 * (toast.x2 - toast.x1));
+                const tapY = Math.round((toast.y1 + toast.y2) / 2);
+                await this.driver.action('pointer').move({ duration: 0, x: tapX, y: tapY }).down().up().perform();
+                console.log(`Clicked "Undo" on the "${symbol} Removed" toast`);
+                return true;
+            }
+            await this.pause(100);
+        }
+        console.log(`"${symbol} Removed" toast with Undo not found in time`);
+        return false;
+    }
+
+    async closeEditWatchlist(timeout = 5000) {
+        await this.click(this.searchDoneOrCancelButton, timeout);
+        console.log('Closed Edit Watchlist');
+    }
+
+    async renameEditWatchlistGroup(newName, timeout = 5000) {
+        const input = await this.findElement(this.editWatchlistNameField, timeout);
+        await input.click();
+        await this.pause(300);
+        await input.clearValue();
+        await input.setValue(newName);
+        await this.pause(300);
+        await this.driver.hideKeyboard().catch(() => {});
+        console.log(`Renamed watchlist group to "${newName}"`);
     }
 
     async clickFirstWatchlistSymbol() {

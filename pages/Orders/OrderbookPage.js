@@ -21,7 +21,10 @@ const SEL = {
   cancelAllBtn:      '//*[contains(@content-desc,"Cancel All") or contains(@text,"Cancel All")]',
   convertToMarketBtn: '//*[contains(@content-desc,"Convert to Market") or contains(@text,"Convert to Market")]',
 
-  emptyState:   '//*[contains(@content-desc,"don\'t have any") or contains(@text,"don\'t have any")]',
+  // "don't" - confirmed live that the app renders a curly apostrophe (U+2019, "'"), not a
+  // straight ASCII one, so a literal "don't" here never matched despite the exact right text
+  // being on screen ("You don't have any Orders" / "...Pending Orders" / etc.).
+  emptyState:   '//*[contains(@content-desc,"don’t have any") or contains(@text,"don’t have any")]',
 };
 
 const TABS = {

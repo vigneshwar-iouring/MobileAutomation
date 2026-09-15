@@ -26,6 +26,13 @@ const SEL = {
   // ── Price ─────────────────────────────────────────────────────────────────────
   priceLabel:        '//*[contains(@content-desc,"Price") or contains(@text,"Price")]',
   marketLimitToggle: '//*[contains(@content-desc,"Market") or contains(@text,"Market") or contains(@content-desc,"Limit") or contains(@text,"Limit")]',
+  // The screen has exactly two EditTexts (confirmed via a real UI dump): quantity first,
+  // price second - positional, since neither carries a resource-id or distinguishing
+  // content-desc of its own.
+  priceInput:        '(//android.widget.EditText)[2]',
+  // Distinct from the quantity row's own "Swap, Double tap to switch between Amount and
+  // Quantity." control, which shares the generic word "Swap" but is a different toggle.
+  marketLimitSwapBtn: '//*[@content-desc="Swap, Double tap to switch between Market and Limit"]',
 
   // ── Stoploss ──────────────────────────────────────────────────────────────────
   stoplossToggle:    '//*[contains(@content-desc,"Stoploss") or contains(@text,"Stoploss") or contains(@content-desc,"Stop Loss") or contains(@text,"Stop Loss") or contains(@content-desc,"stoploss")]',
@@ -45,11 +52,38 @@ const SEL = {
   approxMarginLabel: '//*[contains(@content-desc,"Approx") or contains(@text,"Approx") or contains(@content-desc,"Margin") or contains(@text,"Margin")]',
   availBalanceLabel: '//*[contains(@content-desc,"Avail") or contains(@text,"Avail")]',
 
+  // ── Surveillance warning (shown for some symbols before BUY submit proceeds) ──
+  // No confirmed UI dump yet (not triggered by the symbols used so far) - best-effort
+  // soft-matching, same defensive style as the rest of this file's not-yet-confirmed SEL.
+  surveillanceWarning:   '//*[contains(@content-desc,"Surveillance") or contains(@text,"Surveillance") or contains(@content-desc,"GSM") or contains(@content-desc,"ASM")]',
+  proceedSurveillanceBtn: '//*[contains(@content-desc,"PROCEED") or contains(@text,"PROCEED") or contains(@content-desc,"Proceed") or contains(@text,"Proceed")]',
+
   // ── Buy action ────────────────────────────────────────────────────────────────
-  buySubmitBtn:      '//*[contains(@content-desc,"BUY") or contains(@text,"BUY") or contains(@content-desc,"Buy") or contains(@text,"Buy")]',
+  // Exact match - confirmed live that a "contains" match here also caught the OTHER
+  // Buy/Sell control on this screen ("Swap Buy Sell, Double tap to Swap Between Buy and
+  // Sell"), which sits earlier in the tree and so was tapped first, silently toggling
+  // the pad to Sell mode instead of submitting - the actual button's content-desc is the
+  // bare word "BUY" with nothing else.
+  buySubmitBtn:      '//*[@content-desc="BUY" or @text="BUY"]',
 
   // ── Navigation ────────────────────────────────────────────────────────────────
   backBtn:           '//android.widget.ImageButton[@content-desc="Navigate up" or @content-desc="Back"] | //android.view.View[@content-desc="Back"]',
+
+  // ── Confirmation popup (shown after tapping BUY) ─────────────────────────────
+  // Confirmed via a real UI dump: "Confirmation Preview" heading, then bare Symbol and
+  // Exchange values (no label of their own), then "Label" / ":" / "Value" triples for
+  // Order Action, Quantity, Price, Product Type, Order Type, Validity, then the
+  // "CONFIRMATION" button - the one that actually places the order.
+  confirmationHeading: '//*[@content-desc="Confirmation Preview"]',
+  applicableChargesLink: '//*[@content-desc="Applicable Charges"]',
+  confirmOrderBtn:     '//*[@content-desc="CONFIRMATION"]',
+
+  // ── Applicable Charges panel ─────────────────────────────────────────────────
+  chargesHeading:    '//*[@content-desc="Brokerage and Charges"]',
+  chargesDisclaimer: '//*[starts-with(@content-desc,"Disclaimer")]',
+
+  // ── DPR (Daily Price Range / circuit) guard ──────────────────────────────────
+  dprError: '//*[starts-with(@content-desc,"DPR Range")]',
 };
 
 class OrderPadPage extends BasePage {
@@ -79,14 +113,19 @@ class OrderPadPage extends BasePage {
 
   // ── Header / symbol ───────────────────────────────────────────────────────────
 
+  // Confirmed live across every instrument type (equities, F&O options, currency and
+  // commodity futures) that the contract/symbol name is always the very first
+  // content-desc on the OrderPad screen, immediately followed by "Back, Double tap to go
+  // back". The previous simple-all-caps-code regex (meant to skip non-symbol UI text)
+  // rejected multi-word contract names like "GBPUSD 29DEC FUT" or "NIFTY 15SEP 25100 CE"
+  // outright, then fell through to matching the single-segment exchange label instead
+  // (e.g. "CDS", "MCX") - silently returning the wrong "symbol" for single-segment
+  // instruments while still working by accident for plain equities.
   async getSymbolName() {
     try {
       const src   = await driver.getPageSource();
       const descs = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]);
-      const candidate = descs.find(d =>
-        /^[A-Z]{2,10}(\s*&\s*[A-Z]{2,10})?$/.test(d.split(/\n|&#10;/)[0].trim())
-      );
-      return candidate ? candidate.split(/\n|&#10;/)[0].trim() : null;
+      return descs[0] ? descs[0].split(/\n|&#10;/)[0].trim() : null;
     } catch { return null; }
   }
 
@@ -98,6 +137,25 @@ class OrderPadPage extends BasePage {
       this.isDisplayed(SEL.exchangeBSE, 3000),
     ]);
     return nse && bse;
+  }
+
+  // Which segment(s) this symbol is offered on - a dual-listed equity shows an NSE/BSE
+  // toggle ("NSE \nExchange is NSE and the last traded price is ...", "BSE \n..."), while
+  // a derivative contract (NFO/BFO/CDS/MCX) shows just its own single segment instead of
+  // a toggle. Matched generically on the first line of each content-desc against the
+  // known segment codes, rather than assuming the NSE/BSE toggle is always present.
+  async getVisibleSegments() {
+    try {
+      const src = await driver.getPageSource();
+      const descs = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]);
+      const known = ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX'];
+      const found = new Set();
+      for (const d of descs) {
+        const first = d.split(/\n|&#10;/)[0].trim();
+        if (known.includes(first)) found.add(first);
+      }
+      return [...found];
+    } catch { return []; }
   }
 
   // Reads the decimal price adjacent to a given exchange label (best-effort).
@@ -156,6 +214,53 @@ class OrderPadPage extends BasePage {
 
   async isMarketLimitToggleVisible() { return this.isDisplayed(SEL.marketLimitToggle, 2000); }
 
+  async getPrice() {
+    try {
+      const el = await $(SEL.priceInput);
+      await el.waitForDisplayed({ timeout: 3000 });
+      return (await el.getText()) || (await el.getAttribute('text'));
+    } catch { return null; }
+  }
+
+  // Uses real key events (hardware backspace + a real typed key sequence), NOT
+  // clearValue()/setValue() (findAndSetValue's approach, and this method's own previous
+  // implementation). Confirmed live via the Confirmation popup's own displayed price
+  // that clearValue()/setValue() only update the accessibility layer's exposed text -
+  // the field visually/programmatically reads back the new value and stays there
+  // indefinitely, but the app's real order-entry state never changes, so BUY silently
+  // submitted at the untouched original (near-market) price every time. Real key events
+  // route through the same input path a physical keyboard would, which this app's
+  // Price field DOES listen to.
+  async setPrice(value) {
+    try {
+      const el = await $(SEL.priceInput);
+      await el.waitForDisplayed({ timeout: 3000 });
+      await el.click();
+      await browser.pause(200);
+      // 15 backspaces comfortably covers every price length seen so far (bare digits
+      // up to Indian-comma-grouped 6-7 figure commodity prices).
+      for (let i = 0; i < 15; i++) {
+        await driver.pressKeyCode(67);
+      }
+      await browser.pause(200);
+      await driver.keys(String(value).split(''));
+      await browser.pause(300);
+      return true;
+    } catch { return false; }
+  }
+
+  // The "Price (Limit)" / "Price (Market)" label carries the current mode in parens.
+  async getPriceMode() {
+    try {
+      const el = await $(SEL.priceLabel);
+      const desc = await el.getAttribute('content-desc');
+      const m = desc && desc.match(/\(([^)]+)\)/);
+      return m ? m[1] : null;
+    } catch { return null; }
+  }
+
+  async tapMarketLimitSwap() { return this.findAndTap(SEL.marketLimitSwapBtn, 3000); }
+
   // ── Stoploss ──────────────────────────────────────────────────────────────────
 
   async isStoplossToggleVisible() { return this.isDisplayed(SEL.stoplossToggle, 3000); }
@@ -206,8 +311,11 @@ class OrderPadPage extends BasePage {
   async isAvailBalanceVisible()  { return this.isDisplayed(SEL.availBalanceLabel, 2000); }
 
   // ── Buy action ────────────────────────────────────────────────────────────────
-  // Read-only checks — this app connects to a real trading account, so this page
-  // object deliberately has no "submit order" method. Verify state only.
+  // tapBuySubmit/tapConfirmOrder DO place a real order on this real trading account -
+  // explicitly authorized for the Regression suite's R24/R27/R33-R38, which each
+  // control price/segment carefully (DPR-bounce to the lower circuit, or dismiss
+  // before confirming) rather than submit blind. Do not call these outside that
+  // reviewed flow.
 
   async isBuySubmitVisible() { return this.isDisplayed(SEL.buySubmitBtn, 3000); }
 
@@ -218,6 +326,136 @@ class OrderPadPage extends BasePage {
       const enabled = await el.getAttribute('enabled');
       return enabled === null ? true : enabled === 'true';
     } catch { return false; }
+  }
+
+  async tapBuySubmit() { return this.findAndTap(SEL.buySubmitBtn, 3000); }
+
+  // ── Surveillance warning ──────────────────────────────────────────────────────
+
+  async isSurveillanceWarningVisible(timeout = 3000) { return this.isDisplayed(SEL.surveillanceWarning, timeout); }
+
+  async getSurveillanceMessage() {
+    try { return await (await $(SEL.surveillanceWarning)).getAttribute('content-desc'); } catch { return null; }
+  }
+
+  async tapProceedSurveillance() { return this.findAndTap(SEL.proceedSurveillanceBtn, 3000); }
+
+  // ── Confirmation popup ────────────────────────────────────────────────────────
+  // Shown after tapping BUY with an in-range price. tapConfirmOrder() is the one call
+  // in this whole page object that actually places the order.
+
+  async isConfirmationPopupVisible(timeout = 5000) { return this.isDisplayed(SEL.confirmationHeading, timeout); }
+
+  // Bare Symbol/Exchange values followed by "Label" / ":" / "Value" triples (Order
+  // Action, Quantity, Price, Product Type, Order Type, Validity) - confirmed via a real
+  // UI dump of the popup's content-desc order.
+  // Label/value pairs are found by scanning for the bare ":" separator itself, rather
+  // than assuming a fixed position - confirmed live that F&O contracts (NFO/BFO/CDS/
+  // MCX) insert an extra expiry-date header item ("15 SEP 2026") between Exchange and
+  // Order Action that plain equities don't have, which silently broke the previous
+  // fixed-offset-of-3 parsing for every field on those contracts (including Price -
+  // the one field the real-order safety check in the spec depends on).
+  async getConfirmationDetails() {
+    try {
+      const src = await driver.getPageSource();
+      const descs = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]);
+      const startIdx = descs.indexOf('Confirmation Preview');
+      if (startIdx === -1) return {};
+      const endIdx = descs.indexOf('CONFIRMATION');
+      const body = descs
+        .slice(startIdx + 1, endIdx === -1 ? undefined : endIdx)
+        .filter(d => d !== 'Applicable Charges');
+
+      const details = {};
+      for (let i = 1; i < body.length - 1; i++) {
+        if (body[i] === ':') details[body[i - 1]] = body[i + 1];
+      }
+
+      // Everything before the first label:value pair is the header - Symbol is always
+      // first; Exchange is a known code that can sit anywhere in that header (directly
+      // after Symbol for equities, or after an expiry-date item for F&O contracts).
+      const firstLabelIdx = body.findIndex((d, idx) => body[idx + 1] === ':');
+      const header = firstLabelIdx > 0 ? body.slice(0, firstLabelIdx) : [];
+      if (header.length) details.Symbol = header[0];
+      const knownExchanges = ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX'];
+      details.Exchange = header.find(d => knownExchanges.includes(d)) || null;
+
+      return details;
+    } catch { return {}; }
+  }
+
+  // Raw ordered content-desc list of the popup - used for logging/dumping, not parsing.
+  async getConfirmationText() {
+    try {
+      const src = await driver.getPageSource();
+      const descs = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]);
+      const startIdx = descs.indexOf('Confirmation Preview');
+      if (startIdx === -1) return [];
+      const endIdx = descs.indexOf('CONFIRMATION');
+      return descs.slice(startIdx, endIdx === -1 ? undefined : endIdx + 1);
+    } catch { return []; }
+  }
+
+  // Dismisses via the hardware back action - confirmed live that this closes the popup
+  // without confirming (lands back on the OrderPad screen), unlike tapping CONFIRMATION.
+  async dismissConfirmationPopup() {
+    try { await driver.back(); await browser.pause(300); return true; } catch { return false; }
+  }
+
+  async tapConfirmOrder() { return this.findAndTap(SEL.confirmOrderBtn, 3000); }
+
+  // ── Applicable Charges panel ──────────────────────────────────────────────────
+
+  async tapApplicableCharges() { return this.findAndTap(SEL.applicableChargesLink, 3000); }
+
+  async isChargesPanelVisible(timeout = 5000) { return this.isDisplayed(SEL.chargesHeading, timeout); }
+
+  async getChargesHeader() {
+    try { return await (await $(SEL.chargesHeading)).getAttribute('content-desc'); } catch { return null; }
+  }
+
+  // Whatever sits between the header and the disclaimer - a real breakdown (Brokerage,
+  // STT, GST, ...) most of the time, but confirmed live that this can also show
+  // "Something went wrong" instead (a backend hiccup unrelated to this automation) - not
+  // asserted on for exact content, only that at least one line is present.
+  async getChargesBreakdown() {
+    try {
+      const src = await driver.getPageSource();
+      const descs = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]);
+      const startIdx = descs.indexOf('Brokerage and Charges');
+      if (startIdx === -1) return [];
+      const endIdx = descs.findIndex(d => d.startsWith('Disclaimer'));
+      return descs
+        .slice(startIdx + 1, endIdx === -1 ? undefined : endIdx)
+        .filter(d => d !== 'Scrim');
+    } catch { return []; }
+  }
+
+  async getChargesDisclaimer() {
+    try { return await (await $(SEL.chargesDisclaimer)).getAttribute('content-desc'); } catch { return null; }
+  }
+
+  // Hardware back - confirmed live that this returns to the still-open confirmation
+  // popup underneath, rather than closing the whole OrderPad flow.
+  async closeChargesPanel() {
+    try { await driver.back(); await browser.pause(300); return true; } catch { return false; }
+  }
+
+  // ── DPR (circuit) guard ───────────────────────────────────────────────────────
+  // Submitting a price outside the daily price range shows "DPR Range: <lower> - <upper>"
+  // in place of the confirmation popup (confirmed live) - used by R27 and the real
+  // order-placement tests (R33-R38) to read the lower circuit price to retry at.
+
+  async isDprErrorVisible(timeout = 5000) { return this.isDisplayed(SEL.dprError, timeout); }
+
+  async getDprErrorMessage() {
+    try { return await (await $(SEL.dprError)).getAttribute('content-desc'); } catch { return null; }
+  }
+
+  parseDprRange(message) {
+    if (!message) return null;
+    const m = message.match(/DPR Range:\s*([\d.]+)\s*-\s*([\d.]+)/);
+    return m ? { lower: m[1], upper: m[2] } : null;
   }
 
   // ── Diagnostics ───────────────────────────────────────────────────────────────

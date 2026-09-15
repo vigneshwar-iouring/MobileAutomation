@@ -14,6 +14,10 @@ const SEL = {
   searchInput:     '//android.widget.Button[@hint="Add or search stocks"]',
   // Case-insensitive — the header renders as "WATCHLIST" in this app build.
   title:           '//android.view.View[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="WATCHLIST"]',
+  // Unique to the Watchlist screen - used by isLoaded() instead of allTabs below, since
+  // allTabs's generic "Tab N of M" shape is also used by other screens' own tab strips
+  // (e.g. News's All/Result/Block Deals/... tabs) and so isn't a reliable Watchlist signal.
+  manageWatchlistBtn: '//*[contains(@content-desc,"Manage Watchlist")]',
 
   // Individual watchlist tab Views — content-desc "Name\nTab N of M"
   allTabs:         '//android.view.View[contains(@content-desc,"Tab ") and contains(@content-desc," of ")]',
@@ -25,12 +29,16 @@ const SEL = {
   stockItems:      '//android.widget.ScrollView//android.view.View[contains(@content-desc,"NSE") or contains(@content-desc,"BSE")]',
   stockByName:     (name) => `//android.widget.ScrollView//android.view.View[starts-with(@content-desc,"${name}")]`,
 
-  // Case-insensitive — bottom-nav labels render in uppercase in this app build.
-  navWatchlist:    '//android.widget.ImageView[contains(translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ"),"WATCHLIST") and contains(@content-desc,"Tab 1 of 5")]',
-  navMarket:       '//android.widget.ImageView[contains(translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ"),"MARKET") and contains(@content-desc,"Tab 2 of 5")]',
-  navOrders:       '//android.widget.ImageView[contains(translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ"),"ORDERS") and contains(@content-desc,"Tab 3 of 5")]',
-  navPortfolio:    '//android.widget.ImageView[contains(translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ"),"PORTFOLIO") and contains(@content-desc,"Tab 4 of 5")]',
-  navMutualFunds:  '//android.widget.ImageView[contains(translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ"),"MUTUAL FUNDS") and contains(@content-desc,"Tab 5 of 5")]',
+  // Case-insensitive exact match - confirmed live that these ImageViews carry a plain
+  // content-desc ("Watchlist", "Market", "Orders", "Portfolio", "Mutual Funds") with NO
+  // "Tab N of 5" suffix in this app build (unlike the watchlist name tabs above, which do
+  // carry one) - the previous selectors required that suffix and so never matched anything,
+  // silently failing every bottom-nav tap.
+  navWatchlist:    '//android.widget.ImageView[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="WATCHLIST"]',
+  navMarket:       '//android.widget.ImageView[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="MARKET"]',
+  navOrders:       '//android.widget.ImageView[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="ORDERS"]',
+  navPortfolio:    '//android.widget.ImageView[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="PORTFOLIO"]',
+  navMutualFunds:  '//android.widget.ImageView[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="MUTUAL FUNDS"]',
 
   // Add (+) button: clickable ImageView inside the tab-strip container View,
   // to the right of the HorizontalScrollView that holds the watchlist tabs.
@@ -64,12 +72,16 @@ class WatchlistPage extends BasePage {
 
   // Checks multiple independent signals in parallel — the search box's hint
   // attribute is sometimes folded into a sibling's content-desc instead of
-  // being exposed on its own EditText, so title/tabs act as a fallback.
+  // being exposed on its own EditText, so title/manageWatchlistBtn act as a fallback.
+  // Confirmed live that using the generic allTabs ("Tab N of M") selector here instead of
+  // manageWatchlistBtn caused a false positive on OTHER screens with their own "Tab N of M"
+  // tab strips (e.g. News), making isLoaded() wrongly report true while on News and causing
+  // goToWatchlist() to return immediately without ever navigating off of it.
   async isLoaded(timeout = 10000) {
     const [search, title, tabs] = await Promise.all([
       this.isDisplayed(SEL.searchBox, timeout),
       this.isDisplayed(SEL.title, timeout),
-      this.isDisplayed(SEL.allTabs, timeout),
+      this.isDisplayed(SEL.manageWatchlistBtn, timeout),
     ]);
     return search || title || tabs;
   }
@@ -229,11 +241,17 @@ class WatchlistPage extends BasePage {
   }
 
   // Returns immediately if already on watchlist; navigates back via bottom nav otherwise.
-  async goToWatchlist() {
+  // Presses back repeatedly (not just once) until the bottom nav becomes visible -
+  // confirmed live that a single back-press isn't enough from a screen more than one
+  // level deep (e.g. Watchlist -> Quote -> OrderPad): it only surfaces to Quote, still
+  // short of Watchlist, so a caller landing here straight from OrderPad (R27 -> R28 in
+  // the full suite) ended up stuck there, cascading into every test that assumed it
+  // was starting from Watchlist.
+  async goToWatchlist(maxBackPresses = 5) {
     await this._dismissANRIfPresent();
     if (await this.isLoaded(2000)) return;
     let navVisible = await this.isDisplayed(SEL.navWatchlist, 1500);
-    if (!navVisible) {
+    for (let i = 0; !navVisible && i < maxBackPresses; i++) {
       try { await driver.back(); } catch {}
       await browser.pause(500);
       await this._dismissANRIfPresent();
