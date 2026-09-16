@@ -17,8 +17,6 @@ const LOGIN_ID3 = 'TEMPMF2';
 const PASSWORD3 = 'Globe@9876';
 const LOGIN_ID4 = 'EKY6998';
 const PASSWORD4 = 'May@2026';
-const LOGIN_ID5 = 'MS2';
-const PASSWORD5 = 'Globe@4321';
 const DEVICE_PASSWORD = '11111'; // device screen-lock PIN, used to confirm biometric enrollment
 // ─────────────────────────────────────────────────────────────────────
 
