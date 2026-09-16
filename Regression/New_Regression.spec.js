@@ -1,15 +1,16 @@
 /**
  * Regression: Login & Authentication Flow — Globe Capital Dev
  *
- * R1 : Forgot Password           — tap, verify navigation, back to Login (validated before login)
- * R2 : Login flow                — enter credentials, tap LOGIN
- * R3 : OTP Login                 — verify + submit FIRST OTP
- * R4 : Enable Now                — Enable Globe Secure screen
- * R5 : Second OTP page           — verify + submit SECOND OTP
- * R6 : Device PIN Login          — biometric/PIN screen
- * R7 : Risk Disclosure           — some accounts don't show this screen at all; accept if shown, skip if not
+ * R1 : Build version             — read the "vX.Y.Z (build)" label on the Login screen
+ * R2 : Forgot Password           — tap, verify navigation, back to Login (validated before login)
+ * R3 : Login flow                — enter credentials, tap LOGIN
+ * R4 : OTP Login                 — verify + submit FIRST OTP
+ * R5 : Enable Now                — Enable Globe Secure screen
+ * R6 : Second OTP page           — verify + submit SECOND OTP
+ * R7 : Device PIN Login          — biometric/PIN screen
+ * R8 : Risk Disclosure           — some accounts don't show this screen at all; accept if shown, skip if not
  *
- * Note: watchlist names/count differ per client ID, so Watchlist steps (R9+) locate
+ * Note: watchlist names/count differ per client ID, so Watchlist steps (R10+) locate
  * tabs by their position ("Tab N of M") rather than by an assumed name like "Watchlist1".
  *
  * Run:
@@ -31,22 +32,27 @@ const newsPage         = require('../pages/News/NewsPage');
 const alertsPage       = require('../pages/Alerts/AlertsPage');
 const nxtOptionPage    = require('../pages/NxtOption/NxtOptionPage');
 const portfolioPage    = require('../pages/Portfolio/PortfolioPage');
+const mutualFundsPage  = require('../pages/MutualFunds/MutualFundsPage');
 const testData         = require('../data/testData');
 const { getLatestUid, fetchLatestOtp }             = require('../utils/gmailOtpHelper');
 const { clearAndLaunch, dumpScreen }               = require('../utils/helpers');
 
-// Set RESUME_SESSION=1 to skip R1-R7 login and land straight on Watchlist when the
+// Set RESUME_SESSION=1 to skip R2-R8 login and land straight on Watchlist when the
 // app already has a valid session — combine with --mochaOpts.grep to run one test
 // case in isolation, e.g.:
-//   RESUME_SESSION=1 npx wdio run ./config/wdio.android.conf.js --spec ./Regression/New_Regression.spec.js --mochaOpts.grep "R41"
+//   RESUME_SESSION=1 npx wdio run ./config/wdio.android.conf.js --spec ./Regression/New_Regression.spec.js --mochaOpts.grep "R42"
 const RESUME_SESSION = !!process.env.RESUME_SESSION;
 
-// Set PLACE_REAL_ORDERS=1 to let R33-R38 proceed past reading the Quote screen's lower
+// Set PLACE_REAL_ORDERS=1 to let R34-R39 proceed past reading the Quote screen's lower
 // circuit and actually open the OrderPad, submit, and confirm a real order at that
 // price. Defaults to OFF (verification only): each test reads and prints the segment's
 // lower/upper circuit, then returns to Watchlist without ever tapping Buy - these tests
 // place real trades on a live account, so this stays off until explicitly confirmed.
 const PLACE_REAL_ORDERS = !!process.env.PLACE_REAL_ORDERS;
+
+// Reads like "v0.0.59 (59)" on the Login screen — ported from SplashPage.buildVersionLabel
+// (DriverManager stack) since that page object's BasePage isn't compatible with this one.
+const BUILD_VERSION_SEL = 'android=new UiSelector().descriptionMatches("^v\\d+\\.\\d+\\.\\d+ \\(\\d+\\)$")';
 
 // No dedicated page object exists for this screen yet — app doesn't expose a
 // stable resource-id for it, so we key off common disclosure/consent wording.
@@ -98,7 +104,7 @@ const MARKET_SEL = {
 };
 
 // Fetches the OTP mail that arrived after `sinceUid` (an inbox snapshot taken right before the
-// action that triggers the email - see R2/R4 below - so a same-second email can't be missed) via
+// action that triggers the email - see R3/R5 below - so a same-second email can't be missed) via
 // this repo's existing gmailOtpHelper/credentials/gmail-config.json, same as tests/loginWithOtp.test.js.
 // One resend-and-retry on rejection, mirroring that file's incorrect-OTP recovery.
 async function submitOtp(label, sinceUid) {
@@ -209,7 +215,7 @@ async function searchAndGetResults(query, timeout = 8000) {
 
 // Some symbols (e.g. under a regulatory surveillance measure) show an extra warning
 // gate before the normal OrderPad confirmation flow — conditional, not a failure when
-// absent. Shared by R24 and R27, the two tests that reach this point in the order flow.
+// absent. Shared by R25 and R28, the two tests that reach this point in the order flow.
 async function handleSurveillanceIfNeeded(label, { assertTap = false } = {}) {
   const onSurveillance = await orderPadPage.isSurveillanceWarningVisible(3000);
   console.log(`  ℹ  Surveillance warning shown for this symbol: ${onSurveillance}`);
@@ -448,8 +454,8 @@ async function swipeIndicesStrip(direction) {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => {
-  // Inbox snapshots taken right before the action that triggers each OTP email (R2/R4 below),
-  // carried forward to the R3/R5 tests that fetch and enter them.
+  // Inbox snapshots taken right before the action that triggers each OTP email (R3/R5 below),
+  // carried forward to the R4/R6 tests that fetch and enter them.
   let firstOtpSinceUid;
   let secondOtpSinceUid;
 
@@ -466,7 +472,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     this.timeout(120000);
     if (RESUME_SESSION) {
       // Relaunch without clearing data — restores the existing login session instead
-      // of running R1-R7 again.
+      // of running R2-R8 again.
       try { await driver.terminateApp(process.env.APP_PACKAGE || 'com.iouring.globecapital'); } catch {}
       await browser.pause(500);
       try { await driver.activateApp(process.env.APP_PACKAGE || 'com.iouring.globecapital'); } catch {}
@@ -486,12 +492,27 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
   const authIt = RESUME_SESSION ? it.skip : it;
 
-  authIt('R1: Verify Forgot Password - click and back to the login screen', async function () {
+  authIt('R1: Verify build version is displayed on the Login screen', async function () {
+    this.timeout(15000);
+    // Read on a fresh Login screen, before any credentials are entered — same point in the
+    // flow tests/loginWithOtp.test.js reads it at (right after launch, before login).
+    const versionVisible = await loginPage.isDisplayed(BUILD_VERSION_SEL, 5000);
+    if (!versionVisible) {
+      console.log('  ℹ  Build version label not found — skipping');
+      return;
+    }
+    const el = await $(BUILD_VERSION_SEL);
+    const buildVersion = ((await el.getAttribute('content-desc')) || '').trim();
+    console.log(`  ℹ  Build version: ${buildVersion}`);
+    await assertOrDump(!!buildVersion, 'R1: build version label found but empty', 'Build version label should carry a non-empty value');
+  });
+
+  authIt('R2: Verify Forgot Password - click and back to the login screen', async function () {
     this.timeout(15000);
     // Validated on a fresh Login screen, before any credentials are entered.
     const wasDisplayed = await loginPage.isForgotPasswordDisplayed();
     console.log(`  ℹ  Forgot Password button visible: ${wasDisplayed}`);
-    await assertOrDump(wasDisplayed, 'R1: forgot password button not found', 'Forgot Password button should be visible on Login screen');
+    await assertOrDump(wasDisplayed, 'R2: forgot password button not found', 'Forgot Password button should be visible on Login screen');
 
     await loginPage.tapForgotPassword();
     await browser.pause(500);
@@ -502,53 +523,53 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(500);
 
     const backOnLogin = await loginPage.waitForLoginScreen(10000);
-    await assertOrDump(backOnLogin, 'R1: did not return to login screen', 'Should return to Login screen after back');
+    await assertOrDump(backOnLogin, 'R2: did not return to login screen', 'Should return to Login screen after back');
   });
 
-  authIt('R2: Verify Login flow', async function () {
+  authIt('R3: Verify Login flow', async function () {
     this.timeout(15000);
     await loginPage.enterLoginId(testData.validUser.id);
     await loginPage.enterPassword(testData.validUser.password);
     expect(await loginPage.getLoginIdFieldValue(), 'Login ID field should hold entered value')
       .to.equal(testData.validUser.id);
-    // Snapshot the inbox right before LOGIN triggers the first OTP email - not inside R3 - so an
-    // email that arrives in the gap between this test ending and R3 starting still counts as "new".
+    // Snapshot the inbox right before LOGIN triggers the first OTP email - not inside R4 - so an
+    // email that arrives in the gap between this test ending and R4 starting still counts as "new".
     firstOtpSinceUid = await getLatestUid();
     await loginPage.tapLogin();
   });
 
-  authIt('R3: Verify OTP Login', async function () {
+  authIt('R4: Verify OTP Login', async function () {
     this.timeout(180000);
     const onOTP1 = await otpPage.isLoaded(35000);
-    await assertOrDump(onOTP1, 'R3: OTP1 not found', 'First OTP screen should appear after LOGIN');
+    await assertOrDump(onOTP1, 'R4: OTP1 not found', 'First OTP screen should appear after LOGIN');
     await submitOtp('FIRST OTP', firstOtpSinceUid);
   });
 
-  authIt('R4: Verify the Enable now', async function () {
+  authIt('R5: Verify the Enable now', async function () {
     this.timeout(20000);
     const onSecure = await enableSecurePage.isLoaded(10000);
-    await assertOrDump(onSecure, 'R4: Enable Globe Secure screen not found', 'Enable Globe Secure screen should appear');
+    await assertOrDump(onSecure, 'R5: Enable Globe Secure screen not found', 'Enable Globe Secure screen should appear');
     // Same reasoning as firstOtpSinceUid above, for the second OTP email triggered by Enable Now.
     secondOtpSinceUid = await getLatestUid();
     await enableSecurePage.tapEnableNow();
   });
 
-  authIt('R5: Verify second otp page', async function () {
+  authIt('R6: Verify second otp page', async function () {
     this.timeout(180000);
     const onOTP2 = await otpPage.isLoaded(20000);
-    await assertOrDump(onOTP2, 'R5: OTP2 not found', 'Second OTP screen should appear');
+    await assertOrDump(onOTP2, 'R6: OTP2 not found', 'Second OTP screen should appear');
     await submitOtp('SECOND OTP', secondOtpSinceUid);
     await browser.pause(500);
   });
 
-  authIt('R6: Verify device pin Login', async function () {
+  authIt('R7: Verify device pin Login', async function () {
     this.timeout(30000);
     const handled = await handleBiometricIfNeeded(15000);
     console.log(`  ℹ  Device PIN / biometric screen handled: ${handled}`);
     // Some builds skip straight to Risk Disclosure / Watchlist — not a failure.
   });
 
-  authIt('R7: Verify Risk Disclosure', async function () {
+  authIt('R8: Verify Risk Disclosure', async function () {
     this.timeout(30000);
     // Not every account shows this screen — some client IDs skip straight to Watchlist.
     // So this is a genuine if/else, not a required step: accept it when present, otherwise
@@ -559,27 +580,27 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     if (onRisk) {
       const accepted = await loginPage.findAndTap(RISK_SEL.acceptBtn, 5000);
       console.log(`  ℹ  Risk Disclosure accept tapped: ${accepted}`);
-      await assertOrDump(accepted, 'R7: Risk Disclosure accept control not found', 'Should be able to accept the Risk Disclosure screen');
+      await assertOrDump(accepted, 'R8: Risk Disclosure accept control not found', 'Should be able to accept the Risk Disclosure screen');
       await browser.pause(1000);
     } else {
       console.log('  ℹ  This account has no Risk Disclosure step — proceeding straight to landing check');
     }
 
     const onWatchlist = await watchlistPage.isLoaded(10000);
-    await assertOrDump(onWatchlist, 'R7: Watchlist not reached after login flow', 'Watchlist home screen should be visible after full login flow');
+    await assertOrDump(onWatchlist, 'R8: Watchlist not reached after login flow', 'Watchlist home screen should be visible after full login flow');
   });
 
-  it('R8: Validate app launched into the Watchlist screen', async function () {
+  it('R9: Validate app launched into the Watchlist screen', async function () {
     this.timeout(30000);
     await watchlistPage.goToWatchlist();
     const onWatchlist = await watchlistPage.isLoaded(20000);
-    await assertOrDump(onWatchlist, 'R8: Watchlist screen not launched', 'Watchlist screen should be launched');
+    await assertOrDump(onWatchlist, 'R9: Watchlist screen not launched', 'Watchlist screen should be launched');
     // Informational only — the exact title content-desc varies across accounts/builds;
     // isLoaded() above (title OR search box OR tabs) is the reliable signal.
     console.log(`  ℹ  Watchlist title element visible: ${await watchlistPage.isTitleDisplayed()}`);
   });
 
-  it('R9: Tap through all the watchlist tabs', async function () {
+  it('R10: Tap through all the watchlist tabs', async function () {
     this.timeout(30000);
     // Tabs are read by position/content-desc pattern, not by an assumed name —
     // different client IDs have different watchlists.
@@ -610,11 +631,11 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     expect(seen.size, 'Should have tapped at least 1 watchlist tab').to.be.above(0);
   });
 
-  it('R10: Choose the 1st watchlist and open search', async function () {
+  it('R11: Choose the 1st watchlist and open search', async function () {
     this.timeout(20000);
     // Selected by position ("Tab 1 of N"), not by name — the 1st tab's name varies per account.
     const firstTab = await scrollToTabPosition(1);
-    if (!firstTab) await dumpScreen('R10: 1st watchlist tab not found by position');
+    if (!firstTab) await dumpScreen('R11: 1st watchlist tab not found by position');
     expect(firstTab, 'A watchlist tab at position 1 should be found').to.not.be.null;
     console.log(`  ℹ  1st watchlist tab: "${firstTab.name}"`);
 
@@ -625,15 +646,15 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     await watchlistPage.tapSearchBox();
     const searchOpen = await watchlistPage.isDisplayed(WL_SEL.searchInput, 5000);
-    await assertOrDump(searchOpen, 'R10: search overlay did not open', 'Search overlay input should be visible after tapping search');
+    await assertOrDump(searchOpen, 'R11: search overlay did not open', 'Search overlay input should be visible after tapping search');
   });
 
-  it('R11: Search the symbol "HCL"', async function () {
+  it('R12: Search the symbol "HCL"', async function () {
     this.timeout(15000);
     await searchAndGetResults('HCL');
   });
 
-  it('R12: Validate the search list and click cancel', async function () {
+  it('R13: Validate the search list and click cancel', async function () {
     this.timeout(15000);
     // exitSearchMode() must run even if the assertion below fails — otherwise a failure
     // here strands the app in the search overlay and cascades into every later test.
@@ -646,17 +667,17 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     }
 
     const backOnWatchlist = await watchlistPage.isLoaded(5000);
-    await assertOrDump(backOnWatchlist, 'R12: Watchlist not visible after cancel', 'Should be back on Watchlist after cancelling search');
+    await assertOrDump(backOnWatchlist, 'R13: Watchlist not visible after cancel', 'Should be back on Watchlist after cancelling search');
   });
 
-  it('R13: Click the Manage Watchlist button', async function () {
+  it('R14: Click the Manage Watchlist button', async function () {
     this.timeout(15000);
     const opened = await watchlistPage.findAndTap(WL_SEL.manageBtn, 5000);
-    await assertOrDump(opened, 'R13: Manage Watchlist button not found', 'Manage Watchlist button should be tappable');
+    await assertOrDump(opened, 'R14: Manage Watchlist button not found', 'Manage Watchlist button should be tappable');
     await browser.pause(300);
   });
 
-  it('R14: Print the list shown in Manage Watchlist', async function () {
+  it('R15: Print the list shown in Manage Watchlist', async function () {
     this.timeout(15000);
     const src   = await driver.getPageSource();
     const descs = [...src.matchAll(/content-desc="([^"]{1,60})"/g)]
@@ -671,16 +692,16 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     expect(descs.length + texts.length, 'Manage Watchlist screen should list at least one item').to.be.above(0);
   });
 
-  it('R15: Return to the Watchlist screen', async function () {
+  it('R16: Return to the Watchlist screen', async function () {
     this.timeout(15000);
     await safeBack();
     await browser.pause(300);
     await watchlistPage.goToWatchlist();
     const onWatchlist = await watchlistPage.isLoaded(8000);
-    await assertOrDump(onWatchlist, 'R15: did not return to Watchlist screen', 'Should be back on the Watchlist screen');
+    await assertOrDump(onWatchlist, 'R16: did not return to Watchlist screen', 'Should be back on the Watchlist screen');
   });
 
-  it('R16: Validate the top indices — print names, scroll right and left', async function () {
+  it('R17: Validate the top indices — print names, scroll right and left', async function () {
     this.timeout(20000);
     const initial = await watchlistPage.getVisibleIndices();
     console.log(`  ℹ  Indices (initial): ${initial.length ? initial.join(', ') : 'none visible'}`);
@@ -694,16 +715,16 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     console.log(`  ℹ  Indices (after scroll left): ${afterLeft.length ? afterLeft.join(', ') : 'none visible'}`);
 
     const onWatchlist = await watchlistPage.isLoaded(5000);
-    await assertOrDump(onWatchlist, 'R16: Watchlist not visible after scrolling indices', 'Watchlist should remain visible after scrolling the indices strip');
+    await assertOrDump(onWatchlist, 'R17: Watchlist not visible after scrolling indices', 'Watchlist should remain visible after scrolling the indices strip');
   });
 
-  it('R17: Validate the hamburger button', async function () {
+  it('R18: Validate the hamburger button', async function () {
     this.timeout(20000);
     await watchlistPage.goToWatchlist();
 
     const found = await watchlistPage.isDisplayed(MENU_SEL.hamburgerBtn, 5000);
     console.log(`  ℹ  Hamburger button visible: ${found}`);
-    await assertOrDump(found, 'R17: hamburger button not found', 'Hamburger button should be visible on the Watchlist screen');
+    await assertOrDump(found, 'R18: hamburger button not found', 'Hamburger button should be visible on the Watchlist screen');
 
     const tapped = await watchlistPage.findAndTap(MENU_SEL.hamburgerBtn, 3000);
     console.log(`  ℹ  Hamburger button tapped: ${tapped}`);
@@ -717,13 +738,13 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(500);
     await watchlistPage.goToWatchlist();
     const backOnWatchlist = await watchlistPage.isLoaded(5000);
-    await assertOrDump(backOnWatchlist, 'R17: did not return to Watchlist after hamburger interaction', 'Should return to Watchlist after hamburger interaction');
+    await assertOrDump(backOnWatchlist, 'R18: did not return to Watchlist after hamburger interaction', 'Should return to Watchlist after hamburger interaction');
   });
 
   // Previously flaky: WatchlistPage's bottom-nav selectors required a "Tab N of 5"
   // suffix in the content-desc that only exists on the Beta build — the Dev build
   // renders plain labels ("Orders") with no suffix at all. Fixed by accepting both formats.
-  // Shared by R18-R21: tap one bottom-nav tab, confirm it leaves Watchlist, then
+  // Shared by R19-R22: tap one bottom-nav tab, confirm it leaves Watchlist, then
   // tap back to Watchlist and confirm it's reachable again.
   async function verifyNavSwitch(label, name, tapFn) {
     let switched = false;
@@ -747,35 +768,35 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await assertOrDump(backOnWatchlist, `${label}: did not return to Watchlist after tapping ${name}`, `Should return to Watchlist after switching to ${name}`);
   }
 
-  it('R18: Switch to the Market tab and return to Watchlist', async function () {
+  it('R19: Switch to the Market tab and return to Watchlist', async function () {
     this.timeout(20000);
     await watchlistPage.goToWatchlist();
     await browser.pause(500);
-    await verifyNavSwitch('R18', 'Market', () => watchlistPage.tapNavMarket());
+    await verifyNavSwitch('R19', 'Market', () => watchlistPage.tapNavMarket());
   });
 
-  it('R19: Switch to the Orders tab and return to Watchlist', async function () {
+  it('R20: Switch to the Orders tab and return to Watchlist', async function () {
     this.timeout(20000);
     await watchlistPage.goToWatchlist();
     await browser.pause(500);
-    await verifyNavSwitch('R19', 'Orders', () => watchlistPage.tapNavOrders());
+    await verifyNavSwitch('R20', 'Orders', () => watchlistPage.tapNavOrders());
   });
 
-  it('R20: Switch to the Portfolio tab and return to Watchlist', async function () {
+  it('R21: Switch to the Portfolio tab and return to Watchlist', async function () {
     this.timeout(20000);
     await watchlistPage.goToWatchlist();
     await browser.pause(500);
-    await verifyNavSwitch('R20', 'Portfolio', () => watchlistPage.tapNavPortfolio());
+    await verifyNavSwitch('R21', 'Portfolio', () => watchlistPage.tapNavPortfolio());
   });
 
-  it('R21: Switch to the Mutual Funds tab and return to Watchlist', async function () {
+  it('R22: Switch to the Mutual Funds tab and return to Watchlist', async function () {
     this.timeout(20000);
     await watchlistPage.goToWatchlist();
     await browser.pause(500);
-    await verifyNavSwitch('R21', 'Mutual Funds', () => watchlistPage.tapNavMutualFunds());
+    await verifyNavSwitch('R22', 'Mutual Funds', () => watchlistPage.tapNavMutualFunds());
   });
 
-  it('R22: Open first symbol from any watchlist and tap Buy to reach the OrderPad screen', async function () {
+  it('R23: Open first symbol from any watchlist and tap Buy to reach the OrderPad screen', async function () {
     this.timeout(45000);
     await watchlistPage.goToWatchlist();
     await watchlistPage.scrollToFirstTab();
@@ -799,7 +820,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       }
     }
 
-    if (!stockEl) await dumpScreen('R22: no watchlist with a symbol found');
+    if (!stockEl) await dumpScreen('R23: no watchlist with a symbol found');
     expect(stockEl, 'At least one watchlist should contain a symbol').to.not.be.null;
     console.log(`  ℹ  Opening first symbol from "${usedTabName}"`);
 
@@ -807,17 +828,17 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(500);
 
     const quoteOpen = await quotePage.isLoaded(8000);
-    await assertOrDump(quoteOpen, 'R22: Quote screen did not open', 'Quote screen should open after tapping a symbol');
+    await assertOrDump(quoteOpen, 'R23: Quote screen did not open', 'Quote screen should open after tapping a symbol');
 
     const buyVisible  = await quotePage.isBuyButtonDisplayed();
     const sellVisible = await quotePage.isSellButtonDisplayed();
     console.log(`  ℹ  Buy button visible: ${buyVisible}  |  Sell button visible: ${sellVisible}`);
-    await assertOrDump(buyVisible,  'R22: Buy button not found on Quote screen',  'Buy button should be visible on the Quote screen');
-    await assertOrDump(sellVisible, 'R22: Sell button not found on Quote screen', 'Sell button should be visible on the Quote screen');
+    await assertOrDump(buyVisible,  'R23: Buy button not found on Quote screen',  'Buy button should be visible on the Quote screen');
+    await assertOrDump(sellVisible, 'R23: Sell button not found on Quote screen', 'Sell button should be visible on the Quote screen');
 
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
-    await assertOrDump(buyTapped, 'R22: could not tap Buy button', 'Buy button should be tappable');
+    await assertOrDump(buyTapped, 'R23: could not tap Buy button', 'Buy button should be tappable');
     await browser.pause(1000);
 
     // tapBuyButton() only confirms the tap *gesture* executed — it says nothing about
@@ -831,7 +852,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     expect(onOrderPad, 'OrderPad screen should open after tapping Buy').to.be.true;
   });
 
-  it('R23: Validate the OrderPad screen fields', async function () {
+  it('R24: Validate the OrderPad screen fields', async function () {
     this.timeout(20000);
     const symbol = await orderPadPage.getSymbolName();
     console.log(`  ℹ  OrderPad symbol: ${symbol}`);
@@ -874,27 +895,27 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     // The BUY submit control is the one field central to this screen's purpose — everything
     // else above is informational until its selector is confirmed against the real markup.
-    await assertOrDump(buySubmitVisible, 'R23: BUY submit button not found on OrderPad', 'BUY submit button should be visible on the OrderPad screen');
+    await assertOrDump(buySubmitVisible, 'R24: BUY submit button not found on OrderPad', 'BUY submit button should be visible on the OrderPad screen');
   });
 
   // Submits BUY at the OrderPad's current (default, in-range) price to reach the real
   // confirmation popup, validates its fields and the Applicable Charges/Brokerage
   // breakdown, then dismisses via the Scrim — never taps CONFIRMATION, so no order
-  // is placed. Runs before R26 so the price field is still at its untouched default.
-  it('R24: Validate the confirmation popup fields (no submit)', async function () {
+  // is placed. Runs before R27 so the price field is still at its untouched default.
+  it('R25: Validate the confirmation popup fields (no submit)', async function () {
     this.timeout(20000);
 
     const buyTapped = await orderPadPage.tapBuySubmit();
     console.log(`  ℹ  OrderPad BUY submit tapped: ${buyTapped}`);
-    await assertOrDump(buyTapped, 'R24: could not tap BUY submit on OrderPad', 'BUY submit button should be tappable on the OrderPad screen');
+    await assertOrDump(buyTapped, 'R25: could not tap BUY submit on OrderPad', 'BUY submit button should be tappable on the OrderPad screen');
     await browser.pause(800);
 
-    await handleSurveillanceIfNeeded('R24', { assertTap: true });
+    await handleSurveillanceIfNeeded('R25', { assertTap: true });
 
     const confirmVisible = await orderPadPage.isConfirmationPopupVisible(5000);
     console.log(`  ℹ  Confirmation popup visible: ${confirmVisible}`);
     if (!confirmVisible) await orderPadPage.dumpPageSource('r21-confirmation-popup-missing');
-    await assertOrDump(confirmVisible, 'R24: confirmation popup did not appear after BUY submit', 'Confirmation popup should appear after tapping BUY submit');
+    await assertOrDump(confirmVisible, 'R25: confirmation popup did not appear after BUY submit', 'Confirmation popup should appear after tapping BUY submit');
 
     // Validate every field shown on the confirmation popup.
     const confirmDetails = await orderPadPage.getConfirmationDetails();
@@ -904,44 +925,44 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     }
     const expectedFields = ['Symbol', 'Exchange', 'Order Action', 'Quantity', 'Price', 'Product Type', 'Order Type', 'Validity'];
     const missingFields = expectedFields.filter(f => !confirmDetails[f]);
-    await assertOrDump(missingFields.length === 0, 'R24: confirmation popup missing expected fields',
+    await assertOrDump(missingFields.length === 0, 'R25: confirmation popup missing expected fields',
       `Confirmation popup should show all of ${expectedFields.join(', ')} — missing: ${missingFields.join(', ') || 'none'}`);
   });
 
-  // Continues directly from R24 — the confirmation popup is still open.
-  it('R25: Validate the Applicable Charges breakdown, then dismiss without submitting', async function () {
+  // Continues directly from R25 — the confirmation popup is still open.
+  it('R26: Validate the Applicable Charges breakdown, then dismiss without submitting', async function () {
     this.timeout(20000);
 
     // Open "Applicable Charges" — validate its header and brokerage breakdown, print
     // the disclaimer, then return to the confirmation popup.
     const chargesTapped = await orderPadPage.tapApplicableCharges();
     console.log(`  ℹ  Applicable Charges tapped: ${chargesTapped}`);
-    await assertOrDump(chargesTapped, 'R25: could not tap Applicable Charges', 'Applicable Charges link should be tappable on the confirmation popup');
+    await assertOrDump(chargesTapped, 'R26: could not tap Applicable Charges', 'Applicable Charges link should be tappable on the confirmation popup');
     await browser.pause(600);
 
     const chargesPanelVisible = await orderPadPage.isChargesPanelVisible(5000);
     console.log(`  ℹ  Applicable Charges panel visible: ${chargesPanelVisible}`);
     if (!chargesPanelVisible) await orderPadPage.dumpPageSource('r21-charges-panel-missing');
-    await assertOrDump(chargesPanelVisible, 'R25: Applicable Charges panel did not open', 'Applicable Charges panel should open after tapping the link');
+    await assertOrDump(chargesPanelVisible, 'R26: Applicable Charges panel did not open', 'Applicable Charges panel should open after tapping the link');
 
     const chargesHeader = await orderPadPage.getChargesHeader();
     console.log(`  ℹ  Applicable Charges header: ${chargesHeader}`);
-    await assertOrDump(!!chargesHeader, 'R25: Applicable Charges header not found', 'Applicable Charges panel should show a header');
+    await assertOrDump(!!chargesHeader, 'R26: Applicable Charges header not found', 'Applicable Charges panel should show a header');
 
     const chargesBreakdown = await orderPadPage.getChargesBreakdown();
     console.log(`  ℹ  Brokerage/charges details: ${chargesBreakdown.join(' | ')}`);
-    await assertOrDump(chargesBreakdown.length > 0, 'R25: no brokerage/charges details found', 'Applicable Charges panel should show at least one charge line item');
+    await assertOrDump(chargesBreakdown.length > 0, 'R26: no brokerage/charges details found', 'Applicable Charges panel should show at least one charge line item');
 
     const chargesDisclaimer = await orderPadPage.getChargesDisclaimer();
     console.log(`  ℹ  Disclaimer: ${chargesDisclaimer}`);
-    await assertOrDump(!!chargesDisclaimer, 'R25: disclaimer text not found on the Applicable Charges panel', 'Applicable Charges panel should show a disclaimer');
+    await assertOrDump(!!chargesDisclaimer, 'R26: disclaimer text not found on the Applicable Charges panel', 'Applicable Charges panel should show a disclaimer');
 
     const chargesClosed = await orderPadPage.closeChargesPanel();
     console.log(`  ℹ  Applicable Charges back button tapped: ${chargesClosed}`);
     await browser.pause(500);
     const backOnConfirmation = await orderPadPage.isConfirmationPopupVisible(5000);
     console.log(`  ℹ  Back on confirmation popup: ${backOnConfirmation}`);
-    await assertOrDump(backOnConfirmation, 'R25: did not return to the confirmation popup after closing Applicable Charges', 'Should return to the confirmation popup after tapping back on Applicable Charges');
+    await assertOrDump(backOnConfirmation, 'R26: did not return to the confirmation popup after closing Applicable Charges', 'Should return to the confirmation popup after tapping back on Applicable Charges');
 
     // Dismiss WITHOUT confirming — this test only validates the popup, it never places an order.
     const dismissed = await orderPadPage.dismissConfirmationPopup();
@@ -950,19 +971,19 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     const backOnOrderPad = await orderPadPage.isLoaded(5000);
     console.log(`  ℹ  Back on OrderPad screen: ${backOnOrderPad}`);
-    await assertOrDump(backOnOrderPad, 'R25: did not return to the OrderPad screen after dismissing the confirmation popup', 'Should return to the OrderPad screen after dismissing the confirmation popup');
+    await assertOrDump(backOnOrderPad, 'R26: did not return to the OrderPad screen after dismissing the confirmation popup', 'Should return to the OrderPad screen after dismissing the confirmation popup');
   });
 
   // Read/edit-only pass over the OrderPad's interactive fields — segment, quantity,
   // Market/Limit mode, price tick. Deliberately never taps BUY or SELL, so it's safe
   // to run against a real account.
-  it('R26: OrderPad field interactions — segment, quantity, Market/Limit, price tick (no submit)', async function () {
+  it('R27: OrderPad field interactions — segment, quantity, Market/Limit, price tick (no submit)', async function () {
     this.timeout(30000);
 
     // Step 1 — segments actually offered for this symbol.
     const segments = await orderPadPage.getVisibleSegments();
     console.log(`  ℹ  Segments available: ${segments.join(', ') || 'none detected'}`);
-    await assertOrDump(segments.length > 0, 'R26: no segment (NSE/BSE/NFO/MCX/...) detected on OrderPad', 'At least one segment should be visible on the OrderPad screen');
+    await assertOrDump(segments.length > 0, 'R27: no segment (NSE/BSE/NFO/MCX/...) detected on OrderPad', 'At least one segment should be visible on the OrderPad screen');
 
     // Step 2 — quantity 1 -> 10 -> back to the original value.
     const qtyBefore = await orderPadPage.getQuantity();
@@ -971,13 +992,13 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(300);
     const qtyAfterTen = await orderPadPage.getQuantity();
     console.log(`  ℹ  Quantity after setting to 10: ${qtyAfterTen}`);
-    await assertOrDump(String(qtyAfterTen) === '10', 'R26: quantity did not update to 10', 'Quantity field should read 10 after editing');
+    await assertOrDump(String(qtyAfterTen) === '10', 'R27: quantity did not update to 10', 'Quantity field should read 10 after editing');
 
     await orderPadPage.setQuantity(qtyBefore);
     await browser.pause(300);
     const qtyReversed = await orderPadPage.getQuantity();
     console.log(`  ℹ  Quantity reversed back to: ${qtyReversed}`);
-    await assertOrDump(String(qtyReversed) === String(qtyBefore), 'R26: quantity did not reverse back to its original value', `Quantity field should read back to ${qtyBefore}`);
+    await assertOrDump(String(qtyReversed) === String(qtyBefore), 'R27: quantity did not reverse back to its original value', `Quantity field should read back to ${qtyBefore}`);
 
     // Step 3 — Limit -> Market -> Limit via the swap toggle, printing each mode.
     const modeBefore = await orderPadPage.getPriceMode();
@@ -987,36 +1008,36 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(500);
     const modeAfterSwap1 = await orderPadPage.getPriceMode();
     console.log(`  ℹ  Market/Limit swap tapped: ${swappedToMarket}  |  Price mode now: ${modeAfterSwap1}`);
-    await assertOrDump(swappedToMarket, 'R26: could not tap the Market/Limit swap toggle', 'Market/Limit swap toggle should be tappable');
+    await assertOrDump(swappedToMarket, 'R27: could not tap the Market/Limit swap toggle', 'Market/Limit swap toggle should be tappable');
 
     const swappedBack = await orderPadPage.tapMarketLimitSwap();
     await browser.pause(500);
     const modeAfterSwap2 = await orderPadPage.getPriceMode();
     console.log(`  ℹ  Swapped back: ${swappedBack}  |  Price mode now: ${modeAfterSwap2}`);
-    await assertOrDump(modeAfterSwap2 === modeBefore, 'R26: price mode did not return to its original value after two swaps', `Price mode should read back to "${modeBefore}"`);
+    await assertOrDump(modeAfterSwap2 === modeBefore, 'R27: price mode did not return to its original value after two swaps', `Price mode should read back to "${modeBefore}"`);
 
     // Step 4 — click the price field, remove the existing value, enter 0.00.
     const priceBefore = await orderPadPage.getPrice();
     console.log(`  ℹ  Price before: ${priceBefore}`);
     const priceEdited = await orderPadPage.setPrice('0.00');
     console.log(`  ℹ  Price field clicked, cleared, and 0.00 entered: ${priceEdited}`);
-    await assertOrDump(priceEdited, 'R26: could not click/clear/enter the price field', 'Price field should be clickable and editable');
+    await assertOrDump(priceEdited, 'R27: could not click/clear/enter the price field', 'Price field should be clickable and editable');
     await browser.pause(300);
     const priceAfter = await orderPadPage.getPrice();
     console.log(`  ℹ  Price field now reads: ${priceAfter}`);
-    await assertOrDump(priceAfter === '0.00', 'R26: price field did not accept 0.00', 'Price field should read 0.00 after clearing and re-entering it');
+    await assertOrDump(priceAfter === '0.00', 'R27: price field did not accept 0.00', 'Price field should read 0.00 after clearing and re-entering it');
 
-    console.log('  ℹ  R26 complete — BUY/SELL were not tapped at any point');
+    console.log('  ℹ  R27 complete — BUY/SELL were not tapped at any point');
   });
 
-  // Continues directly from R26 — OrderPad is still open with price cleared to 0.00.
+  // Continues directly from R27 — OrderPad is still open with price cleared to 0.00.
   //
   // Validation only — taps BUY with this out-of-range price and confirms the DPR
   // (Daily Price Range) guard rejects it, parsing the lower/upper circuit out of the
   // error. Does NOT retry at the corrected price or confirm anything, so no order is
   // placed. Real order placement now lives in the segment-specific tests below
-  // (e.g. R33 for NSE), which reuse this same DPR-bounce technique deliberately.
-  it('R27: Tap Buy with price 0.00 — validate the DPR/circuit-range guard (no order placed)', async function () {
+  // (e.g. R34 for NSE), which reuse this same DPR-bounce technique deliberately.
+  it('R28: Tap Buy with price 0.00 — validate the DPR/circuit-range guard (no order placed)', async function () {
     this.timeout(20000);
 
     const segments = await orderPadPage.getVisibleSegments();
@@ -1024,7 +1045,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     const buyTapped = await orderPadPage.tapBuySubmit();
     console.log(`  ℹ  BUY tapped with price 0.00: ${buyTapped}`);
-    await assertOrDump(buyTapped, 'R27: could not tap BUY submit on OrderPad', 'BUY submit button should be tappable on the OrderPad screen');
+    await assertOrDump(buyTapped, 'R28: could not tap BUY submit on OrderPad', 'BUY submit button should be tappable on the OrderPad screen');
     await browser.pause(1000);
 
     const dprVisible = await orderPadPage.isDprErrorVisible(5000);
@@ -1036,7 +1057,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
       const range = orderPadPage.parseDprRange(dprMessage);
       if (!range) {
-        await dumpScreen('R27: could not parse lower/upper circuit from the DPR message');
+        await dumpScreen('R28: could not parse lower/upper circuit from the DPR message');
         expect.fail(`Could not parse a lower/upper circuit range out of DPR message: "${dprMessage}"`);
       }
       console.log(`  ℹ  Lower circuit: ${range.lower}`);
@@ -1058,13 +1079,13 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
   // Read-only pass over the Orderbook — never taps Cancel All / Convert to Market /
   // Filter (see OrderbookPage's class comment for why), so it's safe to run any time.
-  it('R28: Open the Orderbook and validate its common controls', async function () {
+  it('R29: Open the Orderbook and validate its common controls', async function () {
     this.timeout(20000);
 
     await watchlistPage.tapNavOrders();
     const loaded = await orderbookPage.isLoaded(8000);
     if (!loaded) await orderbookPage.dumpPageSource('r24-orderbook-not-loaded');
-    await assertOrDump(loaded, 'R28: Orderbook screen did not load', 'Orderbook screen should load after tapping the Orders tab');
+    await assertOrDump(loaded, 'R29: Orderbook screen did not load', 'Orderbook screen should load after tapping the Orders tab');
 
     // Search box / filter button - confirmed live (only 7 clickable elements on this screen:
     // the Regular/Basket tabs and the 5 bottom-nav icons) that neither exists on the Orderbook
@@ -1078,7 +1099,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     console.log(`  ℹ  Tab counts — All: ${counts.all}  Pending: ${counts.pending}  Executed: ${counts.executed}  Cancelled: ${counts.cancelled}`);
   });
 
-  // Shared by R29-R32: switch to one Orderbook tab, scroll, and validate its rows
+  // Shared by R30-R33: switch to one Orderbook tab, scroll, and validate its rows
   // (or empty-state message). Segment, Order Type and LTP are rendered as plain visual
   // text with no content-desc or text attribute at all (confirmed via real UI dump) —
   // not accessible, not validated.
@@ -1130,77 +1151,32 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     }
   }
 
-  it('R29: Validate the Orderbook — All tab', async function () {
+  it('R30: Validate the Orderbook — All tab', async function () {
     this.timeout(20000);
-    await validateOrderbookTab('R29', 'all');
+    await validateOrderbookTab('R30', 'all');
   });
 
-  it('R30: Validate the Orderbook — Pending tab', async function () {
+  it('R31: Validate the Orderbook — Pending tab', async function () {
     this.timeout(20000);
-    await validateOrderbookTab('R30', 'pending');
+    await validateOrderbookTab('R31', 'pending');
   });
 
-  it('R31: Validate the Orderbook — Executed tab', async function () {
+  it('R32: Validate the Orderbook — Executed tab', async function () {
     this.timeout(20000);
-    await validateOrderbookTab('R31', 'executed');
+    await validateOrderbookTab('R32', 'executed');
   });
 
-  it('R32: Validate the Orderbook — Cancelled tab', async function () {
+  it('R33: Validate the Orderbook — Cancelled tab', async function () {
     this.timeout(20000);
-    await validateOrderbookTab('R32', 'cancelled');
+    await validateOrderbookTab('R33', 'cancelled');
     await watchlistPage.goToWatchlist();
   });
 
   // Places a REAL order on the NSE segment — searches for a known NSE symbol directly
   // (rather than whatever happens to be first in a watchlist), then reuses the same
-  // DPR-bounce technique as R27: enter 0.00, let the DPR guard reject it, retry at the
+  // DPR-bounce technique as R28: enter 0.00, let the DPR guard reject it, retry at the
   // parsed lower circuit price, and confirm. Explicitly authorized per segment.
-  it('R33: Place a real order for the NSE segment — search "IDEA", DPR-bounce to the lower circuit', async function () {
-    this.timeout(60000);
-
-    await watchlistPage.goToWatchlist();
-    await watchlistPage.tapSearchBox();
-    const searchOpen = await watchlistPage.isDisplayed(WL_SEL.searchInput, 5000);
-    await assertOrDump(searchOpen, 'R33: search overlay did not open', 'Search overlay input should be visible after tapping search');
-
-    const results = await searchAndGetResults('IDEA');
-    console.log(`  ℹ  "IDEA" search results: ${results.length}`);
-    await assertOrDump(results.length > 0, 'R33: "IDEA" not found in search results', 'Search should return at least one result for "IDEA"');
-
-    await results[0].click();
-    await browser.pause(500);
-
-    const quoteOpen = await quotePage.isLoaded(8000);
-    await assertOrDump(quoteOpen, 'R33: Quote screen did not open for IDEA', 'Quote screen should open after selecting IDEA from search');
-
-    const limits = await getLowerCircuitFromQuote('R33');
-    console.log(`  ℹ  IDEA (NSE) — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
-
-    const buyTapped = await quotePage.tapBuyButton();
-    console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
-    await assertOrDump(buyTapped, 'R33: could not tap Buy on the Quote screen', 'Buy button should be tappable on the Quote screen');
-    await browser.pause(1000);
-
-    const onOrderPad = await orderPadPage.isLoaded(8000);
-    await assertOrDump(onOrderPad, 'R33: OrderPad screen did not open for IDEA', 'OrderPad screen should open after tapping Buy');
-
-    const symbolName = await enterPriceOnOrderPad('R33', limits.lower);
-
-    if (!PLACE_REAL_ORDERS) {
-      console.log('  ℹ  PLACE_REAL_ORDERS not set - stopping here (price entered, BUY not submitted).');
-      await orderPadPage.goBack();
-      await watchlistPage.goToWatchlist();
-      return;
-    }
-
-    await submitAndConfirmOrder('R33', limits.lower, symbolName);
-  });
-
-  // Places a REAL order on the BSE segment — RTNPOWER trades on both NSE and BSE, so
-  // it doesn't matter which of the two search rows is opened (the search results don't
-  // expose which is which via accessibility); the exchange toggle on the OrderPad is
-  // used to explicitly select BSE regardless.
-  it('R34: Place a real order for the BSE segment — search "RTN POWER", DPR-bounce to the lower circuit', async function () {
+  it('R34: Place a real order for the NSE segment — search "IDEA", DPR-bounce to the lower circuit', async function () {
     this.timeout(60000);
 
     await watchlistPage.goToWatchlist();
@@ -1208,18 +1184,18 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const searchOpen = await watchlistPage.isDisplayed(WL_SEL.searchInput, 5000);
     await assertOrDump(searchOpen, 'R34: search overlay did not open', 'Search overlay input should be visible after tapping search');
 
-    const results = await searchAndGetResults('RTN POWER');
-    console.log(`  ℹ  "RTN POWER" search results: ${results.length}`);
-    await assertOrDump(results.length > 0, 'R34: "RTN POWER" not found in search results', 'Search should return at least one result for "RTN POWER"');
+    const results = await searchAndGetResults('IDEA');
+    console.log(`  ℹ  "IDEA" search results: ${results.length}`);
+    await assertOrDump(results.length > 0, 'R34: "IDEA" not found in search results', 'Search should return at least one result for "IDEA"');
 
     await results[0].click();
     await browser.pause(500);
 
     const quoteOpen = await quotePage.isLoaded(8000);
-    await assertOrDump(quoteOpen, 'R34: Quote screen did not open for RTNPOWER', 'Quote screen should open after selecting RTNPOWER from search');
+    await assertOrDump(quoteOpen, 'R34: Quote screen did not open for IDEA', 'Quote screen should open after selecting IDEA from search');
 
     const limits = await getLowerCircuitFromQuote('R34');
-    console.log(`  ℹ  RTNPOWER — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+    console.log(`  ℹ  IDEA (NSE) — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
 
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
@@ -1227,12 +1203,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(1000);
 
     const onOrderPad = await orderPadPage.isLoaded(8000);
-    await assertOrDump(onOrderPad, 'R34: OrderPad screen did not open for RTNPOWER', 'OrderPad screen should open after tapping Buy');
-
-    const bseSelected = await orderPadPage.tapExchange('BSE');
-    console.log(`  ℹ  BSE exchange selected: ${bseSelected}`);
-    await assertOrDump(bseSelected, 'R34: could not select the BSE exchange toggle', 'BSE exchange toggle should be tappable on the OrderPad screen');
-    await browser.pause(300);
+    await assertOrDump(onOrderPad, 'R34: OrderPad screen did not open for IDEA', 'OrderPad screen should open after tapping Buy');
 
     const symbolName = await enterPriceOnOrderPad('R34', limits.lower);
 
@@ -1246,13 +1217,11 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await submitAndConfirmOrder('R34', limits.lower, symbolName);
   });
 
-  // Places a REAL order on the NFO segment — NIFTY 25100 CE. Searches the contract
-  // directly (e.g. "NIFTY 25100 CE" returns one result per expiry) and takes the first
-  // one, rather than drilling through the Option Chain screen — that screen's strike
-  // table only renders what's scrolled into view, so a strike outside that visible
-  // range (like 25100 against a ~24000 spot) was unreachable even though the contract
-  // itself exists and is searchable.
-  it('R35: Place a real order for the NFO segment — NIFTY 25100 CE, DPR-bounce to the lower circuit', async function () {
+  // Places a REAL order on the BSE segment — RTNPOWER trades on both NSE and BSE, so
+  // it doesn't matter which of the two search rows is opened (the search results don't
+  // expose which is which via accessibility); the exchange toggle on the OrderPad is
+  // used to explicitly select BSE regardless.
+  it('R35: Place a real order for the BSE segment — search "RTN POWER", DPR-bounce to the lower circuit', async function () {
     this.timeout(60000);
 
     await watchlistPage.goToWatchlist();
@@ -1260,18 +1229,18 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const searchOpen = await watchlistPage.isDisplayed(WL_SEL.searchInput, 5000);
     await assertOrDump(searchOpen, 'R35: search overlay did not open', 'Search overlay input should be visible after tapping search');
 
-    const results = await searchAndGetResults('NIFTY 25100 CE');
-    console.log(`  ℹ  "NIFTY 25100 CE" search results: ${results.length}`);
-    await assertOrDump(results.length > 0, 'R35: "NIFTY 25100 CE" not found in search results', 'Search should return at least one result for "NIFTY 25100 CE"');
+    const results = await searchAndGetResults('RTN POWER');
+    console.log(`  ℹ  "RTN POWER" search results: ${results.length}`);
+    await assertOrDump(results.length > 0, 'R35: "RTN POWER" not found in search results', 'Search should return at least one result for "RTN POWER"');
 
     await results[0].click();
     await browser.pause(500);
 
     const quoteOpen = await quotePage.isLoaded(8000);
-    await assertOrDump(quoteOpen, 'R35: Quote screen did not open for NIFTY 25100 CE', 'Quote screen should open after selecting the contract');
+    await assertOrDump(quoteOpen, 'R35: Quote screen did not open for RTNPOWER', 'Quote screen should open after selecting RTNPOWER from search');
 
     const limits = await getLowerCircuitFromQuote('R35');
-    console.log(`  ℹ  NIFTY 25100 CE — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+    console.log(`  ℹ  RTNPOWER — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
 
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
@@ -1279,7 +1248,12 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(1000);
 
     const onOrderPad = await orderPadPage.isLoaded(8000);
-    await assertOrDump(onOrderPad, 'R35: OrderPad screen did not open for NIFTY 25100 CE', 'OrderPad screen should open after tapping Buy');
+    await assertOrDump(onOrderPad, 'R35: OrderPad screen did not open for RTNPOWER', 'OrderPad screen should open after tapping Buy');
+
+    const bseSelected = await orderPadPage.tapExchange('BSE');
+    console.log(`  ℹ  BSE exchange selected: ${bseSelected}`);
+    await assertOrDump(bseSelected, 'R35: could not select the BSE exchange toggle', 'BSE exchange toggle should be tappable on the OrderPad screen');
+    await browser.pause(300);
 
     const symbolName = await enterPriceOnOrderPad('R35', limits.lower);
 
@@ -1293,10 +1267,13 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await submitAndConfirmOrder('R35', limits.lower, symbolName);
   });
 
-  // Places a REAL order on the BFO segment — SENSEX 77100 CE. Same direct-search
-  // approach as R35, for the same reason (the target strike sits outside the Option
-  // Chain screen's default visible range).
-  it('R36: Place a real order for the BFO segment — SENSEX 77100 CE, DPR-bounce to the lower circuit', async function () {
+  // Places a REAL order on the NFO segment — NIFTY 25100 CE. Searches the contract
+  // directly (e.g. "NIFTY 25100 CE" returns one result per expiry) and takes the first
+  // one, rather than drilling through the Option Chain screen — that screen's strike
+  // table only renders what's scrolled into view, so a strike outside that visible
+  // range (like 25100 against a ~24000 spot) was unreachable even though the contract
+  // itself exists and is searchable.
+  it('R36: Place a real order for the NFO segment — NIFTY 25100 CE, DPR-bounce to the lower circuit', async function () {
     this.timeout(60000);
 
     await watchlistPage.goToWatchlist();
@@ -1304,18 +1281,18 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const searchOpen = await watchlistPage.isDisplayed(WL_SEL.searchInput, 5000);
     await assertOrDump(searchOpen, 'R36: search overlay did not open', 'Search overlay input should be visible after tapping search');
 
-    const results = await searchAndGetResults('SENSEX 77100 CE');
-    console.log(`  ℹ  "SENSEX 77100 CE" search results: ${results.length}`);
-    await assertOrDump(results.length > 0, 'R36: "SENSEX 77100 CE" not found in search results', 'Search should return at least one result for "SENSEX 77100 CE"');
+    const results = await searchAndGetResults('NIFTY 25100 CE');
+    console.log(`  ℹ  "NIFTY 25100 CE" search results: ${results.length}`);
+    await assertOrDump(results.length > 0, 'R36: "NIFTY 25100 CE" not found in search results', 'Search should return at least one result for "NIFTY 25100 CE"');
 
     await results[0].click();
     await browser.pause(500);
 
     const quoteOpen = await quotePage.isLoaded(8000);
-    await assertOrDump(quoteOpen, 'R36: Quote screen did not open for SENSEX 77100 CE', 'Quote screen should open after selecting the contract');
+    await assertOrDump(quoteOpen, 'R36: Quote screen did not open for NIFTY 25100 CE', 'Quote screen should open after selecting the contract');
 
     const limits = await getLowerCircuitFromQuote('R36');
-    console.log(`  ℹ  SENSEX 77100 CE — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+    console.log(`  ℹ  NIFTY 25100 CE — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
 
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
@@ -1323,7 +1300,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(1000);
 
     const onOrderPad = await orderPadPage.isLoaded(8000);
-    await assertOrDump(onOrderPad, 'R36: OrderPad screen did not open for SENSEX 77100 CE', 'OrderPad screen should open after tapping Buy');
+    await assertOrDump(onOrderPad, 'R36: OrderPad screen did not open for NIFTY 25100 CE', 'OrderPad screen should open after tapping Buy');
 
     const symbolName = await enterPriceOnOrderPad('R36', limits.lower);
 
@@ -1337,25 +1314,29 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await submitAndConfirmOrder('R36', limits.lower, symbolName);
   });
 
-  // Places a REAL order on the CDS segment — Market tab -> Currency -> whichever movers
-  // sub-tab is selected by default (Top Gainers), falling back to Top Losers if that
-  // list is empty -> first symbol shown. Confirmed live that picking the literal first
-  // row without any further check can land on an already-expired same-day contract
-  // (0 LTP, no order-entry fields at all) - a real risk worth knowing about, though not
-  // filtered out here per instruction.
-  it('R37: Place a real order for the CDS segment — first Currency market mover, DPR-bounce to the lower circuit', async function () {
+  // Places a REAL order on the BFO segment — SENSEX 77100 CE. Same direct-search
+  // approach as R36, for the same reason (the target strike sits outside the Option
+  // Chain screen's default visible range).
+  it('R37: Place a real order for the BFO segment — SENSEX 77100 CE, DPR-bounce to the lower circuit', async function () {
     this.timeout(60000);
 
-    const opened = await tapFirstMarketMover('Currency', 'Top Losers');
-    await assertOrDump(opened, 'R37: could not open a Currency market mover', 'Should be able to open a symbol from the Currency market movers list');
-    await browser.pause(1000);
+    await watchlistPage.goToWatchlist();
+    await watchlistPage.tapSearchBox();
+    const searchOpen = await watchlistPage.isDisplayed(WL_SEL.searchInput, 5000);
+    await assertOrDump(searchOpen, 'R37: search overlay did not open', 'Search overlay input should be visible after tapping search');
+
+    const results = await searchAndGetResults('SENSEX 77100 CE');
+    console.log(`  ℹ  "SENSEX 77100 CE" search results: ${results.length}`);
+    await assertOrDump(results.length > 0, 'R37: "SENSEX 77100 CE" not found in search results', 'Search should return at least one result for "SENSEX 77100 CE"');
+
+    await results[0].click();
+    await browser.pause(500);
 
     const quoteOpen = await quotePage.isLoaded(8000);
-    await assertOrDump(quoteOpen, 'R37: Quote screen did not open for the Currency mover', 'Quote screen should open after selecting the symbol');
+    await assertOrDump(quoteOpen, 'R37: Quote screen did not open for SENSEX 77100 CE', 'Quote screen should open after selecting the contract');
 
     const limits = await getLowerCircuitFromQuote('R37');
-    const symbolR37 = await quotePage.getSymbolName();
-    console.log(`  ℹ  ${symbolR37 || 'Currency mover'} — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+    console.log(`  ℹ  SENSEX 77100 CE — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
 
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
@@ -1363,7 +1344,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(1000);
 
     const onOrderPad = await orderPadPage.isLoaded(8000);
-    await assertOrDump(onOrderPad, 'R37: OrderPad screen did not open', 'OrderPad screen should open after tapping Buy');
+    await assertOrDump(onOrderPad, 'R37: OrderPad screen did not open for SENSEX 77100 CE', 'OrderPad screen should open after tapping Buy');
 
     const symbolName = await enterPriceOnOrderPad('R37', limits.lower);
 
@@ -1377,22 +1358,25 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await submitAndConfirmOrder('R37', limits.lower, symbolName);
   });
 
-  // Places a REAL order on the MCX segment — Market tab -> Commodity -> whichever movers
+  // Places a REAL order on the CDS segment — Market tab -> Currency -> whichever movers
   // sub-tab is selected by default (Top Gainers), falling back to Top Losers if that
-  // list is empty -> first symbol shown.
-  it('R38: Place a real order for the MCX segment — first Commodity market mover, DPR-bounce to the lower circuit', async function () {
+  // list is empty -> first symbol shown. Confirmed live that picking the literal first
+  // row without any further check can land on an already-expired same-day contract
+  // (0 LTP, no order-entry fields at all) - a real risk worth knowing about, though not
+  // filtered out here per instruction.
+  it('R38: Place a real order for the CDS segment — first Currency market mover, DPR-bounce to the lower circuit', async function () {
     this.timeout(60000);
 
-    const opened = await tapFirstMarketMover('Commodity', 'Top Losers');
-    await assertOrDump(opened, 'R38: could not open a Commodity market mover', 'Should be able to open a symbol from the Commodity market movers list');
+    const opened = await tapFirstMarketMover('Currency', 'Top Losers');
+    await assertOrDump(opened, 'R38: could not open a Currency market mover', 'Should be able to open a symbol from the Currency market movers list');
     await browser.pause(1000);
 
     const quoteOpen = await quotePage.isLoaded(8000);
-    await assertOrDump(quoteOpen, 'R38: Quote screen did not open for the Commodity mover', 'Quote screen should open after selecting the symbol');
+    await assertOrDump(quoteOpen, 'R38: Quote screen did not open for the Currency mover', 'Quote screen should open after selecting the symbol');
 
     const limits = await getLowerCircuitFromQuote('R38');
     const symbolR38 = await quotePage.getSymbolName();
-    console.log(`  ℹ  ${symbolR38 || 'Commodity mover'} — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+    console.log(`  ℹ  ${symbolR38 || 'Currency mover'} — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
 
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
@@ -1414,10 +1398,47 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await submitAndConfirmOrder('R38', limits.lower, symbolName);
   });
 
+  // Places a REAL order on the MCX segment — Market tab -> Commodity -> whichever movers
+  // sub-tab is selected by default (Top Gainers), falling back to Top Losers if that
+  // list is empty -> first symbol shown.
+  it('R39: Place a real order for the MCX segment — first Commodity market mover, DPR-bounce to the lower circuit', async function () {
+    this.timeout(60000);
+
+    const opened = await tapFirstMarketMover('Commodity', 'Top Losers');
+    await assertOrDump(opened, 'R39: could not open a Commodity market mover', 'Should be able to open a symbol from the Commodity market movers list');
+    await browser.pause(1000);
+
+    const quoteOpen = await quotePage.isLoaded(8000);
+    await assertOrDump(quoteOpen, 'R39: Quote screen did not open for the Commodity mover', 'Quote screen should open after selecting the symbol');
+
+    const limits = await getLowerCircuitFromQuote('R39');
+    const symbolR39 = await quotePage.getSymbolName();
+    console.log(`  ℹ  ${symbolR39 || 'Commodity mover'} — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+
+    const buyTapped = await quotePage.tapBuyButton();
+    console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
+    await assertOrDump(buyTapped, 'R39: could not tap Buy on the Quote screen', 'Buy button should be tappable on the Quote screen');
+    await browser.pause(1000);
+
+    const onOrderPad = await orderPadPage.isLoaded(8000);
+    await assertOrDump(onOrderPad, 'R39: OrderPad screen did not open', 'OrderPad screen should open after tapping Buy');
+
+    const symbolName = await enterPriceOnOrderPad('R39', limits.lower);
+
+    if (!PLACE_REAL_ORDERS) {
+      console.log('  ℹ  PLACE_REAL_ORDERS not set - stopping here (price entered, BUY not submitted).');
+      await orderPadPage.goBack();
+      await watchlistPage.goToWatchlist();
+      return;
+    }
+
+    await submitAndConfirmOrder('R39', limits.lower, symbolName);
+  });
+
   // Read-only pass over the Basket screen (Orders -> Basket tab). A saved basket's
   // EXECUTE button places every item in it as a REAL order — this test only ever
   // reads the basket's contents, and never taps EXECUTE, Edit, or Add symbols.
-  it('R39: Open the Basket screen and open the first saved basket', async function () {
+  it('R40: Open the Basket screen and open the first saved basket', async function () {
     this.timeout(20000);
 
     await watchlistPage.goToWatchlist();
@@ -1425,12 +1446,12 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(1000);
 
     const basketTabTapped = await basketPage.tapBasketTab();
-    await assertOrDump(basketTabTapped, 'R39: could not tap the Basket tab', 'Basket tab should be tappable on the Orders screen');
+    await assertOrDump(basketTabTapped, 'R40: could not tap the Basket tab', 'Basket tab should be tappable on the Orders screen');
     await browser.pause(1000);
 
     const newBasketVisible = await basketPage.isNewBasketVisible();
     console.log(`  ℹ  "New Basket" button visible: ${newBasketVisible}`);
-    await assertOrDump(newBasketVisible, 'R39: "New Basket" button not found', '"New Basket" button should be visible on the Basket tab');
+    await assertOrDump(newBasketVisible, 'R40: "New Basket" button not found', '"New Basket" button should be visible on the Basket tab');
 
     const basketRows = await basketPage.getBasketListRows();
     console.log(`  ℹ  Saved baskets (${basketRows.length}):`);
@@ -1443,26 +1464,26 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     }
 
     const opened = await basketPage.openBasket(0);
-    await assertOrDump(opened, 'R39: could not open the first saved basket', 'The first saved basket should be tappable');
+    await assertOrDump(opened, 'R40: could not open the first saved basket', 'The first saved basket should be tappable');
     await browser.pause(1000);
 
     const detailLoaded = await basketPage.isBasketDetailLoaded(5000);
-    await assertOrDump(detailLoaded, 'R39: basket detail screen did not load', 'Basket detail screen should load after opening a basket');
+    await assertOrDump(detailLoaded, 'R40: basket detail screen did not load', 'Basket detail screen should load after opening a basket');
   });
 
-  // Continues directly from R39 — the basket detail screen is still open (unless
-  // R39 found no saved baskets, in which case this is a no-op).
-  it("R40: Validate the opened basket's items and EXECUTE button (no execute)", async function () {
+  // Continues directly from R40 — the basket detail screen is still open (unless
+  // R40 found no saved baskets, in which case this is a no-op).
+  it("R41: Validate the opened basket's items and EXECUTE button (no execute)", async function () {
     this.timeout(20000);
 
     if (!await basketPage.isBasketDetailLoaded(2000)) {
-      console.log('  ℹ  No basket detail screen open (R39 found no saved baskets) — nothing to validate.');
+      console.log('  ℹ  No basket detail screen open (R40 found no saved baskets) — nothing to validate.');
       return;
     }
 
     const itemCount = await basketPage.getItemCount();
     console.log(`  ℹ  Item count: ${itemCount ? `${itemCount.loaded}/${itemCount.total}` : 'unknown'}`);
-    await assertOrDump(!!itemCount, 'R40: item count not found on basket detail screen', 'Basket detail screen should show a "loaded/total items" count');
+    await assertOrDump(!!itemCount, 'R41: item count not found on basket detail screen', 'Basket detail screen should show a "loaded/total items" count');
 
     // Scroll down then back up, printing and validating whatever items are visible.
     await basketPage.swipeUp();
@@ -1475,21 +1496,21 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(400);
     const items = await basketPage.getBasketItems();
     console.log(`  ℹ  Items after scrolling back up (${items.length}):`);
-    await assertOrDump(items.length > 0, 'R40: no basket items found', 'Basket detail screen should show at least one item');
+    await assertOrDump(items.length > 0, 'R41: no basket items found', 'Basket detail screen should show at least one item');
     for (const item of items) {
       console.log(`  ℹ  ${item.side} ${item.name} — qty=${item.qty} price=${item.price} exchange=${item.exchange} product=${item.productType} order=${item.orderType}`);
       await assertOrDump(!!(item.side && item.name && item.qty && item.price && item.exchange),
-        'R40: could not parse a basket item', `Row "${item.raw}" should parse into side/name/qty/price/exchange`);
+        'R41: could not parse a basket item', `Row "${item.raw}" should parse into side/name/qty/price/exchange`);
     }
 
     // EXECUTE is present but deliberately never tapped — it would place every item as a real order.
     const executeVisible = await basketPage.isExecuteVisible();
     console.log(`  ℹ  EXECUTE button visible: ${executeVisible}`);
-    await assertOrDump(executeVisible, 'R40: EXECUTE button not found on basket detail screen', 'EXECUTE button should be visible on the basket detail screen');
+    await assertOrDump(executeVisible, 'R41: EXECUTE button not found on basket detail screen', 'EXECUTE button should be visible on the basket detail screen');
 
     const closed = await basketPage.closeBasketDetail();
     console.log(`  ℹ  Basket detail closed: ${closed}`);
-    await assertOrDump(closed, 'R40: could not close the basket detail screen', 'Basket detail screen should be closable');
+    await assertOrDump(closed, 'R41: could not close the basket detail screen', 'Basket detail screen should be closable');
     await browser.pause(500);
 
     await watchlistPage.goToWatchlist();
@@ -1498,16 +1519,16 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // Read-only pass over Funds/Margin and its sub-screens. Withdraw Funds' "Proceed"
   // and Add Funds' payment-method options both move real money — this test only ever
   // validates that they're present, never taps them.
-  it('R41: Open the Funds screen and validate its fields', async function () {
+  it('R42: Open the Funds screen and validate its fields', async function () {
     this.timeout(20000);
 
     await watchlistPage.goToWatchlist();
     const opened = await fundsPage.openFunds();
-    await assertOrDump(opened, 'R41: could not open the Funds screen', 'Should be able to open Funds from the hamburger menu');
+    await assertOrDump(opened, 'R42: could not open the Funds screen', 'Should be able to open Funds from the hamburger menu');
     await browser.pause(800);
 
     const loaded = await fundsPage.isLoaded(8000);
-    await assertOrDump(loaded, 'R41: Funds screen did not load', 'Funds screen should load after selecting Funds from the menu');
+    await assertOrDump(loaded, 'R42: Funds screen did not load', 'Funds screen should load after selecting Funds from the menu');
 
     const fields = await fundsPage.getAllFields();
     console.log('  ℹ  Funds screen fields:');
@@ -1518,33 +1539,33 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       fundsPage.isAddFundsVisible(),
     ]);
     console.log(`  ℹ  View Transactions visible: ${viewTxnVisible}  |  Withdraw Funds visible: ${withdrawVisible}  |  Add Funds visible: ${addFundsVisible}`);
-    await assertOrDump(!!fields.marginAvailable, 'R41: Margin available field not found', 'Margin available to trade should be visible on the Funds screen');
-    await assertOrDump(!!fields.availableFund, 'R41: Available Fund field not found', 'Available Fund should be visible on the Funds screen');
-    await assertOrDump(!!fields.marginUtilised, 'R41: Margin utilised field not found', 'Margin utilised should be visible on the Funds screen');
-    await assertOrDump(!!fields.cashEquivalent, 'R41: Cash Equivalent field not found', 'Cash Equivalent should be visible on the Funds screen');
-    await assertOrDump(!!fields.collateral, 'R41: Collateral field not found', 'Collateral should be visible on the Funds screen');
-    await assertOrDump(!!fields.optionCreditForSale, 'R41: Option Credit for Sale field not found', 'Option Credit for Sale should be visible on the Funds screen');
-    await assertOrDump(viewTxnVisible, 'R41: View Transactions button not found', 'View Transactions button should be visible on the Funds screen');
-    await assertOrDump(withdrawVisible, 'R41: Withdraw Funds button not found', 'Withdraw Funds button should be visible on the Funds screen');
-    await assertOrDump(addFundsVisible, 'R41: Add Funds button not found', 'Add Funds button should be visible on the Funds screen');
+    await assertOrDump(!!fields.marginAvailable, 'R42: Margin available field not found', 'Margin available to trade should be visible on the Funds screen');
+    await assertOrDump(!!fields.availableFund, 'R42: Available Fund field not found', 'Available Fund should be visible on the Funds screen');
+    await assertOrDump(!!fields.marginUtilised, 'R42: Margin utilised field not found', 'Margin utilised should be visible on the Funds screen');
+    await assertOrDump(!!fields.cashEquivalent, 'R42: Cash Equivalent field not found', 'Cash Equivalent should be visible on the Funds screen');
+    await assertOrDump(!!fields.collateral, 'R42: Collateral field not found', 'Collateral should be visible on the Funds screen');
+    await assertOrDump(!!fields.optionCreditForSale, 'R42: Option Credit for Sale field not found', 'Option Credit for Sale should be visible on the Funds screen');
+    await assertOrDump(viewTxnVisible, 'R42: View Transactions button not found', 'View Transactions button should be visible on the Funds screen');
+    await assertOrDump(withdrawVisible, 'R42: Withdraw Funds button not found', 'Withdraw Funds button should be visible on the Funds screen');
+    await assertOrDump(addFundsVisible, 'R42: Add Funds button not found', 'Add Funds button should be visible on the Funds screen');
   });
 
-  it('R42: Funds — View Transactions', async function () {
+  it('R43: Funds — View Transactions', async function () {
     this.timeout(20000);
 
     await watchlistPage.goToWatchlist();
     const opened = await fundsPage.openFunds();
-    await assertOrDump(opened, 'R42: could not open the Funds screen', 'Should be able to open Funds from the hamburger menu');
+    await assertOrDump(opened, 'R43: could not open the Funds screen', 'Should be able to open Funds from the hamburger menu');
     await browser.pause(800);
-    await assertOrDump(await fundsPage.isLoaded(8000), 'R42: Funds screen did not load', 'Funds screen should load after selecting Funds from the menu');
+    await assertOrDump(await fundsPage.isLoaded(8000), 'R43: Funds screen did not load', 'Funds screen should load after selecting Funds from the menu');
 
     // View Transactions: print any transactions (or the empty state), then come back.
     const txnTapped = await fundsPage.tapViewTransactions();
-    await assertOrDump(txnTapped, 'R42: could not tap View Transactions', 'View Transactions button should be tappable');
+    await assertOrDump(txnTapped, 'R43: could not tap View Transactions', 'View Transactions button should be tappable');
     await browser.pause(1000);
 
     const txnLoaded = await fundsPage.isTransactionHistoryLoaded();
-    await assertOrDump(txnLoaded, 'R42: Transaction History screen did not load', 'Transaction History screen should load after tapping View Transactions');
+    await assertOrDump(txnLoaded, 'R43: Transaction History screen did not load', 'Transaction History screen should load after tapping View Transactions');
 
     const noTxn = await fundsPage.isNoTransactionsVisible();
     if (noTxn) {
@@ -1558,38 +1579,11 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await safeBack();
     await browser.pause(800);
     const backOnFunds = await fundsPage.isLoaded(5000);
-    await assertOrDump(backOnFunds, 'R42: did not return to the Funds screen after View Transactions', 'Should return to the Funds screen after viewing transactions');
+    await assertOrDump(backOnFunds, 'R43: did not return to the Funds screen after View Transactions', 'Should return to the Funds screen after viewing transactions');
     await watchlistPage.goToWatchlist();
   });
 
-  it('R43: Funds — Withdraw Funds (no submit)', async function () {
-    this.timeout(20000);
-
-    await watchlistPage.goToWatchlist();
-    const opened = await fundsPage.openFunds();
-    await assertOrDump(opened, 'R43: could not open the Funds screen', 'Should be able to open Funds from the hamburger menu');
-    await browser.pause(800);
-    await assertOrDump(await fundsPage.isLoaded(8000), 'R43: Funds screen did not load', 'Funds screen should load after selecting Funds from the menu');
-
-    // Withdraw Funds: validate it opens, then come back WITHOUT tapping Proceed.
-    const withdrawTapped = await fundsPage.tapWithdrawFunds();
-    await assertOrDump(withdrawTapped, 'R43: could not tap Withdraw Funds', 'Withdraw Funds button should be tappable');
-    await browser.pause(1000);
-
-    const withdrawLoaded = await fundsPage.isWithdrawScreenLoaded();
-    await assertOrDump(withdrawLoaded, 'R43: Withdraw Funds screen did not load', 'Withdraw Funds screen should load after tapping Withdraw Funds');
-    const proceedVisible = await fundsPage.isWithdrawProceedVisible();
-    console.log(`  ℹ  Withdraw Funds screen loaded — Proceed button visible: ${proceedVisible} (never tapped)`);
-    await assertOrDump(proceedVisible, 'R43: Proceed button not found on Withdraw Funds screen', 'Proceed button should be visible on the Withdraw Funds screen');
-
-    await safeBack();
-    await browser.pause(800);
-    const backOnFunds = await fundsPage.isLoaded(5000);
-    await assertOrDump(backOnFunds, 'R43: did not return to the Funds screen after Withdraw Funds', 'Should return to the Funds screen after viewing Withdraw Funds');
-    await watchlistPage.goToWatchlist();
-  });
-
-  it('R44: Funds — Add Funds (no submit)', async function () {
+  it('R44: Funds — Withdraw Funds (no submit)', async function () {
     this.timeout(20000);
 
     await watchlistPage.goToWatchlist();
@@ -1598,32 +1592,59 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(800);
     await assertOrDump(await fundsPage.isLoaded(8000), 'R44: Funds screen did not load', 'Funds screen should load after selecting Funds from the menu');
 
+    // Withdraw Funds: validate it opens, then come back WITHOUT tapping Proceed.
+    const withdrawTapped = await fundsPage.tapWithdrawFunds();
+    await assertOrDump(withdrawTapped, 'R44: could not tap Withdraw Funds', 'Withdraw Funds button should be tappable');
+    await browser.pause(1000);
+
+    const withdrawLoaded = await fundsPage.isWithdrawScreenLoaded();
+    await assertOrDump(withdrawLoaded, 'R44: Withdraw Funds screen did not load', 'Withdraw Funds screen should load after tapping Withdraw Funds');
+    const proceedVisible = await fundsPage.isWithdrawProceedVisible();
+    console.log(`  ℹ  Withdraw Funds screen loaded — Proceed button visible: ${proceedVisible} (never tapped)`);
+    await assertOrDump(proceedVisible, 'R44: Proceed button not found on Withdraw Funds screen', 'Proceed button should be visible on the Withdraw Funds screen');
+
+    await safeBack();
+    await browser.pause(800);
+    const backOnFunds = await fundsPage.isLoaded(5000);
+    await assertOrDump(backOnFunds, 'R44: did not return to the Funds screen after Withdraw Funds', 'Should return to the Funds screen after viewing Withdraw Funds');
+    await watchlistPage.goToWatchlist();
+  });
+
+  it('R45: Funds — Add Funds (no submit)', async function () {
+    this.timeout(20000);
+
+    await watchlistPage.goToWatchlist();
+    const opened = await fundsPage.openFunds();
+    await assertOrDump(opened, 'R45: could not open the Funds screen', 'Should be able to open Funds from the hamburger menu');
+    await browser.pause(800);
+    await assertOrDump(await fundsPage.isLoaded(8000), 'R45: Funds screen did not load', 'Funds screen should load after selecting Funds from the menu');
+
     // Add Funds: validate it opens, then come back WITHOUT selecting a payment method.
     const addFundsTapped = await fundsPage.tapAddFunds();
-    await assertOrDump(addFundsTapped, 'R44: could not tap Add Funds', 'Add Funds button should be tappable');
+    await assertOrDump(addFundsTapped, 'R45: could not tap Add Funds', 'Add Funds button should be tappable');
     await browser.pause(1000);
 
     const addFundsLoaded = await fundsPage.isAddFundsScreenLoaded();
-    await assertOrDump(addFundsLoaded, 'R44: Add Funds screen did not load', 'Add Funds screen should load after tapping Add Funds');
+    await assertOrDump(addFundsLoaded, 'R45: Add Funds screen did not load', 'Add Funds screen should load after tapping Add Funds');
     const paymentMethodsVisible = await fundsPage.isPaymentMethodsVisible();
     console.log(`  ℹ  Add Funds screen loaded — payment methods visible: ${paymentMethodsVisible} (none selected)`);
-    await assertOrDump(paymentMethodsVisible, 'R44: payment method options not found on Add Funds screen', 'UPI/Net Banking options should be visible on the Add Funds screen');
+    await assertOrDump(paymentMethodsVisible, 'R45: payment method options not found on Add Funds screen', 'UPI/Net Banking options should be visible on the Add Funds screen');
 
     await safeBack();
     await browser.pause(800);
     await watchlistPage.goToWatchlist();
   });
 
-  it('R45: Open News, scroll the list, and validate the search field', async function () {
+  it('R46: Open News, scroll the list, and validate the search field', async function () {
     this.timeout(30000);
 
     await watchlistPage.goToWatchlist();
     const opened = await newsPage.openNews();
-    await assertOrDump(opened, 'R45: could not open the News screen', 'Should be able to open News from the hamburger menu');
+    await assertOrDump(opened, 'R46: could not open the News screen', 'Should be able to open News from the hamburger menu');
     await browser.pause(800);
 
     const loaded = await newsPage.isLoaded(8000);
-    await assertOrDump(loaded, 'R45: News screen did not load', 'News screen should load after selecting News from the menu');
+    await assertOrDump(loaded, 'R46: News screen did not load', 'News screen should load after selecting News from the menu');
 
     // Lands on "All" by default; scroll the list down then back up.
     await newsPage.scrollList('down');
@@ -1632,17 +1653,17 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     const searchVisible = await newsPage.isSearchFieldVisible();
     console.log(`  ℹ  News search field visible: ${searchVisible}`);
-    await assertOrDump(searchVisible, 'R45: search field not found on News screen', 'Search field should be visible on the News screen');
+    await assertOrDump(searchVisible, 'R46: search field not found on News screen', 'Search field should be visible on the News screen');
   });
 
-  it('R46: Click through every News tab', async function () {
+  it('R47: Click through every News tab', async function () {
     this.timeout(30000);
 
     await watchlistPage.goToWatchlist();
     const opened = await newsPage.openNews();
-    await assertOrDump(opened, 'R46: could not open the News screen', 'Should be able to open News from the hamburger menu');
+    await assertOrDump(opened, 'R47: could not open the News screen', 'Should be able to open News from the hamburger menu');
     await browser.pause(800);
-    await assertOrDump(await newsPage.isLoaded(8000), 'R46: News screen did not load', 'News screen should load after selecting News from the menu');
+    await assertOrDump(await newsPage.isLoaded(8000), 'R47: News screen did not load', 'News screen should load after selecting News from the menu');
 
     // Click through every tab (All / Result / Block Deals / Equity / Commentary / ...).
     const tabsTapped = await newsPage.tapAllTabs();
@@ -1652,48 +1673,48 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await newsPage.closeNews();
     await browser.pause(800);
     const backOnWatchlist = await watchlistPage.isLoaded(5000);
-    await assertOrDump(backOnWatchlist, 'R46: did not return to Watchlist after closing News', 'Should return to Watchlist after closing News');
+    await assertOrDump(backOnWatchlist, 'R47: did not return to Watchlist after closing News', 'Should return to Watchlist after closing News');
   });
 
-  it('R47: Open Alerts and print existing entries with Enabled/Disabled status', async function () {
+  it('R48: Open Alerts and print existing entries with Enabled/Disabled status', async function () {
     this.timeout(20000);
 
     await watchlistPage.goToWatchlist();
     const opened = await alertsPage.openAlerts();
-    await assertOrDump(opened, 'R47: could not open the Alerts screen', 'Should be able to open Alerts from the hamburger menu');
+    await assertOrDump(opened, 'R48: could not open the Alerts screen', 'Should be able to open Alerts from the hamburger menu');
     await browser.pause(800);
 
     const loaded = await alertsPage.isLoaded(8000);
-    await assertOrDump(loaded, 'R47: Alerts screen did not load', 'Alerts screen should load after selecting Alerts from the menu');
+    await assertOrDump(loaded, 'R48: Alerts screen did not load', 'Alerts screen should load after selecting Alerts from the menu');
 
     const entries = await alertsPage.getAlertEntries();
     console.log(`  ℹ  Existing alerts (${entries.length}):`);
     entries.forEach((e, i) => console.log(`     [${i}] ${e.symbol} (${e.exchange}) — Status: ${e.status}`));
   });
 
-  // Continues directly from R47 — the Alerts screen is still open.
-  it('R48: Create a price Alert for TCS (LTP + ~10%)', async function () {
+  // Continues directly from R48 — the Alerts screen is still open.
+  it('R49: Create a price Alert for TCS (LTP + ~10%)', async function () {
     this.timeout(30000);
 
     // Add Alert → search TCS → open its Set Alert screen.
     const addTapped = await alertsPage.tapAddAlert();
-    await assertOrDump(addTapped, 'R48: could not tap Add Alert', 'Add Alert button should be tappable');
+    await assertOrDump(addTapped, 'R49: could not tap Add Alert', 'Add Alert button should be tappable');
     await browser.pause(800);
 
     const searched = await alertsPage.searchSymbol('TCS');
-    await assertOrDump(searched, 'R48: no search results for TCS', 'Searching TCS should return at least one result');
+    await assertOrDump(searched, 'R49: no search results for TCS', 'Searching TCS should return at least one result');
     const resultTapped = await alertsPage.tapFirstSearchResult();
-    await assertOrDump(resultTapped, 'R48: could not tap the TCS search result', 'Should be able to tap the first TCS search result');
+    await assertOrDump(resultTapped, 'R49: could not tap the TCS search result', 'Should be able to tap the first TCS search result');
     await browser.pause(1000);
 
     const onSetAlert = await alertsPage.isSetAlertScreenLoaded();
-    await assertOrDump(onSetAlert, 'R48: Set Alert screen did not load', 'Set Alert screen should load after picking TCS');
+    await assertOrDump(onSetAlert, 'R49: Set Alert screen did not load', 'Set Alert screen should load after picking TCS');
 
     // Print the LTP, then set the target value ~10% above it (QA-automation example
     // value only — not a real trading signal).
     const ltp = await alertsPage.getLtp();
     console.log(`  ℹ  TCS LTP: ${ltp}`);
-    await assertOrDump(ltp !== null, 'R48: could not read TCS LTP', 'LTP should be readable on the Set Alert screen');
+    await assertOrDump(ltp !== null, 'R49: could not read TCS LTP', 'LTP should be readable on the Set Alert screen');
 
     const targetValue = (Math.round(ltp * 1.10 * 100) / 100).toFixed(2);
     console.log(`  ℹ  Setting alert value to ${targetValue} (LTP + ~10%, QA automation example)`);
@@ -1709,42 +1730,42 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(1000);
 
     const backOnAlerts = await alertsPage.isLoaded(5000);
-    await assertOrDump(backOnAlerts, 'R48: did not return to the Alerts screen after creating the alert', 'Should return to Alerts screen after creating the alert');
+    await assertOrDump(backOnAlerts, 'R49: did not return to the Alerts screen after creating the alert', 'Should return to Alerts screen after creating the alert');
 
     const entriesAfter = await alertsPage.getAlertEntries();
     const created = entriesAfter.find(e => e.symbol === 'TCS' && hasTargetValue(e.raw));
     console.log(`  ℹ  New alert created: ${created ? created.raw.split(/&#10;|\n/).slice(2).join(' ') : 'NOT FOUND'}`);
-    await assertOrDump(!!created, 'R48: newly created TCS alert not found in the list', 'The TCS alert just created should appear in the Alerts list');
+    await assertOrDump(!!created, 'R49: newly created TCS alert not found in the list', 'The TCS alert just created should appear in the Alerts list');
   });
 
-  // Continues directly from R48 — deletes whatever alert is now topmost (alerts sort
-  // newest-first, confirmed via real dumps, so that's the one R48 just created). The
+  // Continues directly from R49 — deletes whatever alert is now topmost (alerts sort
+  // newest-first, confirmed via real dumps, so that's the one R49 just created). The
   // Dev backend has been observed to return "Internal server error" on delete — retry
   // a few times before giving up, since that's an environment issue, not a test bug
   // (mirrors the retry pattern used for OTP submission elsewhere).
-  it('R49: Delete the created Alert (with confirm popup)', async function () {
+  it('R50: Delete the created Alert (with confirm popup)', async function () {
     this.timeout(30000);
 
     const beforeEntries = await alertsPage.getAlertEntries();
     const targetRaw = beforeEntries[0] ? beforeEntries[0].raw : null;
-    await assertOrDump(!!targetRaw, 'R49: no alert found to delete', 'There should be at least one alert to delete (created by R48)');
+    await assertOrDump(!!targetRaw, 'R50: no alert found to delete', 'There should be at least one alert to delete (created by R49)');
 
     let deleted = false;
     let lastToast = null;
     for (let attempt = 1; attempt <= 3 && !deleted; attempt++) {
       const rowTapped = await alertsPage.tapAlertRow(0);
-      await assertOrDump(rowTapped, 'R49: could not tap the created alert row', 'Should be able to tap the created alert row');
+      await assertOrDump(rowTapped, 'R50: could not tap the created alert row', 'Should be able to tap the created alert row');
       await browser.pause(800);
 
       const sheetLoaded = await alertsPage.isAlertDetailSheetLoaded();
-      await assertOrDump(sheetLoaded, 'R49: alert detail sheet did not load', 'Alert detail sheet (Disable/Edit/Delete) should load after tapping the alert');
+      await assertOrDump(sheetLoaded, 'R50: alert detail sheet did not load', 'Alert detail sheet (Disable/Edit/Delete) should load after tapping the alert');
 
       const deleteTapped = await alertsPage.tapDelete();
-      await assertOrDump(deleteTapped, 'R49: DELETE option not found', 'DELETE option should be visible on the alert detail sheet');
+      await assertOrDump(deleteTapped, 'R50: DELETE option not found', 'DELETE option should be visible on the alert detail sheet');
       await browser.pause(600);
 
       const confirmVisible = await alertsPage.isDeleteConfirmVisible();
-      await assertOrDump(confirmVisible, 'R49: delete confirmation popup did not appear', 'A confirmation popup should appear after tapping DELETE');
+      await assertOrDump(confirmVisible, 'R50: delete confirmation popup did not appear', 'A confirmation popup should appear after tapping DELETE');
 
       await alertsPage.confirmDelete();
       lastToast = await alertsPage.captureToast(3000);
@@ -1762,83 +1783,83 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await watchlistPage.goToWatchlist();
   });
 
-  it('R50: NxtOption — Strategy Builder', async function () {
+  it('R51: NxtOption — Strategy Builder', async function () {
     this.timeout(20000);
 
     await watchlistPage.goToWatchlist();
     const expanded = await nxtOptionPage.openNxtOptionMenu();
-    await assertOrDump(expanded, 'R50: NxtOption dropdown did not expand', 'Tapping NxtOption in the hamburger menu should reveal Strategy Builder / IV Analysis / OI Analysis');
+    await assertOrDump(expanded, 'R51: NxtOption dropdown did not expand', 'Tapping NxtOption in the hamburger menu should reveal Strategy Builder / IV Analysis / OI Analysis');
 
     const sbTapped = await nxtOptionPage.tapStrategyBuilder();
-    await assertOrDump(sbTapped, 'R50: could not tap Strategy Builder', 'Strategy Builder should be tappable from the NxtOption dropdown');
+    await assertOrDump(sbTapped, 'R51: could not tap Strategy Builder', 'Strategy Builder should be tappable from the NxtOption dropdown');
     await browser.pause(800);
 
     const sbLoaded = await nxtOptionPage.isStrategyBuilderLoaded();
-    await assertOrDump(sbLoaded, 'R50: Strategy Builder screen did not load', 'Strategy Builder screen should load after tapping it');
+    await assertOrDump(sbLoaded, 'R51: Strategy Builder screen did not load', 'Strategy Builder screen should load after tapping it');
 
     await nxtOptionPage.goBack();
     await browser.pause(800);
     const backOnWatchlist = await watchlistPage.isLoaded(5000);
     console.log(`  ℹ  Back from Strategy Builder lands on Watchlist directly: ${backOnWatchlist}`);
-    await assertOrDump(backOnWatchlist, 'R50: did not return to Watchlist after Strategy Builder', 'Back from Strategy Builder should return to Watchlist');
+    await assertOrDump(backOnWatchlist, 'R51: did not return to Watchlist after Strategy Builder', 'Back from Strategy Builder should return to Watchlist');
   });
 
-  it('R51: NxtOption — IV Analysis', async function () {
+  it('R52: NxtOption — IV Analysis', async function () {
     this.timeout(20000);
 
     await watchlistPage.goToWatchlist();
     const expanded = await nxtOptionPage.openNxtOptionMenu();
-    await assertOrDump(expanded, 'R51: NxtOption dropdown did not expand', 'NxtOption dropdown should expand for IV Analysis');
+    await assertOrDump(expanded, 'R52: NxtOption dropdown did not expand', 'NxtOption dropdown should expand for IV Analysis');
 
     const ivTapped = await nxtOptionPage.tapIvAnalysis();
-    await assertOrDump(ivTapped, 'R51: could not tap IV Analysis', 'IV Analysis should be tappable from the NxtOption dropdown');
+    await assertOrDump(ivTapped, 'R52: could not tap IV Analysis', 'IV Analysis should be tappable from the NxtOption dropdown');
     await browser.pause(800);
 
     const ivLoaded = await nxtOptionPage.isIvAnalysisLoaded();
-    await assertOrDump(ivLoaded, 'R51: IV Analysis screen did not load', 'IV Analysis screen should load after tapping it');
+    await assertOrDump(ivLoaded, 'R52: IV Analysis screen did not load', 'IV Analysis screen should load after tapping it');
 
     await nxtOptionPage.goBack();
     await browser.pause(800);
     const backOnWatchlist = await watchlistPage.isLoaded(5000);
-    await assertOrDump(backOnWatchlist, 'R51: did not return to Watchlist after IV Analysis', 'Back from IV Analysis should return to Watchlist');
+    await assertOrDump(backOnWatchlist, 'R52: did not return to Watchlist after IV Analysis', 'Back from IV Analysis should return to Watchlist');
   });
 
-  it('R52: NxtOption — OI Analysis', async function () {
+  it('R53: NxtOption — OI Analysis', async function () {
     this.timeout(20000);
 
     await watchlistPage.goToWatchlist();
     const expanded = await nxtOptionPage.openNxtOptionMenu();
-    await assertOrDump(expanded, 'R52: NxtOption dropdown did not expand', 'NxtOption dropdown should expand for OI Analysis');
+    await assertOrDump(expanded, 'R53: NxtOption dropdown did not expand', 'NxtOption dropdown should expand for OI Analysis');
 
     const oiTapped = await nxtOptionPage.tapOiAnalysis();
-    await assertOrDump(oiTapped, 'R52: could not tap OI Analysis', 'OI Analysis should be tappable from the NxtOption dropdown');
+    await assertOrDump(oiTapped, 'R53: could not tap OI Analysis', 'OI Analysis should be tappable from the NxtOption dropdown');
     await browser.pause(800);
 
     const oiLoaded = await nxtOptionPage.isOiAnalysisLoaded();
-    await assertOrDump(oiLoaded, 'R52: OI Analysis screen did not load', 'OI Analysis screen should load after tapping it');
+    await assertOrDump(oiLoaded, 'R53: OI Analysis screen did not load', 'OI Analysis screen should load after tapping it');
 
     await nxtOptionPage.goBack();
     await browser.pause(800);
     const backOnWatchlist = await watchlistPage.isLoaded(5000);
-    await assertOrDump(backOnWatchlist, 'R52: did not return to Watchlist after OI Analysis', 'Back from OI Analysis should return to Watchlist');
+    await assertOrDump(backOnWatchlist, 'R53: did not return to Watchlist after OI Analysis', 'Back from OI Analysis should return to Watchlist');
   });
 
-  it('R53: Validate Portfolio — Holdings fields', async function () {
+  it('R54: Validate Portfolio — Holdings fields', async function () {
     this.timeout(30000);
 
     const opened = await portfolioPage.openPortfolio();
-    await assertOrDump(opened, 'R53: could not open the Portfolio tab', 'Portfolio bottom-nav tab should be tappable');
+    await assertOrDump(opened, 'R54: could not open the Portfolio tab', 'Portfolio bottom-nav tab should be tappable');
     await browser.pause(800);
 
     const loaded = await portfolioPage.isLoaded(8000);
-    await assertOrDump(loaded, 'R53: Portfolio screen did not load', 'Portfolio screen should show Holdings and Positions tabs');
+    await assertOrDump(loaded, 'R54: Portfolio screen did not load', 'Portfolio screen should show Holdings and Positions tabs');
 
     const holdingsCount = await portfolioPage.getHoldingsCount();
     console.log(`  ℹ  Holdings count: ${holdingsCount}`);
 
     const summary = await portfolioPage.getHoldingsSummary();
     console.log(`  ℹ  Holdings summary — Current: ${summary.currentValue}, Overall P&L: ${summary.overallPnl}, Invested: ${summary.investedValue}, Today's P&L: ${summary.todayPnl}`);
-    await assertOrDump(!!summary.currentValue && !!summary.investedValue, 'R53: Holdings summary fields not found', 'Current and Invested value should be visible on the Holdings tab');
+    await assertOrDump(!!summary.currentValue && !!summary.investedValue, 'R54: Holdings summary fields not found', 'Current and Invested value should be visible on the Holdings tab');
 
     const holdingsRows = await portfolioPage.getHoldingsRows();
     console.log(`  ℹ  Holdings rows (${holdingsRows.length}):`);
@@ -1846,19 +1867,19 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     if (holdingsRows.length > 0) {
       const rowTapped = await portfolioPage.tapHoldingRow(0);
-      await assertOrDump(rowTapped, 'R53: could not tap the first holding row', 'A holding row should be tappable');
+      await assertOrDump(rowTapped, 'R54: could not tap the first holding row', 'A holding row should be tappable');
       await browser.pause(1000);
 
       const detailLoaded = await portfolioPage.isHoldingDetailLoaded();
-      await assertOrDump(detailLoaded, 'R53: holding detail screen did not load', 'Holding detail screen should load after tapping a holding row');
+      await assertOrDump(detailLoaded, 'R54: holding detail screen did not load', 'Holding detail screen should load after tapping a holding row');
 
       const fields = await portfolioPage.getHoldingDetailFields();
       console.log('  ℹ  Holding detail fields:');
       for (const [key, value] of Object.entries(fields)) console.log(`     - ${key}: ${value}`);
-      await assertOrDump(!!fields.stockDetails, 'R53: Stock details field not found', 'Stock details should be visible on the holding detail screen');
-      await assertOrDump(!!fields.avgPrice, 'R53: Average Price field not found', 'Average Price should be visible on the holding detail screen');
-      await assertOrDump(!!fields.marketValue, 'R53: Market Value field not found', 'Market Value should be visible on the holding detail screen');
-      await assertOrDump(!!fields.investedValue, 'R53: Invested Value field not found', 'Invested Value should be visible on the holding detail screen');
+      await assertOrDump(!!fields.stockDetails, 'R54: Stock details field not found', 'Stock details should be visible on the holding detail screen');
+      await assertOrDump(!!fields.avgPrice, 'R54: Average Price field not found', 'Average Price should be visible on the holding detail screen');
+      await assertOrDump(!!fields.marketValue, 'R54: Market Value field not found', 'Market Value should be visible on the holding detail screen');
+      await assertOrDump(!!fields.investedValue, 'R54: Invested Value field not found', 'Invested Value should be visible on the holding detail screen');
 
       const [squareOffVisible, buyMoreVisible] = await Promise.all([
         portfolioPage.isSquareOffVisible(),
@@ -1875,16 +1896,16 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await watchlistPage.goToWatchlist();
   });
 
-  it('R54: Validate Portfolio — Positions fields', async function () {
+  it('R55: Validate Portfolio — Positions fields', async function () {
     this.timeout(20000);
 
     const opened = await portfolioPage.openPortfolio();
-    await assertOrDump(opened, 'R54: could not open the Portfolio tab', 'Portfolio bottom-nav tab should be tappable');
+    await assertOrDump(opened, 'R55: could not open the Portfolio tab', 'Portfolio bottom-nav tab should be tappable');
     await browser.pause(800);
-    await assertOrDump(await portfolioPage.isLoaded(8000), 'R54: Portfolio screen did not load', 'Portfolio screen should show Holdings and Positions tabs');
+    await assertOrDump(await portfolioPage.isLoaded(8000), 'R55: Portfolio screen did not load', 'Portfolio screen should show Holdings and Positions tabs');
 
     const posTapped = await portfolioPage.tapPositionsTab();
-    await assertOrDump(posTapped, 'R54: could not tap the Positions tab', 'Positions tab should be tappable');
+    await assertOrDump(posTapped, 'R55: could not tap the Positions tab', 'Positions tab should be tappable');
     await browser.pause(800);
 
     const positionsCount = await portfolioPage.getPositionsCount();
@@ -1893,14 +1914,145 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     if (positionsCount === 0) {
       const noPositions = await portfolioPage.isNoPositionsVisible();
       console.log(`  ℹ  "You don't have any positions" empty-state message visible: ${noPositions}`);
-      await assertOrDump(noPositions, 'R54: empty-state message not found on Positions tab', 'Empty-state message should be visible when there are no positions');
+      await assertOrDump(noPositions, 'R55: empty-state message not found on Positions tab', 'Empty-state message should be visible when there are no positions');
     } else {
       const positionRows = await portfolioPage.getPositionRows();
       console.log(`  ℹ  Position rows (${positionRows.length}):`);
       positionRows.forEach((r, i) => console.log(`     [${i}] ${r}`));
-      await assertOrDump(positionRows.length > 0, 'R54: Positions count > 0 but no rows parsed', 'Position rows should be parseable when the count is above 0');
+      await assertOrDump(positionRows.length > 0, 'R55: Positions count > 0 but no rows parsed', 'Position rows should be parseable when the count is above 0');
     }
 
     await watchlistPage.goToWatchlist();
+  });
+
+  it('R56: Mutual Funds — Home, High Returns, first fund One Time & Start SIP', async function () {
+    this.timeout(60000);
+
+    await watchlistPage.tapNavMutualFunds();
+    await browser.pause(1000);
+    const homeLoaded = await mutualFundsPage.isHomeTabDisplayed();
+    await assertOrDump(homeLoaded, 'R56: Mutual Funds Home tab did not load', 'Mutual Funds Home tab should be displayed after tapping the bottom nav');
+
+    const tileCount = await mutualFundsPage.getHighReturnsTileCount();
+    console.log(`  ℹ  High Returns tile count: ${tileCount}`);
+    await mutualFundsPage.clickHighReturnsCollection();
+    await browser.pause(1000);
+    const listCount = await mutualFundsPage.getFundListHeaderCount();
+    console.log(`  ℹ  High Returns list header count: ${listCount} (tile said ${tileCount}) — ${tileCount !== null && tileCount === listCount ? 'match' : 'mismatch'}`);
+
+    const fundName = await mutualFundsPage.clickFirstFund();
+    console.log(`  ℹ  Clicked first fund: "${fundName}"`);
+    await browser.pause(1500);
+
+    const oneTimeOpened = await mutualFundsPage.clickOneTimeButton();
+    await assertOrDump(oneTimeOpened, 'R56: could not open One Time order pad', 'One Time button should be tappable on the fund detail screen');
+    await browser.pause(1000);
+    await mutualFundsPage.goBack();
+
+    const sipOpened = await mutualFundsPage.clickStartSipButtonIfApplicable();
+    console.log(`  ℹ  Start SIP order pad opened: ${sipOpened}`);
+    if (sipOpened) {
+      await browser.pause(1000);
+      await mutualFundsPage.goBack();
+    }
+
+    const backOnHome = await mutualFundsPage.navigateBackToHome();
+    await assertOrDump(backOnHome, 'R56: did not return to Mutual Funds Home', 'Navigating back from the fund detail flow should reach the Mutual Funds Home tab');
+
+    await watchlistPage.goToWatchlist();
+  });
+
+  it('R57: Mutual Funds — Explore, category count, Equity → All', async function () {
+    this.timeout(45000);
+
+    await watchlistPage.tapNavMutualFunds();
+    await browser.pause(1000);
+
+    const exploreTapped = await mutualFundsPage.clickExploreTab();
+    await assertOrDump(exploreTapped, 'R57: could not tap the Explore tab', 'Explore tab should be tappable from Mutual Funds');
+    await browser.pause(1000);
+
+    const categories = await mutualFundsPage.countCategorySolutionsHeaders();
+    console.log(`  ℹ  Category Solutions — ${categories.length} categor${categories.length === 1 ? 'y' : 'ies'} found: ${categories.join(', ')}`);
+    await assertOrDump(categories.length > 0, 'R57: no Category Solutions headers found', 'At least one category should be found under Category Solutions');
+
+    await mutualFundsPage.scrollExploreToTop();
+    const equityCount = await mutualFundsPage.getCategoryFundCount('Equity');
+    console.log(`  ℹ  Equity category card shows: ${equityCount} funds`);
+
+    const equityExpanded = await mutualFundsPage.clickCategoryCard('Equity');
+    await assertOrDump(equityExpanded, 'R57: could not tap the Equity category card', 'Equity category card should be tappable');
+    await browser.pause(1000);
+
+    const equityTags = await mutualFundsPage.getCategoryTags();
+    console.log(`  ℹ  Equity tags: ${equityTags.join(', ')}`);
+
+    const allTapped = await mutualFundsPage.clickCategoryTag('All');
+    await assertOrDump(allTapped, 'R57: could not tap the "All" tag under Equity', '"All" tag should be tappable once Equity is expanded');
+    await browser.pause(1500);
+
+    const allResultsCount = await mutualFundsPage.getFilteredResultsCount();
+    console.log(`  ℹ  "All" tag results: ${allResultsCount} (Equity card said ${equityCount}) — ${equityCount !== null && equityCount === allResultsCount ? 'match' : 'mismatch'}`);
+
+    await mutualFundsPage.goBack();
+    const backOnExplore = await mutualFundsPage.clickCategoryCard('Equity');
+    console.log(`  ℹ  Navigated back to Explore and re-tapped Equity: ${backOnExplore}`);
+
+    await watchlistPage.goToWatchlist();
+  });
+
+  it('R58: Mutual Funds — Portfolio, Active SIPs (if available)', async function () {
+    this.timeout(30000);
+
+    await watchlistPage.tapNavMutualFunds();
+    await browser.pause(1000);
+
+    const portfolioTapped = await mutualFundsPage.clickPortfolioTab();
+    await assertOrDump(portfolioTapped, 'R58: could not tap the Portfolio tab', 'Portfolio tab should be tappable from Mutual Funds');
+    await browser.pause(1000);
+
+    const sipsVisible = await mutualFundsPage.isActiveSipsTileVisible();
+    if (sipsVisible) {
+      const activeSipsCount = await mutualFundsPage.getActiveSipsCount();
+      console.log(`  ℹ  Active SIPs count: ${activeSipsCount}`);
+      await mutualFundsPage.clickActiveSipsTile();
+      await browser.pause(1500);
+      await mutualFundsPage.goBack();
+    } else {
+      console.log('  ℹ  No "Active SIPs" tile visible — skipping (no active SIPs on this account)');
+    }
+
+    const backOnPortfolio = await mutualFundsPage.clickPortfolioTab();
+    console.log(`  ℹ  Navigated back to Mutual Funds Portfolio tab: ${backOnPortfolio}`);
+
+    await watchlistPage.goToWatchlist();
+  });
+
+  it('R59: Mutual Funds — Accounts', async function () {
+    this.timeout(20000);
+
+    await watchlistPage.tapNavMutualFunds();
+    await browser.pause(1000);
+
+    const accountsTapped = await mutualFundsPage.clickAccountsTab();
+    await assertOrDump(accountsTapped, 'R59: could not tap the Accounts tab', 'Accounts tab should be tappable from Mutual Funds');
+    await browser.pause(1000);
+
+    const reportsMenuVisible = await mutualFundsPage.isReportsMenuVisible();
+    await assertOrDump(reportsMenuVisible, 'R59: Accounts tab did not load', 'Reports menu button should be visible on the Accounts tab');
+
+    await watchlistPage.goToWatchlist();
+  });
+
+  it('R60: Logout of the app', async function () {
+    this.timeout(20000);
+
+    await watchlistPage.goToWatchlist();
+    const loggedOut = await loginPage.logout();
+    await assertOrDump(loggedOut, 'R60: could not complete the logout flow', 'Hamburger menu → Logout → Yes should all be tappable');
+    await browser.pause(1000);
+
+    const backOnLogin = await loginPage.waitForLoginScreen(15000);
+    await assertOrDump(backOnLogin, 'R60: did not return to the Login screen after logout', 'Login screen should reappear after logging out');
   });
 });

@@ -53,6 +53,11 @@ class LoginPage extends BasePage {
         // "Logout" sits below the fold of the nav drawer, under Profile/Settings.
         this.logoutMenuItem = 'android=new UiSelector().description("Logout")';
         this.logoutConfirmYes = 'android=new UiSelector().description("Yes")';
+
+        // Toast shown right after confirming logout - same short-lived-Toast situation as
+        // loginErrorText above, so it's read via BasePage.waitForToast rather than a one-shot
+        // isElementVisible() check.
+        this.logoutSuccessToastText = 'Logged out successfully';
     }
 
     async clickForgotPassword() {
@@ -174,6 +179,10 @@ class LoginPage extends BasePage {
     async confirmLogout() {
         await this.click(this.logoutConfirmYes);
         console.log('Confirmed logout');
+    }
+
+    async isLogoutSuccessToastShown(timeout = 3000) {
+        return this.waitForToast(this.logoutSuccessToastText, { timeout });
     }
 
     async logout() {

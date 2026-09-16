@@ -1,7 +1,7 @@
 {
   "version": "0.2.0",
   "configurations": [
-    /*{
+    {
       // Runs through the real wdio CLI (not plain node) - New_Regression.spec.js needs
       // Mocha's describe/it and WebdriverIO's browser/driver/$ globals, both only
       // injected by an actual `wdio run` session, so it can't launch like the plain
@@ -9,6 +9,11 @@
       // because wdio's local runner executes the spec in a spawned worker process -
       // breakpoints in the spec file or its page objects live in that child, not in
       // this launched process itself.
+      //
+      // PLACE_REAL_ORDERS=1 is set here so a full run of this suite's R34-R39
+      // (NSE/BSE/NFO/BFO/CDS/MCX) actually submits a real order at each segment's lower
+      // circuit price instead of just entering it and stopping short of BUY - this is a
+      // live trading account, so every F5 run of this config places up to 6 real trades.
       "type": "node",
       "request": "launch",
       "name": "Regression Spec — Real Device",
@@ -25,9 +30,10 @@
         "<node_internals>/**"
       ],
       "env": {
-        "DEVICE_TYPE": "real"
+        "DEVICE_TYPE": "real",
+        "PLACE_REAL_ORDERS": "1"
       }
-    }*/
+    }
     /*,{
       "type": "node",
       "request": "launch",

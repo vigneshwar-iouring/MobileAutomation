@@ -17,6 +17,8 @@ const LOGIN_ID3 = 'TEMPMF2';
 const PASSWORD3 = 'Globe@9876';
 const LOGIN_ID4 = 'EKY6998';
 const PASSWORD4 = 'May@2026';
+const LOGIN_ID5 = 'MS2';
+const PASSWORD5 = 'Globe@4321';
 const DEVICE_PASSWORD = '11111'; // device screen-lock PIN, used to confirm biometric enrollment
 // ─────────────────────────────────────────────────────────────────────
 
@@ -38,7 +40,7 @@ async function run() {
         currentStep = 'TC 1b: Reading build version...';
         console.log(currentStep);
         const buildVersion = await splashPage.getBuildVersion().catch(() => null);
-        console.log(buildVersion ? `Build version: ${buildVersion}` : 'Build version label not found - skipping');
+        console.log(buildVersion ? `Build version: ${buildVersion}` : 'Build version label not found - FAIL');
 
         // If a permission popup is observed, allow it; if not, proceed straight to the next step.
         await permissionHandler.dismissAllPermissions(driver);
@@ -50,8 +52,8 @@ async function run() {
 
         currentStep = 'TC 3: Entering login ID and password...';
         console.log(currentStep);
-        await loginPage.enterLoginId(LOGIN_ID);
-        await loginPage.enterPassword(PASSWORD);
+        await loginPage.enterLoginId(LOGIN_ID4);
+        await loginPage.enterPassword(PASSWORD4);
         await loginPage.clickLogin();
 
         // Wrong credentials show a Toast here instead of advancing to OTP - it vanishes from the

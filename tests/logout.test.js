@@ -21,6 +21,13 @@ async function run() {
 
         console.log('TC 2: Logging out...');
         await loginPage.logout();
+
+        console.log('TC 3: Verifying "Logged out successfully" toast...');
+        // Checked immediately, before any other wait - the toast is short-lived and a pause here
+        // first would risk eating into its own lifetime before this ever polls for it.
+        const logoutToastShown = await loginPage.isLogoutSuccessToastShown();
+        console.log(`"Logged out successfully" toast shown: ${logoutToastShown ? 'PASS' : 'FAIL'}`);
+
         await driver.pause(2000);
 
         const stillLoggedIn = await loginPage.isLoggedIn(3000);

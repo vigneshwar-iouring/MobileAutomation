@@ -166,6 +166,8 @@ class WatchlistIndexPage extends BasePage {
         // with the current name, e.g. "Watchlist1") - not a separate pencil-icon button - so
         // renaming just means focusing/clearing/typing into it like any other text field.
         this.editWatchlistNameField = 'android=new UiSelector().className("android.widget.EditText")';
+        this.watchlistNameTooLongToastText = 'Watchlist name cannot exceed 15 letters';
+        this.watchlistNameEmptyToastText = 'Watchlist name cannot be empty!';
         // Unlike the Add Symbols overlay (which saves immediately on Done/Cancel), leaving Edit
         // Watchlist with unsaved changes was confirmed live to show the same "Do You want to Save
         // the Changes?" DISCARD/CHANGE prompt used elsewhere in this app (see clickDiscardChanges/
@@ -476,6 +478,25 @@ class WatchlistIndexPage extends BasePage {
         console.log('Opened Manage Watchlist');
     }
 
+    // NIFTY/BANKNIFTY/SENSEX on the Manage Watchlist screen are default index watchlists, not
+    // user-created groups like Watchlist1-5 - tapping the row itself does nothing (confirmed live:
+    // no Edit Watchlist screen opens, unlike openEditWatchlistForGroup). Each instead carries its
+    // own visible ON/OFF toggle switch at the row's right edge (~90% across its width, confirmed
+    // live via screenshot). The toggle has ZERO accessibility exposure - the raw UI tree shows the
+    // whole row as one flat, non-checkable, childless node with no separate Switch child - so it
+    // can only be tapped by position, and its on/off state can only be confirmed visually (a
+    // screenshot), never read back through Appium. A single tap reliably flips it either way
+    // (confirmed live: ON -> OFF), so this is a plain toggle rather than a set-to-value call.
+    async toggleManageWatchlistIndexRow(groupName) {
+        const nodes = await this.getDescribedElements();
+        const row = nodes.find(n => n.desc.startsWith(`${groupName}.`));
+        if (!row) throw new Error(`"${groupName}" row not found on Manage Watchlist screen`);
+        const tapX = Math.round(row.x1 + 0.90 * (row.x2 - row.x1));
+        const tapY = Math.round((row.y1 + row.y2) / 2);
+        await this.driver.action('pointer').move({ duration: 0, x: tapX, y: tapY }).down().up().perform();
+        console.log(`Tapped the "${groupName}" toggle on Manage Watchlist`);
+    }
+
     // Tapping near the row's left/name area rather than dead-center - the same row also carries a
     // long-press-to-drag gesture for reordering, and a plain tap too close to the drag handle risks
     // being read as the start of a drag instead of an "open" tap.
@@ -558,6 +579,22 @@ class WatchlistIndexPage extends BasePage {
         await this.pause(300);
         await this.driver.hideKeyboard().catch(() => {});
         console.log(`Renamed watchlist group to "${newName}"`);
+    }
+
+    async clearEditWatchlistNameField(timeout = 5000) {
+        const input = await this.findElement(this.editWatchlistNameField, timeout);
+        await input.click();
+        await this.pause(300);
+        await input.clearValue();
+        console.log('Cleared the watchlist name field');
+    }
+
+    async isWatchlistNameTooLongToastShown(timeout = 3000) {
+        return this.waitForToast(this.watchlistNameTooLongToastText, { timeout });
+    }
+
+    async isWatchlistNameEmptyToastShown(timeout = 3000) {
+        return this.waitForToast(this.watchlistNameEmptyToastText, { timeout });
     }
 
     async clickFirstWatchlistSymbol() {

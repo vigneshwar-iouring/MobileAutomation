@@ -122,6 +122,44 @@ async function run() {
         const renameToastShown = await watchlistPage.isWatchlistUpdatedToastShown();
         console.log(`  "Watchlist updated Successfully!" toast shown: ${renameToastShown ? 'PASS' : 'FAIL'}`);
 
+        console.log('\nTC 13: Verifying watchlist name length and empty-name validation...');
+        await watchlistPage.navigateToWatchlist();
+        await watchlistPage.clickFirstWatchlistTab();
+        await watchlistPage.openManageWatchlist();
+        await watchlistPage.openEditWatchlistForGroup(newGroupName);
+
+        const tooLongName = 'ThisNameIsWayTooLongXX';
+        await watchlistPage.renameEditWatchlistGroup(tooLongName);
+        const tooLongToastShown = await watchlistPage.isWatchlistNameTooLongToastShown();
+        console.log(`  "Watchlist name cannot exceed 15 letters" toast shown: ${tooLongToastShown ? 'PASS' : 'FAIL'}`);
+
+        await watchlistPage.clearEditWatchlistNameField();
+        await watchlistPage.closeEditWatchlist();
+        const emptyToastShown = await watchlistPage.isWatchlistNameEmptyToastShown();
+        console.log(`  "Watchlist name cannot be empty!" toast shown: ${emptyToastShown ? 'PASS' : 'FAIL'}`);
+
+        // An empty/invalid name blocks saving, so the group is restored to a valid name here
+        // rather than left nameless for every subsequent TC/run.
+        await watchlistPage.renameEditWatchlistGroup(newGroupName);
+        await watchlistPage.closeEditWatchlist();
+        if (await watchlistPage.isElementVisible('android=new UiSelector().description("CHANGE")', 800)) {
+            await watchlistPage.clickSaveChanges();
+        }
+
+        console.log('\nTC 14: Toggling the NIFTY row on Manage Watchlist...');
+        await watchlistPage.navigateToWatchlist();
+        await watchlistPage.clickFirstWatchlistTab();
+        await watchlistPage.openManageWatchlist();
+        // The toggle has no accessibility signal to assert on (see toggleManageWatchlistIndexRow),
+        // so before/after screenshots are saved for visual confirmation instead of a PASS/FAIL log.
+        await driver.saveScreenshot(`./logs/nifty_toggle_before_${Date.now()}.png`).catch(() => { });
+        await watchlistPage.toggleManageWatchlistIndexRow('NIFTY');
+        await driver.pause(500);
+        await driver.saveScreenshot(`./logs/nifty_toggle_after_${Date.now()}.png`).catch(() => { });
+        console.log('  Tapped the NIFTY toggle');
+
+        await watchlistPage.navigateToWatchlist();
+
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);
