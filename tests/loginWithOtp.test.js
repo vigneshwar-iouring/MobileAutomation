@@ -35,13 +35,14 @@ async function run() {
         await splashPage.launch();
         await splashPage.pause(4000);
 
+        // If a permission popup is observed, allow it; if not, proceed straight to the next step.
+        await permissionHandler.dismissAllPermissions(driver);
+
         currentStep = 'TC 1b: Reading build version...';
         console.log(currentStep);
         const buildVersion = await splashPage.getBuildVersion().catch(() => null);
         console.log(buildVersion ? `Build version: ${buildVersion}` : 'Build version label not found - FAIL');
 
-        // If a permission popup is observed, allow it; if not, proceed straight to the next step.
-        await permissionHandler.dismissAllPermissions(driver);
 
         currentStep = 'TC 2: Snapshotting Gmail inbox...';
         console.log(currentStep);

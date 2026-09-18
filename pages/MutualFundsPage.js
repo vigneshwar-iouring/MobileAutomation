@@ -47,7 +47,7 @@ function daysBetween(from, to) {
 function parsePortfolioSummary(text) {
     const currentMatch = text.match(/Current\n₹?([\d,]+\.?\d*)/);
     const investmentMatch = text.match(/Investment\n₹?([\d,]+\.?\d*)/);
-    const xirrMatch = text.match(/Extended Internal Rate of Return:\s*([\d.]+%)/);
+    const xirrMatch = text.match(/Extended Internal Rate of Return:\s*(-?[\d.]+%)/);
     // Return percentage capture excludes the trailing "." - that's the sentence's own full stop
     // (e.g. "Return percentage: 4."), not part of the number, and [\d.]+ would otherwise swallow it.
     // A leading "-" sits right after the ₹ symbol on a down day/loss (e.g. "₹-11.71", "-0.17") -
@@ -1322,7 +1322,7 @@ class MutualFundsPage extends BasePage {
             return result;
         } catch (err) {
             console.log(`Start SIP did not open a usable order pad for this fund (${err.message}) - skipping`);
-            await this.driver.back().catch(() => {});
+            await this.driver.back().catch(() => { });
             await this.pause(800);
             return null;
         }

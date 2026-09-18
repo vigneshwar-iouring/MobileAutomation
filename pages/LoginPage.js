@@ -72,11 +72,11 @@ class LoginPage extends BasePage {
 
     async enterPassword(password) {
         await this.enterText(this.passwordField, password);
-        console.log('Entered password');
+        console.log(`Entered password: ${password}`);
     }
 
     async clickLogin() {
-        await this.driver.hideKeyboard().catch(() => {});
+        await this.driver.hideKeyboard().catch(() => { });
         await this.click(this.loginButton);
         console.log('Clicked LOGIN');
     }
@@ -91,7 +91,7 @@ class LoginPage extends BasePage {
         const el = await this.driver.$(this.otpField);
         await el.waitForDisplayed({ timeout: 10000 });
         await el.click();
-        await el.clearValue().catch(() => {});
+        await el.clearValue().catch(() => { });
         await el.setValue(otp.toString());
         console.log(`Entered OTP: ${otp}`);
     }
