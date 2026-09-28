@@ -10,8 +10,8 @@ const { logFile, entries } = createLogger('forgotPassword');
 console.log(`Logging this run to: ${logFile}`);
 
 // ── Fill in your passwords before running ──────────────────────────
-const NEW_PASSWORD = 'Globe@1234';
-const CONFIRM_PASSWORD = 'Globe@1234';
+const NEW_PASSWORD = 'Globe@12345';
+const CONFIRM_PASSWORD = 'Globe@12345';
 // ───────────────────────────────────────────────────────────────────
 
 async function run() {
@@ -28,6 +28,10 @@ async function run() {
         await splashPage.pause(8000);
         await permissionHandler.dismissAllPermissions(driver);
         console.log('App ready on login page');
+
+        console.log('TC 1b: Reading build version...');
+        const buildVersion = await splashPage.getBuildVersion().catch(() => null);
+        console.log(buildVersion ? `Build version: ${buildVersion}` : 'Build version label not found - FAIL');
 
         // TC 2: Tap Forgot Password
         console.log('TC 2: Tapping Forgot Password...');

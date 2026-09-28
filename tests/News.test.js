@@ -17,7 +17,9 @@ function printSummary(results) {
             console.log(`  ${r.tab}: Could not parse date (raw: "${r.raw}")`);
             continue;
         }
-        const dateStatus = r.isPastOrNow ? 'PASS' : 'FAIL (in the future)';
+        const dateStatus = !r.isPastOrNow
+            ? 'FAIL (in the future)'
+            : (r.isWithinLast10Days ? 'PASS' : 'FAIL (older than 10 days)');
         const tagStatus = r.tab === 'All'
             ? `tags seen: ${r.distinctTags.join(', ') || 'none'}`
             : (r.mismatches.length ? `FAIL - ${r.mismatches.length} mismatched tag(s): ${[...new Set(r.mismatches.map(e => e.tag))].join(', ')}` : 'PASS - all tags match');
@@ -43,14 +45,21 @@ async function run() {
             throw new Error('News screen did not load within 10 seconds');
         }
 
-        const emptyResult = { raw: null, date: null, latestTime: null, isPastOrNow: null, entryCount: 0, distinctTags: [], mismatches: [] };
+        const emptyResult = { raw: null, date: null, latestTime: null, isPastOrNow: null, isWithinLast10Days: null, entryCount: 0, distinctTags: [], mismatches: [] };
 
         // Tabs are selected one by one (in fixed left-to-right order) rather than by swiping the
         // tab strip - clicking each tab is what actually scrolls later tabs into view.
+        //
+        // TC numbers increment across iterations instead of being reused (e.g. a fixed "TC 4" for
+        // every tab) - getFailedTCs() in utils/logger.js attributes a failure to whichever "TC N:"
+        // was most recently logged, so reusing the same number for every tab would merge failures
+        // from different tabs into one bucket and hide which tab actually failed.
+        let tc = 4;
         for (const tabName of newsPage.tabNames) {
-            console.log(`\nTC 4: Selecting "${tabName}" tab...`);
+            console.log(`\nTC ${tc}: Selecting "${tabName}" tab...`);
             await newsPage.clickTab(tabName);
             await driver.pause(1000);
+            tc++;
 
             // Check for data before doing any scrolling/search - skips that work entirely on an
             // empty tab instead of scrolling a feed that was never going to have anything to read.
@@ -60,30 +69,33 @@ async function run() {
                 continue;
             }
 
-            console.log('TC 5: Scrolling down 2 times, then up 2 time...');
+            console.log(`TC ${tc}: Scrolling down 2 times, then up 2 time...`);
             await newsPage.scrollDown();
             await newsPage.scrollDown();
             await newsPage.scrollUp();
             await newsPage.scrollUp();
+            tc++;
 
             if (tabName === 'All') {
-                console.log('TC 5b: Opening search bar and searching "Manufacturing"...');
+                console.log(`TC ${tc}: Opening search bar and searching "Manufacturing"...`);
                 await newsPage.clickSearchBar();
                 await newsPage.searchNews('Manufacturing');
                 await driver.pause(3000);
                 await newsPage.verifyNewsSearchResults('Manufacturing');
                 await newsPage.closeSearch();
                 await driver.pause(1000);
+                tc++;
             }
 
-            console.log(`TC 6: Checking latest news date/time and tag consistency for "${tabName}"...`);
+            console.log(`TC ${tc}: Checking latest news date/time and tag consistency for "${tabName}"...`);
             const summary = await newsPage.getFeedSummary(tabName);
             results.push({ tab: tabName, ...summary });
+            tc++;
         }
 
         printSummary(results);
 
-        console.log('\nTC 7: Closing News screen...');
+        console.log(`\nTC ${tc}: Closing News screen...`);
         await newsPage.clickClose();
     } catch (err) {
         console.error('Test failed:', err.message);

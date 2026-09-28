@@ -10,17 +10,22 @@ const { createLogger, getFailedTCs } = require('../utils/logger');
 const { logFile, entries } = createLogger('NCforgotpassword');
 console.log(`Logging this run to: ${logFile}`);
 
-const NEW_PASSWORD = 'Globe@4321';
-const CONFIRM_PASSWORD = 'Globe@4321';
+const NEW_PASSWORD = 'Globe@54321';
+const CONFIRM_PASSWORD = 'Globe@54321';
 
 //Scenario 1 - Validation of Forgot password with empty Login ID
 async function scenario1_EmptyLoginId(driver, splashPage, loginPage, forgotPage) {
     // TC 1: Launch app
     console.log('TC 1: Launching app...');
+    await splashPage.launch();
     await splashPage.pause(8000);
     await permissionHandler.dismissAllPermissions(driver);
     await driver.pause(2000);
     console.log('App ready on login page');
+
+    console.log('TC 1b: Reading build version...');
+    const buildVersion = await splashPage.getBuildVersion().catch(() => null);
+    console.log(buildVersion ? `Build version: ${buildVersion}` : 'Build version label not found - FAIL');
 
     // TC 2: Tap Forgot Password
     console.log('TC 2: Tapping Forgot Password...');

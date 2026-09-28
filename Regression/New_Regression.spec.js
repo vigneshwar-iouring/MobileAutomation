@@ -35,7 +35,7 @@ const portfolioPage    = require('../pages/Portfolio/PortfolioPage');
 const mutualFundsPage  = require('../pages/MutualFunds/MutualFundsPage');
 const testData         = require('../data/testData');
 const { getLatestUid, fetchLatestOtp }             = require('../utils/gmailOtpHelper');
-const { clearAndLaunch, dumpScreen }               = require('../utils/helpers');
+const { clearAndLaunch, dumpScreen, handlePermissionDialog } = require('../utils/helpers');
 
 // Set RESUME_SESSION=1 to skip R2-R8 login and land straight on Watchlist when the
 // app already has a valid session — combine with --mochaOpts.grep to run one test
@@ -374,33 +374,55 @@ async function submitAndConfirmOrder(label, price, symbolName) {
     await browser.pause(1500);
   }
 
-  // The Orderbook's own API call lags a few seconds behind the UI navigation —
-  // poll instead of reading the page source once right after arriving. Only checks that
-  // the symbol shows up somewhere in the (default "All") tab - not that it reached any
-  // particular status - and prints whatever status is actually shown (Pending, Executed,
-  // Rejected, ...) for the record.
+  const onOrdersScreen = await orderbookPage.isLoaded(8000);
+  console.log(`  ℹ  Landed on the Orderbook screen: ${onOrdersScreen}`);
+  await assertOrDump(onOrdersScreen, `${label}: did not land on the Orderbook screen`, 'Should land on the Orderbook screen after confirming the order');
+
+  // Explicitly select the All tab rather than trusting whichever tab the app restored -
+  // a just-placed order may already be Executed/Rejected, so only "All" is guaranteed
+  // to list it regardless of status.
+  const allTapped = await orderbookPage.tapTab('all');
+  console.log(`  ℹ  Orderbook "All" tab tapped: ${allTapped}`);
+  await assertOrDump(allTapped, `${label}: could not tap the Orderbook All tab`, 'Orderbook All tab should be tappable');
+  await browser.pause(600);
+  console.log(`  ℹ  All tab count: ${await orderbookPage.getTabCount('all')}`);
+
+  // The placed order must show up as a BUY row for this symbol at the lower circuit
+  // price entered - symbol alone could match an older order. Row prices carry Indian
+  // comma grouping ("1,47,178.00"), so strip commas before comparing numerically.
+  const isPlacedOrder = (r) => {
+    const symbolMatch = symbolName && ((r.symbol && r.symbol.trim() === symbolName.trim()) || (r.raw && r.raw.includes(symbolName)));
+    const priceMatch  = r.price && Number(r.price.replace(/,/g, '')) === Number(price);
+    return symbolMatch && priceMatch && /^BUY$/i.test(r.action || '');
+  };
+
+  // The Orderbook's own API call lags a few seconds behind the UI navigation - poll
+  // instead of reading the page source once right after arriving. Only checks that the
+  // order is listed, not that it reached any particular status - prints whatever status
+  // is actually shown (Pending, Executed, Rejected, ...) for the record.
   let matchedRow = null;
   await orderPadPage.pollUntil(async () => {
-    const rows = await orderbookPage.getOrderRows();
-    matchedRow = rows.find(r => symbolName && r.symbol && r.symbol.trim() === symbolName.trim())
-      || rows.find(r => symbolName && r.raw && r.raw.includes(symbolName));
+    matchedRow = (await orderbookPage.getOrderRows()).find(isPlacedOrder) || null;
     return !!matchedRow;
   }, 12000, 1000);
 
-  const src = await driver.getPageSource();
-  const onOrdersScreen = /orderbook|order book|orders/i.test(src);
-  console.log(`  ℹ  Landed on an Orders/Orderbook screen: ${onOrdersScreen}`);
-  if (!onOrdersScreen) await dumpScreen(`${label}: did not land on an Orders/Orderbook screen`);
-  await assertOrDump(onOrdersScreen, `${label}: did not land on an Orders/Orderbook screen`, 'Should land on the Orders/Orderbook screen after confirming the order');
+  // Not in the visible rows (e.g. a long order list) - scroll through the All tab once.
+  for (let i = 0; !matchedRow && i < 3; i++) {
+    await orderbookPage.swipeUp();
+    matchedRow = (await orderbookPage.getOrderRows()).find(isPlacedOrder) || null;
+  }
 
   const orderVisible = !!matchedRow;
-  console.log(`  ℹ  "${symbolName}" order visible in the Orderbook: ${orderVisible}`);
+  console.log(`  ℹ  "${symbolName}" BUY order at lower circuit (${price}) visible in Orderbook → All: ${orderVisible}`);
   if (matchedRow) {
+    console.log(`  ℹ  Matched row: ${matchedRow.raw}`);
     console.log(`  ℹ  "${symbolName}" order status: ${matchedRow.status || 'unknown (row text did not fully parse)'}`);
   } else {
-    await dumpScreen(`${label}: "${symbolName}" not found on the Orders/Orderbook screen`);
+    const rows = await orderbookPage.getOrderRows();
+    console.log(`  ℹ  Rows visible on the All tab (${rows.length}):`);
+    rows.forEach((r, i) => console.log(`     [${i}] ${r.raw}`));
   }
-  await assertOrDump(orderVisible, `${label}: "${symbolName}" order not found on the Orders/Orderbook screen`, `The just-placed ${symbolName} order should be visible on the Orders/Orderbook screen`);
+  await assertOrDump(orderVisible, `${label}: "${symbolName}" BUY order at ${price} not found on the Orderbook All tab`, `The just-placed ${symbolName} BUY order at the lower circuit price ${price} should be listed on the Orderbook All tab`);
 
   await browser.pause(500);
   await watchlistPage.goToWatchlist();
@@ -495,7 +517,9 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   authIt('R1: Verify build version is displayed on the Login screen', async function () {
     this.timeout(15000);
     // Read on a fresh Login screen, before any credentials are entered — same point in the
-    // flow tests/loginWithOtp.test.js reads it at (right after launch, before login).
+    // flow tests/loginWithOtp.test.js reads it at (right after launch, before login): permission
+    // popup handling first, then build version fetching.
+    await handlePermissionDialog();
     const versionVisible = await loginPage.isDisplayed(BUILD_VERSION_SEL, 5000);
     if (!versionVisible) {
       console.log('  ℹ  Build version label not found — skipping');
@@ -601,13 +625,20 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   });
 
   it('R10: Tap through all the watchlist tabs', async function () {
-    this.timeout(30000);
+    this.timeout(45000);
     // Tabs are read by position/content-desc pattern, not by an assumed name —
     // different client IDs have different watchlists.
     await watchlistPage.scrollToFirstTab();
 
     const seen = new Set();
     for (let scroll = 0; scroll < 8; scroll++) {
+      // Rapidly tapping through tabs can trigger the app's ANR dialog on this
+      // real hardware — without a check here it silently blocks the next
+      // getPageSource()/click() call until the test's own timeout fires
+      // (confirmed live: R10 hung past the it()-level timeout right after the
+      // last tab was tapped, with no ANR check between taps and the pageSource
+      // read below).
+      await watchlistPage._dismissANRIfPresent();
       const tabEls = await $$(WL_SEL.allTabs);
       for (const tabEl of tabEls) {
         let desc;
@@ -621,6 +652,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
           seen.add(name);
         } catch {}
       }
+      await watchlistPage._dismissANRIfPresent();
       const total = await watchlistPage.getTotalTabCount();
       if (seen.size >= total) break;
       await watchlistPage._swipeTabStrip('right');
@@ -949,9 +981,18 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     console.log(`  ℹ  Applicable Charges header: ${chargesHeader}`);
     await assertOrDump(!!chargesHeader, 'R26: Applicable Charges header not found', 'Applicable Charges panel should show a header');
 
-    const chargesBreakdown = await orderPadPage.getChargesBreakdown();
-    console.log(`  ℹ  Brokerage/charges details: ${chargesBreakdown.join(' | ')}`);
-    await assertOrDump(chargesBreakdown.length > 0, 'R26: no brokerage/charges details found', 'Applicable Charges panel should show at least one charge line item');
+    // Values aren't checked — pass only if every expected charge is listed and no error
+    // message/toast is shown; otherwise fail with the cause.
+    const charges = await orderPadPage.getChargesPanelStatus();
+    console.log(`  ℹ  Brokerage/charges details: ${charges.breakdown.join(' | ')}`);
+    console.log(`  ℹ  Charges listed (${charges.charges.length}): ${charges.charges.join(', ') || 'none'}`);
+    if (charges.missing.length) console.log(`  ℹ  Charges missing (${charges.missing.length}): ${charges.missing.join(', ')}`);
+    if (!charges.isValid) {
+      console.log(`  ✗  Applicable Charges failure cause: ${charges.failureCause}`);
+      await orderPadPage.dumpPageSource('r26-charges-breakdown-invalid');
+    }
+    await assertOrDump(charges.isValid, `R26: Applicable Charges failed — ${charges.failureCause}`,
+      `Applicable Charges panel should list all charges with no error message — cause: ${charges.failureCause}`);
 
     const chargesDisclaimer = await orderPadPage.getChargesDisclaimer();
     console.log(`  ℹ  Disclaimer: ${chargesDisclaimer}`);
@@ -1177,7 +1218,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // DPR-bounce technique as R28: enter 0.00, let the DPR guard reject it, retry at the
   // parsed lower circuit price, and confirm. Explicitly authorized per segment.
   it('R34: Place a real order for the NSE segment — search "IDEA", DPR-bounce to the lower circuit', async function () {
-    this.timeout(60000);
+    this.timeout(90000);
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
@@ -1222,7 +1263,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // expose which is which via accessibility); the exchange toggle on the OrderPad is
   // used to explicitly select BSE regardless.
   it('R35: Place a real order for the BSE segment — search "RTN POWER", DPR-bounce to the lower circuit', async function () {
-    this.timeout(60000);
+    this.timeout(90000);
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
@@ -1274,7 +1315,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // range (like 25100 against a ~24000 spot) was unreachable even though the contract
   // itself exists and is searchable.
   it('R36: Place a real order for the NFO segment — NIFTY 25100 CE, DPR-bounce to the lower circuit', async function () {
-    this.timeout(60000);
+    this.timeout(90000);
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
@@ -1318,7 +1359,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // approach as R36, for the same reason (the target strike sits outside the Option
   // Chain screen's default visible range).
   it('R37: Place a real order for the BFO segment — SENSEX 77100 CE, DPR-bounce to the lower circuit', async function () {
-    this.timeout(60000);
+    this.timeout(90000);
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
@@ -1365,7 +1406,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // (0 LTP, no order-entry fields at all) - a real risk worth knowing about, though not
   // filtered out here per instruction.
   it('R38: Place a real order for the CDS segment — first Currency market mover, DPR-bounce to the lower circuit', async function () {
-    this.timeout(60000);
+    this.timeout(90000);
 
     const opened = await tapFirstMarketMover('Currency', 'Top Losers');
     await assertOrDump(opened, 'R38: could not open a Currency market mover', 'Should be able to open a symbol from the Currency market movers list');
@@ -1402,7 +1443,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // sub-tab is selected by default (Top Gainers), falling back to Top Losers if that
   // list is empty -> first symbol shown.
   it('R39: Place a real order for the MCX segment — first Commodity market mover, DPR-bounce to the lower circuit', async function () {
-    this.timeout(60000);
+    this.timeout(90000);
 
     const opened = await tapFirstMarketMover('Commodity', 'Top Losers');
     await assertOrDump(opened, 'R39: could not open a Commodity market mover', 'Should be able to open a symbol from the Commodity market movers list');

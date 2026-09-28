@@ -86,6 +86,26 @@ const SEL = {
   dprError: '//*[starts-with(@content-desc,"DPR Range")]',
 };
 
+// Every line the Applicable Charges panel must list (as given by the user) - matched
+// case-insensitively by label only, values are not checked.
+const CHARGE_LABELS = [
+  'Order Value',
+  'Total Brokerage & charges',
+  'Brokerage',
+  'Securities Transaction Tax',
+  'Transaction Charges',
+  'GST',
+  'Stamp Duty',
+  'SEBI Charges',
+  'DP Charges',
+  'Clearing Charges',
+];
+
+// Page source attributes are XML-escaped ("&amp;" etc.) - needed for "&" in the labels.
+const decodeXml = s => s
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+  .replace(/&apos;/g, "'").replace(/&#10;/g, '\n').replace(/&amp;/g, '&');
+
 class OrderPadPage extends BasePage {
 
   // ── Screen readiness ─────────────────────────────────────────────────────────
@@ -416,11 +436,10 @@ class OrderPadPage extends BasePage {
 
   // Whatever sits between the header and the disclaimer - a real breakdown (Brokerage,
   // STT, GST, ...) most of the time, but confirmed live that this can also show
-  // "Something went wrong" instead (a backend hiccup unrelated to this automation) - not
-  // asserted on for exact content, only that at least one line is present.
-  async getChargesBreakdown() {
+  // "Something went wrong" instead - see getChargesPanelStatus() for how R26 fails that.
+  async getChargesBreakdown(src = null) {
     try {
-      const src = await driver.getPageSource();
+      src = src || await driver.getPageSource();
       const descs = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]);
       const startIdx = descs.indexOf('Brokerage and Charges');
       if (startIdx === -1) return [];
@@ -429,6 +448,39 @@ class OrderPadPage extends BasePage {
         .slice(startIdx + 1, endIdx === -1 ? undefined : endIdx)
         .filter(d => d !== 'Scrim');
     } catch { return []; }
+  }
+
+  // Pass/fail status of the Applicable Charges panel, read from a single page source so
+  // the breakdown and any (transient) toast are captured at the same instant. Charge
+  // values are deliberately not checked - only that every line in CHARGE_LABELS is
+  // listed and no error is shown, either inline (confirmed live: "Order Value | 12.08 |
+  // Something went wrong") or as a toast.
+  async getChargesPanelStatus() {
+    let src = '';
+    try { src = await driver.getPageSource(); } catch { /* treated as empty below */ }
+    const breakdown = await this.getChargesBreakdown(src);
+    const isError = d => /something went wrong|error|failed|unable to|try again|not available|no data/i.test(d);
+    const norm = s => decodeXml(s).replace(/\s+/g, ' ').trim().toLowerCase();
+
+    const inlineErrors = breakdown.filter(isError).map(decodeXml);
+    const toasts = [...src.matchAll(/<android\.widget\.Toast[^>]*\btext="([^"]+)"/g)].map(m => decodeXml(m[1]));
+    const errors = [...inlineErrors, ...toasts.map(t => `toast: ${t}`)];
+
+    // A label counts as listed if a line equals it or starts with it followed by a
+    // non-letter (so "Brokerage" isn't satisfied by "Total Brokerage & charges").
+    const lines = breakdown.map(norm);
+    const isListed = label => {
+      const l = norm(label);
+      return lines.some(d => d === l || (d.startsWith(l) && !/[a-z]/.test(d[l.length])));
+    };
+    const charges = CHARGE_LABELS.filter(isListed);
+    const missing = CHARGE_LABELS.filter(l => !isListed(l));
+
+    const causes = [];
+    if (errors.length) causes.push(`error message shown (${errors.join(' | ')})`);
+    if (missing.length) causes.push(`charges not listed: ${missing.join(', ')}`);
+    return { breakdown: breakdown.map(decodeXml), charges, missing, errors,
+      isValid: causes.length === 0, failureCause: causes.join('; ') };
   }
 
   async getChargesDisclaimer() {

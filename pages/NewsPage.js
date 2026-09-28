@@ -212,7 +212,7 @@ class NewsPage extends BasePage {
     // every tab except "All" should only ever show its own tag; "All" is allowed to mix multiple
     // different tags, but every one of them must still be a real, known category tag.
     async getFeedSummary(tabName) {
-        const empty = { raw: null, date: null, latestTime: null, isPastOrNow: null, entryCount: 0, distinctTags: [], mismatches: [] };
+        const empty = { raw: null, date: null, latestTime: null, isPastOrNow: null, isWithinLast10Days: null, entryCount: 0, distinctTags: [], mismatches: [] };
         if (await this.isNoDataFound()) {
             console.log('No Data Found for this tab');
             return empty;
@@ -244,6 +244,13 @@ class NewsPage extends BasePage {
         }
         console.log(`Latest news: "${headerLine}" ${latestTime || '(no time found)'} - ${isPastOrNow ? 'PASS (on or before now)' : 'FAIL (in the future)'}`);
 
+        // The latest news item shown should also be recent, not stale - anything older than 10
+        // days back from today is flagged as its own separate FAIL.
+        const tenDaysAgo = new Date(today);
+        tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
+        const isWithinLast10Days = date.getTime() >= tenDaysAgo.getTime();
+        console.log(`Latest news date within last 10 days: ${isWithinLast10Days ? 'PASS' : `FAIL (older than 10 days: "${headerLine}")`}`);
+
         const distinctTags = [...new Set(entries.map(e => e.tag))];
         let mismatches = [];
         if (tabName === 'All') {
@@ -272,7 +279,7 @@ class NewsPage extends BasePage {
             }
         }
 
-        return { raw: headerLine, date, latestTime, isPastOrNow, entryCount: entries.length, distinctTags, mismatches };
+        return { raw: headerLine, date, latestTime, isPastOrNow, isWithinLast10Days, entryCount: entries.length, distinctTags, mismatches };
     }
 }
 

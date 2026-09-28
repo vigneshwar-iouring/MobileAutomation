@@ -82,6 +82,26 @@ class BasePage {
 
     async swipe(direction) {
         const { width, height } = await this.driver.getWindowSize();
+
+        // 'left'/'right' scroll a horizontal row (e.g. the Markets screen's AI Algo/NxtOption/IPO/
+        // Mutual Funds/Basket quick-access tiles) - 'left' drags content leftward (finger moves
+        // right-to-left) to reveal whatever sits further to the right, mirroring how 'up' already
+        // drags vertical content upward to reveal what's below.
+        if (direction === 'left' || direction === 'right') {
+            const y = Math.floor(height / 2);
+            const [fromX, toX] = direction === 'left'
+                ? [Math.floor(width * 0.8), Math.floor(width * 0.2)]
+                : [Math.floor(width * 0.2), Math.floor(width * 0.8)];
+
+            await this.driver.action('pointer')
+                .move({ duration: 0, x: fromX, y })
+                .down()
+                .move({ duration: 800, x: toX, y })
+                .up()
+                .perform();
+            return;
+        }
+
         const x = Math.floor(width / 2);
         const [fromY, toY] = direction === 'up'
             ? [Math.floor(height * 0.3), Math.floor(height * 0.7)]
@@ -212,6 +232,22 @@ class BasePage {
 
     async pause(ms) {
         await this.driver.pause(ms);
+    }
+
+    // A generic "did a webview load" check for screens rendered via an embedded
+    // android.webkit.WebView (e.g. AI Algo, IPO) - content-desc scraping doesn't reach into web
+    // content, but the native WebView container itself always shows up as this exact class in the
+    // page source the moment it's mounted, regardless of what page it's actually displaying.
+    async waitForWebViewLoaded(timeout = 10000) {
+        try {
+            await this.driver.waitUntil(async () => {
+                const src = await this.driver.getPageSource();
+                return /android\.webkit\.WebView/.test(src);
+            }, { timeout, interval: 300 });
+            return true;
+        } catch (_) {
+            return false;
+        }
     }
 
     // Parses the raw page source into {desc, x1,y1,x2,y2, clickable} for every element with a
