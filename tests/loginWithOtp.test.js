@@ -51,8 +51,8 @@ async function run() {
 
         currentStep = 'TC 3: Entering login ID and password...';
         console.log(currentStep);
-        await loginPage.enterLoginId(LOGIN_ID2);
-        await loginPage.enterPassword(PASSWORD2);
+        await loginPage.enterLoginId(LOGIN_ID3);
+        await loginPage.enterPassword(PASSWORD3);
         await loginPage.clickLogin();
 
         // Wrong credentials show a Toast here instead of advancing to OTP - it vanishes from the

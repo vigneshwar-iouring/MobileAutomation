@@ -1,7 +1,7 @@
 const BasePage = require('../Login/BasePage');
 
 // Mutual Funds tab strip (Home/Explore/Portfolio/Accounts) and the minimal set of flows the
-// Regression suite needs (R55-R58): Home -> High Returns -> first fund -> One Time/Start SIP,
+// Regression suite needs (R59-R62): Home -> High Returns -> first fund -> One Time/Start SIP,
 // Explore -> category count -> Equity -> All, Portfolio -> Active SIPs, Accounts. Selectors and
 // parsing are ported from the DriverManager-style pages/MutualFundsPage.js (confirmed live on
 // device) but rewritten against this stack's WDIO globals ($/$$/browser/driver) since the two
@@ -122,10 +122,18 @@ class MutualFundsPage extends BasePage {
     return [...seen];
   }
 
+  // Not BasePage.swipeDown() - its drag starts at 20% height, which lands on the fixed
+  // indices strip above the Explore list (y~12-21% on the Pixel 4a), so it never scrolled:
+  // confirmed live that R60 stayed parked on Debt..Solution Oriented with Equity off-screen.
   async scrollExploreToTop(maxScrolls = 12) {
     for (let i = 0; i < maxScrolls; i++) {
       if (await this.isDisplayed(SEL.categorySolutionsLabel, 500)) return true;
-      await this.swipeDown();
+      const { width, height } = await browser.getWindowSize();
+      await browser.action('pointer', { parameters: { pointerType: 'touch' } })
+        .move({ x: Math.round(width / 2), y: Math.round(height * 0.40) })
+        .down().pause(200)
+        .move({ x: Math.round(width / 2), y: Math.round(height * 0.85), duration: 600 })
+        .up().perform();
       await browser.pause(400);
     }
     return this.isDisplayed(SEL.categorySolutionsLabel, 500);

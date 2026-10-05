@@ -309,9 +309,46 @@ class WatchlistPage extends BasePage {
     await browser.pause(200);
   }
 
-  // Scrolls the tab strip back to the leftmost position (makes Watchlist1 visible).
+  // Scrolls the tab strip back to the leftmost position (makes tab 1 visible, and selects it).
+  // By position, not SEL.tab(1) - that needs "WATCHLIST1" in the desc, but accounts can
+  // name tab 1 anything (confirmed live: "Watchlist_1" never matched, so this never stopped).
   async scrollToFirstTab() {
-    return this._scrollTabStripUntil(() => this.isDisplayed(SEL.tab(1), 500), 'left');
+    return !!(await this.scrollToTabPosition(1));
+  }
+
+  // Brings the tab at position `pos` ("Tab pos of M") into view by TAPPING tabs, not
+  // swiping - confirmed live that swipes on this ScrollableTabRow are ignored (R10 left the
+  // strip on tabs 5-8 and every swipe-based rewind silently did nothing, failing R11), but
+  // selecting a tab auto-scrolls the row toward it. Each step taps the on-screen tab nearest
+  // `pos`, revealing its neighbours, until `pos` is visible or the visible set stops changing.
+  // Side effect: changes the selected watchlist. Returns { el, name } or null.
+  async scrollToTabPosition(pos, maxTaps = 12) {
+    const { width } = await driver.getWindowRect();
+    let lastKey = null;
+    for (let i = 0; i <= maxTaps; i++) {
+      await this._dismissANRIfPresent();
+      const visible = [];
+      for (const el of await $$(SEL.allTabs)) {
+        try {
+          const desc = await el.getAttribute('content-desc');
+          const m = desc && desc.match(/Tab (\d+) of \d+/);
+          if (!m) continue;
+          const n = Number(m[1]);
+          if (n === pos) return { el, name: desc.split(/\n|&#10;/)[0].trim() };
+          const loc  = await el.getLocation();
+          const size = await el.getSize();
+          const cx   = loc.x + size.width / 2;
+          if (cx > 0 && cx < width) visible.push({ el, n });
+        } catch {}
+      }
+      const key = visible.map(v => v.n).join(',');
+      if (!visible.length || key === lastKey) return null;
+      lastKey = key;
+      const nearest = visible.reduce((a, b) => (Math.abs(b.n - pos) < Math.abs(a.n - pos) ? b : a));
+      try { await nearest.el.click(); } catch {}
+      await browser.pause(400);
+    }
+    return null;
   }
 
   async areAllNavTabsDisplayed() {

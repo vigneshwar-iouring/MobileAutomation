@@ -50,9 +50,11 @@ const RESUME_SESSION = !!process.env.RESUME_SESSION;
 // place real trades on a live account, so this stays off until explicitly confirmed.
 const PLACE_REAL_ORDERS = !!process.env.PLACE_REAL_ORDERS;
 
-// Reads like "v0.0.59 (59)" on the Login screen — ported from SplashPage.buildVersionLabel
-// (DriverManager stack) since that page object's BasePage isn't compatible with this one.
-const BUILD_VERSION_SEL = 'android=new UiSelector().descriptionMatches("^v\\d+\\.\\d+\\.\\d+ \\(\\d+\\)$")';
+// Reads like "Globe Capital Stock Trading: v1.0.0 (68)" on the Login screen — ported from
+// SplashPage.buildVersionLabel (DriverManager stack) since that page object's BasePage isn't
+// compatible with this one. Not anchored to start with "v": the label gained that app-name
+// prefix, and the old "^v..." copy here silently never matched (R1 always "skipping").
+const BUILD_VERSION_SEL = 'android=new UiSelector().descriptionMatches(".*v\\d+\\.\\d+\\.\\d+ \\(\\d+\\)$")';
 
 // No dedicated page object exists for this screen yet — app doesn't expose a
 // stable resource-id for it, so we key off common disclosure/consent wording.
@@ -143,9 +145,12 @@ async function submitOtp(label, sinceUid) {
 
 // Collapses the "dump the screen for diagnosis, then assert" pattern repeated
 // throughout this file: dumpScreen() only runs when the check actually failed.
+// Every passed check is logged with ✓ so the report shows what each step verified, not
+// only what failed (previously a fully passing step could show "No log output captured").
 async function assertOrDump(ok, dumpLabel, message) {
   if (!ok) await dumpScreen(dumpLabel);
   expect(ok, message).to.be.true;
+  console.log(`  ✓  ${message}`);
 }
 
 // Presses the device back button, swallowing errors when there's nothing to go back to.
@@ -179,15 +184,77 @@ async function findTabByPosition(pos) {
   return null;
 }
 
-// Swipes the tab strip left until the tab at `pos` is visible, regardless of its name.
-async function scrollToTabPosition(pos, maxSwipes = 10) {
-  for (let i = 0; i < maxSwipes; i++) {
-    await watchlistPage._dismissANRIfPresent();
-    const found = await findTabByPosition(pos);
-    if (found) return found;
-    await watchlistPage._swipeTabStrip('left');
+// Brings the tab at `pos` into view regardless of its name. Tap-based (see
+// WatchlistPage.scrollToTabPosition) — swiping this tab strip does nothing.
+async function scrollToTabPosition(pos) {
+  return (await findTabByPosition(pos)) || watchlistPage.scrollToTabPosition(pos);
+}
+
+// NxtOption sub-screens (R51-R56): how to open each one from the hamburger drawer's
+// NxtOption accordion, and how to tell it has loaded.
+const NXT_SCREENS = {
+  'Strategy Builder': { tap: () => nxtOptionPage.tapStrategyBuilder(), loaded: t => nxtOptionPage.isStrategyBuilderLoaded(t) },
+  'IV Analysis':      { tap: () => nxtOptionPage.tapIvAnalysis(),      loaded: t => nxtOptionPage.isIvAnalysisLoaded(t) },
+  'OI Analysis':      { tap: () => nxtOptionPage.tapOiAnalysis(),      loaded: t => nxtOptionPage.isOiAnalysisLoaded(t) },
+};
+
+async function openNxtOptionScreen(label, screen) {
+  await watchlistPage.goToWatchlist();
+  const expanded = await nxtOptionPage.openNxtOptionMenu();
+  await assertOrDump(expanded, `${label}: NxtOption dropdown did not expand`, 'Tapping NxtOption in the hamburger menu should reveal Strategy Builder / IV Analysis / OI Analysis');
+  const tapped = await NXT_SCREENS[screen].tap();
+  console.log(`  ℹ  ${screen} tapped: ${tapped}`);
+  await assertOrDump(tapped, `${label}: could not tap ${screen}`, `${screen} should be tappable from the NxtOption dropdown`);
+  await browser.pause(800);
+  const loaded = await NXT_SCREENS[screen].loaded(8000);
+  console.log(`  ℹ  ${screen} screen loaded: ${loaded}`);
+  await assertOrDump(loaded, `${label}: ${screen} screen did not load`, `${screen} screen should load after tapping it`);
+}
+
+// Reuses the screen the previous "open" test left showing; opens it fresh otherwise.
+async function ensureNxtOptionScreen(label, screen) {
+  if (await NXT_SCREENS[screen].loaded(2000)) return;
+  console.log(`  ℹ  ${screen} not already open — opening it from the NxtOption menu`);
+  await openNxtOptionScreen(label, screen);
+}
+
+// Device back from any NxtOption sub-screen lands straight on Watchlist (confirmed live);
+// goToWatchlist() covers the case where Buy Call / a tab tap pushed an extra level.
+async function backToWatchlistFromNxtOption(label, screen) {
+  await nxtOptionPage.goBack();
+  await browser.pause(800);
+  await watchlistPage.goToWatchlist();
+  console.log(`  ℹ  Back on Watchlist after ${screen}: ${await watchlistPage.isLoaded(5000)}`);
+}
+
+// Fails on a loader that never clears (infinite loading), any error message, or a
+// screen that rendered nothing beyond its own header/tabs (`tabLabels`). With
+// `chartAnchor` (a regex for the controls sitting directly above the chart), also fails
+// if the area below them is blank in the screenshot — the chart itself is custom-drawn
+// and invisible to the accessibility tree, so the label checks alone passed R54 on a
+// completely empty IV Charts area. Saves a screenshot (and an XML dump on failure).
+async function assertNxtOptionHealthy(label, what, tabLabels = [], { chartAnchor = null } = {}) {
+  const health = await nxtOptionPage.getScreenHealth({ ignore: tabLabels, timeout: 20000 });
+  console.log(`  ℹ  ${what}: loader cleared in ${health.stillLoading ? '>20s (still loading)' : `${health.loadMs}ms`}`);
+  console.log(`  ℹ  ${what}: error messages: ${health.errors.join(' | ') || 'none'}`);
+  console.log(`  ℹ  ${what}: content items (${health.content.length}): ${health.content.slice(0, 15).join(' | ') || 'none'}`);
+  let chart = null;
+  if (chartAnchor) {
+    chart = await nxtOptionPage.getChartCoverage(chartAnchor);
+    const pct = chart.coverage === null ? `unreadable (${chart.error})` : `${(chart.coverage * 100).toFixed(2)}%`;
+    console.log(`  ℹ  ${what}: chart area y=${chart.region?.top}-${chart.region?.bottom} drawn pixels: ${pct} → chart displayed: ${chart.rendered}`);
   }
-  return findTabByPosition(pos);
+  const tag = `${label}-${what.replace(/\W+/g, '_')}`;
+  await nxtOptionPage.takeScreenshot(tag);
+  const ok = !health.stillLoading && health.errors.length === 0 && health.content.length > 0 && (!chart || chart.rendered);
+  if (!ok) await nxtOptionPage.dumpPageSource(tag.toLowerCase());
+  await assertOrDump(!health.stillLoading, `${label}: ${what} — infinite loading`, `${what} should finish loading within 20s (loader still shown)`);
+  await assertOrDump(health.errors.length === 0, `${label}: ${what} — error shown`, `${what} should show no error — got: ${health.errors.join(' | ')}`);
+  await assertOrDump(health.content.length > 0, `${label}: ${what} — no chart/data rendered`, `${what} should display charts/data`);
+  if (chart) {
+    await assertOrDump(chart.rendered, `${label}: ${what} — chart area is blank`,
+      `${what} chart should be displayed — chart area is blank (${chart.coverage === null ? chart.error : `${(chart.coverage * 100).toFixed(2)}% drawn pixels`})`);
+  }
 }
 
 // Types `query` into the already-open search input and waits until the FIRST result
@@ -400,11 +467,26 @@ async function submitAndConfirmOrder(label, price, symbolName) {
   // instead of reading the page source once right after arriving. Only checks that the
   // order is listed, not that it reached any particular status - prints whatever status
   // is actually shown (Pending, Executed, Rejected, ...) for the record.
+  // Re-reading alone isn't enough: confirmed live (R39, MCX GOLD) that the All tab's
+  // header count already included the new order (24 -> 25) while the rows below stayed
+  // stale for the whole poll, topmost row still the previous (CDS) order — so every few
+  // polls, force the list to reload by switching tabs away and back to All, then
+  // pull down from the top (new orders are listed first).
   let matchedRow = null;
+  let polls = 0;
   await orderPadPage.pollUntil(async () => {
     matchedRow = (await orderbookPage.getOrderRows()).find(isPlacedOrder) || null;
-    return !!matchedRow;
-  }, 12000, 1000);
+    if (matchedRow) return true;
+    if (++polls % 4 === 0) {
+      console.log('  ℹ  Placed order not listed yet — reloading the All tab (Pending → All, pull down)');
+      await orderbookPage.tapTab('pending');
+      await browser.pause(800);
+      await orderbookPage.tapTab('all');
+      await browser.pause(800);
+      await orderbookPage.swipeDown();
+    }
+    return false;
+  }, 30000, 1000);
 
   // Not in the visible rows (e.g. a long order list) - scroll through the All tab once.
   for (let i = 0; !matchedRow && i < 3; i++) {
@@ -520,13 +602,13 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     // flow tests/loginWithOtp.test.js reads it at (right after launch, before login): permission
     // popup handling first, then build version fetching.
     await handlePermissionDialog();
-    const versionVisible = await loginPage.isDisplayed(BUILD_VERSION_SEL, 5000);
-    if (!versionVisible) {
-      console.log('  ℹ  Build version label not found — skipping');
-      return;
-    }
+    const versionVisible = await loginPage.isDisplayed(BUILD_VERSION_SEL, 10000);
+    console.log(`  ℹ  Build version label visible: ${versionVisible}`);
+    await assertOrDump(versionVisible, 'R1: build version label not found on the Login screen', 'Build version label should be displayed on the Login screen');
+
     const el = await $(BUILD_VERSION_SEL);
-    const buildVersion = ((await el.getAttribute('content-desc')) || '').trim();
+    const desc = ((await el.getAttribute('content-desc')) || '').trim();
+    const buildVersion = (desc.match(/v\d+\.\d+\.\d+ \(\d+\)$/) || [desc])[0];
     console.log(`  ℹ  Build version: ${buildVersion}`);
     await assertOrDump(!!buildVersion, 'R1: build version label found but empty', 'Build version label should carry a non-empty value');
   });
@@ -683,7 +765,11 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
   it('R12: Search the symbol "HCL"', async function () {
     this.timeout(15000);
-    await searchAndGetResults('HCL');
+    const results = await searchAndGetResults('HCL');
+    let first = null;
+    try { if (results.length) first = ((await results[0].getAttribute('content-desc')) || '').split(/\n|&#10;/)[0].trim(); } catch {}
+    console.log(`  ℹ  "HCL" search results: ${results.length}${first ? `  |  first: ${first}` : ''}`);
+    await assertOrDump(results.length > 0, 'R12: no search results for "HCL"', 'Searching "HCL" should list at least one result');
   });
 
   it('R13: Validate the search list and click cancel', async function () {
@@ -972,31 +1058,51 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await assertOrDump(chargesTapped, 'R26: could not tap Applicable Charges', 'Applicable Charges link should be tappable on the confirmation popup');
     await browser.pause(600);
 
-    const chargesPanelVisible = await orderPadPage.isChargesPanelVisible(5000);
-    console.log(`  ℹ  Applicable Charges panel visible: ${chargesPanelVisible}`);
-    if (!chargesPanelVisible) await orderPadPage.dumpPageSource('r21-charges-panel-missing');
-    await assertOrDump(chargesPanelVisible, 'R26: Applicable Charges panel did not open', 'Applicable Charges panel should open after tapping the link');
+    // On a validation failure below, back out of the charges panel and the confirmation
+    // popup before rethrowing — confirmed live that leaving the panel open ("Something
+    // went wrong" from the charges API) stranded the app there and cascaded into R27-R32.
+    let validated = false;
+    try {
+      const chargesPanelVisible = await orderPadPage.isChargesPanelVisible(5000);
+      console.log(`  ℹ  Applicable Charges panel visible: ${chargesPanelVisible}`);
+      if (!chargesPanelVisible) await orderPadPage.dumpPageSource('r21-charges-panel-missing');
+      await assertOrDump(chargesPanelVisible, 'R26: Applicable Charges panel did not open', 'Applicable Charges panel should open after tapping the link');
 
-    const chargesHeader = await orderPadPage.getChargesHeader();
-    console.log(`  ℹ  Applicable Charges header: ${chargesHeader}`);
-    await assertOrDump(!!chargesHeader, 'R26: Applicable Charges header not found', 'Applicable Charges panel should show a header');
+      const chargesHeader = await orderPadPage.getChargesHeader();
+      console.log(`  ℹ  Applicable Charges header: ${chargesHeader}`);
+      await assertOrDump(!!chargesHeader, 'R26: Applicable Charges header not found', 'Applicable Charges panel should show a header');
 
-    // Values aren't checked — pass only if every expected charge is listed and no error
-    // message/toast is shown; otherwise fail with the cause.
-    const charges = await orderPadPage.getChargesPanelStatus();
-    console.log(`  ℹ  Brokerage/charges details: ${charges.breakdown.join(' | ')}`);
-    console.log(`  ℹ  Charges listed (${charges.charges.length}): ${charges.charges.join(', ') || 'none'}`);
-    if (charges.missing.length) console.log(`  ℹ  Charges missing (${charges.missing.length}): ${charges.missing.join(', ')}`);
-    if (!charges.isValid) {
-      console.log(`  ✗  Applicable Charges failure cause: ${charges.failureCause}`);
-      await orderPadPage.dumpPageSource('r26-charges-breakdown-invalid');
+      // Values aren't checked — pass only if every expected charge is listed and no error
+      // message/toast is shown; otherwise fail with the cause.
+      const charges = await orderPadPage.getChargesPanelStatus();
+      console.log(`  ℹ  Brokerage/charges details: ${charges.breakdown.join(' | ')}`);
+      console.log(`  ℹ  Charges listed (${charges.charges.length}): ${charges.charges.join(', ') || 'none'}`);
+      if (charges.missing.length) console.log(`  ℹ  Charges missing (${charges.missing.length}): ${charges.missing.join(', ')}`);
+      if (!charges.isValid) {
+        console.log(`  ✗  Applicable Charges failure cause: ${charges.failureCause}`);
+        await orderPadPage.dumpPageSource('r26-charges-breakdown-invalid');
+      }
+      await assertOrDump(charges.isValid, `R26: Applicable Charges failed — ${charges.failureCause}`,
+        `Applicable Charges panel should list all charges with no error message — cause: ${charges.failureCause}`);
+
+      const chargesDisclaimer = await orderPadPage.getChargesDisclaimer();
+      console.log(`  ℹ  Disclaimer: ${chargesDisclaimer}`);
+      await assertOrDump(!!chargesDisclaimer, 'R26: disclaimer text not found on the Applicable Charges panel', 'Applicable Charges panel should show a disclaimer');
+      validated = true;
+    } finally {
+      if (!validated) {
+        // Best-effort, never confirms: each back press closes one layer (panel, then popup).
+        // Not gated on orderPadPage.isLoaded() — its "Order Type"/"Quantity" text check also
+        // matches the confirmation popup, so it can't tell the two apart.
+        for (let i = 0; i < 3; i++) {
+          if (await orderPadPage.isChargesPanelVisible(1500)) await orderPadPage.closeChargesPanel();
+          else if (await orderPadPage.isConfirmationPopupVisible(500)) await orderPadPage.dismissConfirmationPopup();
+          else break;
+          await browser.pause(500);
+        }
+        console.log(`  ℹ  Cleanup after failure — back on OrderPad screen: ${await orderPadPage.isLoaded(2000)}`);
+      }
     }
-    await assertOrDump(charges.isValid, `R26: Applicable Charges failed — ${charges.failureCause}`,
-      `Applicable Charges panel should list all charges with no error message — cause: ${charges.failureCause}`);
-
-    const chargesDisclaimer = await orderPadPage.getChargesDisclaimer();
-    console.log(`  ℹ  Disclaimer: ${chargesDisclaimer}`);
-    await assertOrDump(!!chargesDisclaimer, 'R26: disclaimer text not found on the Applicable Charges panel', 'Applicable Charges panel should show a disclaimer');
 
     const chargesClosed = await orderPadPage.closeChargesPanel();
     console.log(`  ℹ  Applicable Charges back button tapped: ${chargesClosed}`);
@@ -1218,7 +1324,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // DPR-bounce technique as R28: enter 0.00, let the DPR guard reject it, retry at the
   // parsed lower circuit price, and confirm. Explicitly authorized per segment.
   it('R34: Place a real order for the NSE segment — search "IDEA", DPR-bounce to the lower circuit', async function () {
-    this.timeout(90000);
+    this.timeout(120000);
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
@@ -1263,7 +1369,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // expose which is which via accessibility); the exchange toggle on the OrderPad is
   // used to explicitly select BSE regardless.
   it('R35: Place a real order for the BSE segment — search "RTN POWER", DPR-bounce to the lower circuit', async function () {
-    this.timeout(90000);
+    this.timeout(120000);
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
@@ -1315,7 +1421,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // range (like 25100 against a ~24000 spot) was unreachable even though the contract
   // itself exists and is searchable.
   it('R36: Place a real order for the NFO segment — NIFTY 25100 CE, DPR-bounce to the lower circuit', async function () {
-    this.timeout(90000);
+    this.timeout(120000);
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
@@ -1359,7 +1465,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // approach as R36, for the same reason (the target strike sits outside the Option
   // Chain screen's default visible range).
   it('R37: Place a real order for the BFO segment — SENSEX 77100 CE, DPR-bounce to the lower circuit', async function () {
-    this.timeout(90000);
+    this.timeout(120000);
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
@@ -1406,7 +1512,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // (0 LTP, no order-entry fields at all) - a real risk worth knowing about, though not
   // filtered out here per instruction.
   it('R38: Place a real order for the CDS segment — first Currency market mover, DPR-bounce to the lower circuit', async function () {
-    this.timeout(90000);
+    this.timeout(120000);
 
     const opened = await tapFirstMarketMover('Currency', 'Top Losers');
     await assertOrDump(opened, 'R38: could not open a Currency market mover', 'Should be able to open a symbol from the Currency market movers list');
@@ -1443,7 +1549,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // sub-tab is selected by default (Top Gainers), falling back to Top Losers if that
   // list is empty -> first symbol shown.
   it('R39: Place a real order for the MCX segment — first Commodity market mover, DPR-bounce to the lower circuit', async function () {
-    this.timeout(90000);
+    this.timeout(120000);
 
     const opened = await tapFirstMarketMover('Commodity', 'Top Losers');
     await assertOrDump(opened, 'R39: could not open a Commodity market mover', 'Should be able to open a symbol from the Commodity market movers list');
@@ -1824,83 +1930,109 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await watchlistPage.goToWatchlist();
   });
 
+  // ── NxtOption (R51-R56) ──────────────────────────────────────────────────────
+  // Each "open" test (R51/R53/R55) leaves its sub-screen open for the "verify" test right
+  // after it; each verify test re-opens the sub-screen itself if it isn't already showing
+  // (so it can run alone via --mochaOpts.grep) and always backs out to Watchlist at the
+  // end, so one failing NxtOption check can't strand the next group.
+  // Read-only: Buy Call only loads a predefined strategy's payoff view — nothing here
+  // taps Execute / Place Order.
+
   it('R51: NxtOption — Strategy Builder', async function () {
-    this.timeout(20000);
-
-    await watchlistPage.goToWatchlist();
-    const expanded = await nxtOptionPage.openNxtOptionMenu();
-    await assertOrDump(expanded, 'R51: NxtOption dropdown did not expand', 'Tapping NxtOption in the hamburger menu should reveal Strategy Builder / IV Analysis / OI Analysis');
-
-    const sbTapped = await nxtOptionPage.tapStrategyBuilder();
-    await assertOrDump(sbTapped, 'R51: could not tap Strategy Builder', 'Strategy Builder should be tappable from the NxtOption dropdown');
-    await browser.pause(800);
-
-    const sbLoaded = await nxtOptionPage.isStrategyBuilderLoaded();
-    await assertOrDump(sbLoaded, 'R51: Strategy Builder screen did not load', 'Strategy Builder screen should load after tapping it');
-
-    await nxtOptionPage.goBack();
-    await browser.pause(800);
-    const backOnWatchlist = await watchlistPage.isLoaded(5000);
-    console.log(`  ℹ  Back from Strategy Builder lands on Watchlist directly: ${backOnWatchlist}`);
-    await assertOrDump(backOnWatchlist, 'R51: did not return to Watchlist after Strategy Builder', 'Back from Strategy Builder should return to Watchlist');
+    this.timeout(25000);
+    await openNxtOptionScreen('R51', 'Strategy Builder');
+    await browser.pause(2000);
   });
 
-  it('R52: NxtOption — IV Analysis', async function () {
-    this.timeout(20000);
-
-    await watchlistPage.goToWatchlist();
-    const expanded = await nxtOptionPage.openNxtOptionMenu();
-    await assertOrDump(expanded, 'R52: NxtOption dropdown did not expand', 'NxtOption dropdown should expand for IV Analysis');
-
-    const ivTapped = await nxtOptionPage.tapIvAnalysis();
-    await assertOrDump(ivTapped, 'R52: could not tap IV Analysis', 'IV Analysis should be tappable from the NxtOption dropdown');
-    await browser.pause(800);
-
-    const ivLoaded = await nxtOptionPage.isIvAnalysisLoaded();
-    await assertOrDump(ivLoaded, 'R52: IV Analysis screen did not load', 'IV Analysis screen should load after tapping it');
-
-    await nxtOptionPage.goBack();
-    await browser.pause(800);
-    const backOnWatchlist = await watchlistPage.isLoaded(5000);
-    await assertOrDump(backOnWatchlist, 'R52: did not return to Watchlist after IV Analysis', 'Back from IV Analysis should return to Watchlist');
+  it('R52: NxtOption — Strategy Builder → Buy Call (no error / no infinite loading)', async function () {
+    this.timeout(45000);
+    try {
+      await ensureNxtOptionScreen('R52', 'Strategy Builder');
+      const buyCallTapped = await nxtOptionPage.tapLabel('Buy Call');
+      console.log(`  ℹ  Buy Call tapped: ${buyCallTapped}`);
+      await assertOrDump(buyCallTapped, 'R52: Buy Call not found on Strategy Builder', 'Buy Call should be tappable on the Strategy Builder screen');
+      await browser.pause(800);
+      await assertNxtOptionHealthy('R52', 'Buy Call', ['Buy Call', 'Predefined']);
+    } finally {
+      await backToWatchlistFromNxtOption('R52', 'Strategy Builder');
+    }
   });
 
-  it('R53: NxtOption — OI Analysis', async function () {
-    this.timeout(20000);
-
-    await watchlistPage.goToWatchlist();
-    const expanded = await nxtOptionPage.openNxtOptionMenu();
-    await assertOrDump(expanded, 'R53: NxtOption dropdown did not expand', 'NxtOption dropdown should expand for OI Analysis');
-
-    const oiTapped = await nxtOptionPage.tapOiAnalysis();
-    await assertOrDump(oiTapped, 'R53: could not tap OI Analysis', 'OI Analysis should be tappable from the NxtOption dropdown');
-    await browser.pause(800);
-
-    const oiLoaded = await nxtOptionPage.isOiAnalysisLoaded();
-    await assertOrDump(oiLoaded, 'R53: OI Analysis screen did not load', 'OI Analysis screen should load after tapping it');
-
-    await nxtOptionPage.goBack();
-    await browser.pause(800);
-    const backOnWatchlist = await watchlistPage.isLoaded(5000);
-    await assertOrDump(backOnWatchlist, 'R53: did not return to Watchlist after OI Analysis', 'Back from OI Analysis should return to Watchlist');
+  it('R53: NxtOption — IV Analysis', async function () {
+    this.timeout(25000);
+    await openNxtOptionScreen('R53', 'IV Analysis');
+    await browser.pause(2000);
   });
 
-  it('R54: Validate Portfolio — Holdings fields', async function () {
+  it('R54: NxtOption — IV Analysis → IV Charts (default) displays charts', async function () {
+    this.timeout(45000);
+    try {
+      await ensureNxtOptionScreen('R54', 'IV Analysis');
+      // IV Charts must be the default tab — IVR-IVP Scan is deliberately never tapped.
+      const ivChartsSelected = await nxtOptionPage.getSelectedState('IV Charts');
+      const ivrSelected      = await nxtOptionPage.getSelectedState('IVR');
+      console.log(`  ℹ  IV Charts selected: ${ivChartsSelected ?? 'unknown'}  |  IVR-IVP Scan selected: ${ivrSelected ?? 'unknown'}`);
+      await assertOrDump(ivChartsSelected !== 'false' && ivrSelected !== 'true', 'R54: IV Charts is not the default tab',
+        'IV Charts should be selected by default on IV Analysis (not IVR-IVP Scan)');
+      // The chart draws directly below the Line / Area radio buttons (confirmed via screenshot).
+      await assertNxtOptionHealthy('R54', 'IV Charts', ['IV Charts', 'IVR'], { chartAnchor: /^(line|area)$/i });
+    } finally {
+      await backToWatchlistFromNxtOption('R54', 'IV Analysis');
+    }
+  });
+
+  it('R55: NxtOption — OI Analysis', async function () {
+    this.timeout(25000);
+    await openNxtOptionScreen('R55', 'OI Analysis');
+    await browser.pause(2000);
+  });
+
+  it('R56: NxtOption — OI Analysis → OI (default), OI Change, PCR Chart display data', async function () {
+    this.timeout(75000);
+    const tabLabels = ['OI', 'OI Change', 'PCR Chart'];
+    // Chart/data sits below the tab row and the expiry selector ("06 Oct 2026 / W1").
+    const chartAnchor = /^(oi|oi change|pcr chart|line|area)$|\d{2} \w{3} \d{4}/i;
+    try {
+      await ensureNxtOptionScreen('R56', 'OI Analysis');
+      const oiSelected = await nxtOptionPage.getSelectedState('OI', { exact: true });
+      console.log(`  ℹ  OI selected by default: ${oiSelected ?? 'unknown'}`);
+      if (oiSelected === 'false') {
+        // Capture the OI screen itself — the failure screenshot is only taken after the
+        // finally below has already backed out to Watchlist.
+        await nxtOptionPage.takeScreenshot('R56-OI_default_tab');
+        await nxtOptionPage.dumpPageSource('r56-oi-default-tab');
+      }
+      await assertOrDump(oiSelected !== 'false', 'R56: OI is not the default tab', 'OI should be selected by default on OI Analysis');
+      await assertNxtOptionHealthy('R56', 'OI', tabLabels, { chartAnchor });
+
+      for (const tab of ['OI Change', 'PCR Chart']) {
+        const tapped = await nxtOptionPage.tapLabel(tab);
+        console.log(`  ℹ  ${tab} tapped: ${tapped}`);
+        await assertOrDump(tapped, `R56: ${tab} not found on OI Analysis`, `${tab} should be tappable on the OI Analysis screen`);
+        await browser.pause(800);
+        await assertNxtOptionHealthy('R56', tab, tabLabels, { chartAnchor });
+      }
+    } finally {
+      await backToWatchlistFromNxtOption('R56', 'OI Analysis');
+    }
+  });
+
+  it('R57: Validate Portfolio — Holdings fields', async function () {
     this.timeout(30000);
 
     const opened = await portfolioPage.openPortfolio();
-    await assertOrDump(opened, 'R54: could not open the Portfolio tab', 'Portfolio bottom-nav tab should be tappable');
+    await assertOrDump(opened, 'R57: could not open the Portfolio tab', 'Portfolio bottom-nav tab should be tappable');
     await browser.pause(800);
 
     const loaded = await portfolioPage.isLoaded(8000);
-    await assertOrDump(loaded, 'R54: Portfolio screen did not load', 'Portfolio screen should show Holdings and Positions tabs');
+    await assertOrDump(loaded, 'R57: Portfolio screen did not load', 'Portfolio screen should show Holdings and Positions tabs');
 
     const holdingsCount = await portfolioPage.getHoldingsCount();
     console.log(`  ℹ  Holdings count: ${holdingsCount}`);
 
     const summary = await portfolioPage.getHoldingsSummary();
     console.log(`  ℹ  Holdings summary — Current: ${summary.currentValue}, Overall P&L: ${summary.overallPnl}, Invested: ${summary.investedValue}, Today's P&L: ${summary.todayPnl}`);
-    await assertOrDump(!!summary.currentValue && !!summary.investedValue, 'R54: Holdings summary fields not found', 'Current and Invested value should be visible on the Holdings tab');
+    await assertOrDump(!!summary.currentValue && !!summary.investedValue, 'R57: Holdings summary fields not found', 'Current and Invested value should be visible on the Holdings tab');
 
     const holdingsRows = await portfolioPage.getHoldingsRows();
     console.log(`  ℹ  Holdings rows (${holdingsRows.length}):`);
@@ -1908,19 +2040,19 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     if (holdingsRows.length > 0) {
       const rowTapped = await portfolioPage.tapHoldingRow(0);
-      await assertOrDump(rowTapped, 'R54: could not tap the first holding row', 'A holding row should be tappable');
+      await assertOrDump(rowTapped, 'R57: could not tap the first holding row', 'A holding row should be tappable');
       await browser.pause(1000);
 
       const detailLoaded = await portfolioPage.isHoldingDetailLoaded();
-      await assertOrDump(detailLoaded, 'R54: holding detail screen did not load', 'Holding detail screen should load after tapping a holding row');
+      await assertOrDump(detailLoaded, 'R57: holding detail screen did not load', 'Holding detail screen should load after tapping a holding row');
 
       const fields = await portfolioPage.getHoldingDetailFields();
       console.log('  ℹ  Holding detail fields:');
       for (const [key, value] of Object.entries(fields)) console.log(`     - ${key}: ${value}`);
-      await assertOrDump(!!fields.stockDetails, 'R54: Stock details field not found', 'Stock details should be visible on the holding detail screen');
-      await assertOrDump(!!fields.avgPrice, 'R54: Average Price field not found', 'Average Price should be visible on the holding detail screen');
-      await assertOrDump(!!fields.marketValue, 'R54: Market Value field not found', 'Market Value should be visible on the holding detail screen');
-      await assertOrDump(!!fields.investedValue, 'R54: Invested Value field not found', 'Invested Value should be visible on the holding detail screen');
+      await assertOrDump(!!fields.stockDetails, 'R57: Stock details field not found', 'Stock details should be visible on the holding detail screen');
+      await assertOrDump(!!fields.avgPrice, 'R57: Average Price field not found', 'Average Price should be visible on the holding detail screen');
+      await assertOrDump(!!fields.marketValue, 'R57: Market Value field not found', 'Market Value should be visible on the holding detail screen');
+      await assertOrDump(!!fields.investedValue, 'R57: Invested Value field not found', 'Invested Value should be visible on the holding detail screen');
 
       const [squareOffVisible, buyMoreVisible] = await Promise.all([
         portfolioPage.isSquareOffVisible(),
@@ -1937,16 +2069,16 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await watchlistPage.goToWatchlist();
   });
 
-  it('R55: Validate Portfolio — Positions fields', async function () {
+  it('R58: Validate Portfolio — Positions fields', async function () {
     this.timeout(20000);
 
     const opened = await portfolioPage.openPortfolio();
-    await assertOrDump(opened, 'R55: could not open the Portfolio tab', 'Portfolio bottom-nav tab should be tappable');
+    await assertOrDump(opened, 'R58: could not open the Portfolio tab', 'Portfolio bottom-nav tab should be tappable');
     await browser.pause(800);
-    await assertOrDump(await portfolioPage.isLoaded(8000), 'R55: Portfolio screen did not load', 'Portfolio screen should show Holdings and Positions tabs');
+    await assertOrDump(await portfolioPage.isLoaded(8000), 'R58: Portfolio screen did not load', 'Portfolio screen should show Holdings and Positions tabs');
 
     const posTapped = await portfolioPage.tapPositionsTab();
-    await assertOrDump(posTapped, 'R55: could not tap the Positions tab', 'Positions tab should be tappable');
+    await assertOrDump(posTapped, 'R58: could not tap the Positions tab', 'Positions tab should be tappable');
     await browser.pause(800);
 
     const positionsCount = await portfolioPage.getPositionsCount();
@@ -1955,24 +2087,24 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     if (positionsCount === 0) {
       const noPositions = await portfolioPage.isNoPositionsVisible();
       console.log(`  ℹ  "You don't have any positions" empty-state message visible: ${noPositions}`);
-      await assertOrDump(noPositions, 'R55: empty-state message not found on Positions tab', 'Empty-state message should be visible when there are no positions');
+      await assertOrDump(noPositions, 'R58: empty-state message not found on Positions tab', 'Empty-state message should be visible when there are no positions');
     } else {
       const positionRows = await portfolioPage.getPositionRows();
       console.log(`  ℹ  Position rows (${positionRows.length}):`);
       positionRows.forEach((r, i) => console.log(`     [${i}] ${r}`));
-      await assertOrDump(positionRows.length > 0, 'R55: Positions count > 0 but no rows parsed', 'Position rows should be parseable when the count is above 0');
+      await assertOrDump(positionRows.length > 0, 'R58: Positions count > 0 but no rows parsed', 'Position rows should be parseable when the count is above 0');
     }
 
     await watchlistPage.goToWatchlist();
   });
 
-  it('R56: Mutual Funds — Home, High Returns, first fund One Time & Start SIP', async function () {
+  it('R59: Mutual Funds — Home, High Returns, first fund One Time & Start SIP', async function () {
     this.timeout(60000);
 
     await watchlistPage.tapNavMutualFunds();
     await browser.pause(1000);
     const homeLoaded = await mutualFundsPage.isHomeTabDisplayed();
-    await assertOrDump(homeLoaded, 'R56: Mutual Funds Home tab did not load', 'Mutual Funds Home tab should be displayed after tapping the bottom nav');
+    await assertOrDump(homeLoaded, 'R59: Mutual Funds Home tab did not load', 'Mutual Funds Home tab should be displayed after tapping the bottom nav');
 
     const tileCount = await mutualFundsPage.getHighReturnsTileCount();
     console.log(`  ℹ  High Returns tile count: ${tileCount}`);
@@ -1986,7 +2118,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(1500);
 
     const oneTimeOpened = await mutualFundsPage.clickOneTimeButton();
-    await assertOrDump(oneTimeOpened, 'R56: could not open One Time order pad', 'One Time button should be tappable on the fund detail screen');
+    await assertOrDump(oneTimeOpened, 'R59: could not open One Time order pad', 'One Time button should be tappable on the fund detail screen');
     await browser.pause(1000);
     await mutualFundsPage.goBack();
 
@@ -1998,38 +2130,38 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     }
 
     const backOnHome = await mutualFundsPage.navigateBackToHome();
-    await assertOrDump(backOnHome, 'R56: did not return to Mutual Funds Home', 'Navigating back from the fund detail flow should reach the Mutual Funds Home tab');
+    await assertOrDump(backOnHome, 'R59: did not return to Mutual Funds Home', 'Navigating back from the fund detail flow should reach the Mutual Funds Home tab');
 
     await watchlistPage.goToWatchlist();
   });
 
-  it('R57: Mutual Funds — Explore, category count, Equity → All', async function () {
+  it('R60: Mutual Funds — Explore, category count, Equity → All', async function () {
     this.timeout(45000);
 
     await watchlistPage.tapNavMutualFunds();
     await browser.pause(1000);
 
     const exploreTapped = await mutualFundsPage.clickExploreTab();
-    await assertOrDump(exploreTapped, 'R57: could not tap the Explore tab', 'Explore tab should be tappable from Mutual Funds');
+    await assertOrDump(exploreTapped, 'R60: could not tap the Explore tab', 'Explore tab should be tappable from Mutual Funds');
     await browser.pause(1000);
 
     const categories = await mutualFundsPage.countCategorySolutionsHeaders();
     console.log(`  ℹ  Category Solutions — ${categories.length} categor${categories.length === 1 ? 'y' : 'ies'} found: ${categories.join(', ')}`);
-    await assertOrDump(categories.length > 0, 'R57: no Category Solutions headers found', 'At least one category should be found under Category Solutions');
+    await assertOrDump(categories.length > 0, 'R60: no Category Solutions headers found', 'At least one category should be found under Category Solutions');
 
     await mutualFundsPage.scrollExploreToTop();
     const equityCount = await mutualFundsPage.getCategoryFundCount('Equity');
     console.log(`  ℹ  Equity category card shows: ${equityCount} funds`);
 
     const equityExpanded = await mutualFundsPage.clickCategoryCard('Equity');
-    await assertOrDump(equityExpanded, 'R57: could not tap the Equity category card', 'Equity category card should be tappable');
+    await assertOrDump(equityExpanded, 'R60: could not tap the Equity category card', 'Equity category card should be tappable');
     await browser.pause(1000);
 
     const equityTags = await mutualFundsPage.getCategoryTags();
     console.log(`  ℹ  Equity tags: ${equityTags.join(', ')}`);
 
     const allTapped = await mutualFundsPage.clickCategoryTag('All');
-    await assertOrDump(allTapped, 'R57: could not tap the "All" tag under Equity', '"All" tag should be tappable once Equity is expanded');
+    await assertOrDump(allTapped, 'R60: could not tap the "All" tag under Equity', '"All" tag should be tappable once Equity is expanded');
     await browser.pause(1500);
 
     const allResultsCount = await mutualFundsPage.getFilteredResultsCount();
@@ -2042,14 +2174,14 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await watchlistPage.goToWatchlist();
   });
 
-  it('R58: Mutual Funds — Portfolio, Active SIPs (if available)', async function () {
+  it('R61: Mutual Funds — Portfolio, Active SIPs (if available)', async function () {
     this.timeout(30000);
 
     await watchlistPage.tapNavMutualFunds();
     await browser.pause(1000);
 
     const portfolioTapped = await mutualFundsPage.clickPortfolioTab();
-    await assertOrDump(portfolioTapped, 'R58: could not tap the Portfolio tab', 'Portfolio tab should be tappable from Mutual Funds');
+    await assertOrDump(portfolioTapped, 'R61: could not tap the Portfolio tab', 'Portfolio tab should be tappable from Mutual Funds');
     await browser.pause(1000);
 
     const sipsVisible = await mutualFundsPage.isActiveSipsTileVisible();
@@ -2069,31 +2201,31 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await watchlistPage.goToWatchlist();
   });
 
-  it('R59: Mutual Funds — Accounts', async function () {
+  it('R62: Mutual Funds — Accounts', async function () {
     this.timeout(20000);
 
     await watchlistPage.tapNavMutualFunds();
     await browser.pause(1000);
 
     const accountsTapped = await mutualFundsPage.clickAccountsTab();
-    await assertOrDump(accountsTapped, 'R59: could not tap the Accounts tab', 'Accounts tab should be tappable from Mutual Funds');
+    await assertOrDump(accountsTapped, 'R62: could not tap the Accounts tab', 'Accounts tab should be tappable from Mutual Funds');
     await browser.pause(1000);
 
     const reportsMenuVisible = await mutualFundsPage.isReportsMenuVisible();
-    await assertOrDump(reportsMenuVisible, 'R59: Accounts tab did not load', 'Reports menu button should be visible on the Accounts tab');
+    await assertOrDump(reportsMenuVisible, 'R62: Accounts tab did not load', 'Reports menu button should be visible on the Accounts tab');
 
     await watchlistPage.goToWatchlist();
   });
 
-  it('R60: Logout of the app', async function () {
+  it('R63: Logout of the app', async function () {
     this.timeout(20000);
 
     await watchlistPage.goToWatchlist();
     const loggedOut = await loginPage.logout();
-    await assertOrDump(loggedOut, 'R60: could not complete the logout flow', 'Hamburger menu → Logout → Yes should all be tappable');
+    await assertOrDump(loggedOut, 'R63: could not complete the logout flow', 'Hamburger menu → Logout → Yes should all be tappable');
     await browser.pause(1000);
 
     const backOnLogin = await loginPage.waitForLoginScreen(15000);
-    await assertOrDump(backOnLogin, 'R60: did not return to the Login screen after logout', 'Login screen should reappear after logging out');
+    await assertOrDump(backOnLogin, 'R63: did not return to the Login screen after logout', 'Login screen should reappear after logging out');
   });
 });
