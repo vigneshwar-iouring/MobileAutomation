@@ -130,6 +130,7 @@ class MutualFundsPage extends BasePage {
         // Each card reads "<Name> category. <description>.. Available: <N> funds.}, Double tap to
         // show the tags in this category." - " category." is a distinctive, stable substring.
         this.categorySolutionsCard = 'android=new UiSelector().descriptionContains("category.")';
+        this.categorySolutionsCardRegex = /category\./;
         this.categoryTag = 'android=new UiSelector().descriptionContains("Double tap to view funds under this tag")';
         this.addFilterButton = 'android=new UiSelector().descriptionContains("Add filter button")';
         this.localSearchBar = 'android=new UiSelector().description("Search bar., Double tap to search from funds listed below.")';
@@ -635,6 +636,86 @@ class MutualFundsPage extends BasePage {
         return name;
     }
 
+    // The period comes from the list's year selector pill ("1Y Returns" / "3Y Returns" / ...), and
+    // the % from the first fund card ("<Name>. Categories: .... 1 Year Return value: 60.95%.,
+    // Double tap to view details."). The card names its own period too - cross-checked against the
+    // pill so a list that hasn't refreshed after a period change isn't compared against the wrong
+    // Annualised period. Must be called with the list at the top, so the first card found is the
+    // one clickFirstFund() then opens.
+    // Screens without that pill (Home's Trending Funds, Explore's category lists - their period is
+    // set through a section picker instead) fall back to the period the card itself names.
+    async getFirstFundListReturn(timeout = 5000) {
+        const pill = await this.getListReturnPeriod(1500).catch(() => null);
+        const pillYears = pill && /^(\d+)Y/.test(pill) ? Number(pill.match(/^(\d+)Y/)[1]) : null;
+
+        const el = await this.findElement(this.fundCard, timeout);
+        const desc = (await el.getAttribute('content-desc')) || '';
+        const name = desc.split('.')[0].trim();
+        const m = desc.match(/(\d+)\s+Years?\s+Return value:\s*(NA|-?[\d.]+%)/i);
+        const cardYears = m ? Number(m[1]) : null;
+        console.log(`Fund list year selector: ${pill || `(no "nY Returns" selector on this screen - using the card's ${cardYears ?? '?'}Y period)`}`);
+        const info = { name, years: pillYears ?? cardYears, value: m ? m[2] : null };
+        console.log(`First fund in list: "${name}" - ${cardYears ?? '?'}Y return: ${info.value ?? '(not found)'}`);
+        if (pillYears !== null && cardYears !== null && pillYears !== cardYears) {
+            console.error(`FAIL: year selector shows ${pillYears}Y but the fund card shows a ${cardYears}Y return`);
+            info.years = null;
+        }
+        return info;
+    }
+
+    // The whole check for any step that opens a fund from a list: read the first fund's list %,
+    // open it, and verify Annualised for the same period. Leaves the app on the fund detail screen
+    // (with Annualised back on its default period), exactly where clickFirstFund() alone would.
+    async openFirstFundAndVerifyReturn() {
+        const listReturn = await this.getFirstFundListReturn();
+        const name = await this.clickFirstFund();
+        await this.pause(1500);
+        await this.verifyAnnualisedMatchesListReturn(listReturn);
+        return name;
+    }
+
+    // Compares the list card's return % against the fund detail's "Annualised" value for the SAME
+    // period (the Annualised box has its own 1Y/3Y/5Y picker). The detail screen always opens on
+    // the first period option, which later steps (cycleAnnualisedReturnPeriods) rely on - so if a
+    // different period had to be selected here, the first one is re-selected before returning.
+    async verifyAnnualisedMatchesListReturn(listInfo) {
+        if (!listInfo || listInfo.years === null || listInfo.value === null) {
+            console.error('FAIL: could not read the year selector or the return % from the fund list - nothing to compare');
+            return false;
+        }
+        const period = `${listInfo.years}Y`;
+        await this.openAnnualisedReturnPeriodPicker();
+        const options = await this.getAnnualisedReturnPeriodOptions();
+        if (!options.includes(period)) {
+            await this.dismissReturnPeriodPicker();
+            console.error(`FAIL: Annualised box has no "${period}" option (options: ${options.join(', ') || 'none'})`);
+            return false;
+        }
+        if (period === options[0]) {
+            await this.dismissReturnPeriodPicker();
+        } else {
+            await this.selectAnnualisedReturnPeriod(period);
+            await this.pause(800);
+        }
+
+        const { annualised } = await this.readFundNavAndAnnualised();
+        const toNum = s => (s && /\d/.test(s) ? parseFloat(s.replace('%', '')) : null);
+        const listNum = toNum(listInfo.value);
+        const detailNum = toNum(annualised);
+        const match = listNum !== null && detailNum !== null ? listNum === detailNum : listInfo.value === annualised;
+        const result = `${period} return for "${listInfo.name}" - fund list: ${listInfo.value}, Annualised (${period}): ${annualised}`;
+        // console.error marks the whole run FAIL in the HTML report, not just this TC in the summary.
+        if (match) console.log(`${result} - PASS (match)`);
+        else console.error(`${result} - FAIL (mismatch)`);
+
+        if (period !== options[0]) {
+            await this.openAnnualisedReturnPeriodPicker();
+            await this.selectAnnualisedReturnPeriod(options[0]);
+            await this.pause(800);
+        }
+        return match;
+    }
+
     // NAV and Annualised sit as label-above-value pairs (findValueBelow), not side-by-side like
     // most of the app's other detail screens - "NAV as on <date>" carries the date inline with the
     // label rather than as its own element.
@@ -996,7 +1077,10 @@ class MutualFundsPage extends BasePage {
     // selected by default), the same way cycleSectionReturnPeriods does for the section widgets -
     // matched by leading digit ("1Y Returns" vs. "1 Year Return") since the pill and its dropdown
     // options use different label formats for the same period.
-    async cycleListReturnPeriods() {
+    // `afterSelect(option)` runs once each newly selected period is showing (not for the default,
+    // which was never re-clicked) - e.g. to verify the list against a fund's detail screen for that
+    // period. It must leave the app back on this list, picker closed.
+    async cycleListReturnPeriods({ afterSelect } = {}) {
         const before = await this.getListReturnPeriod();
         console.log(`List return period - currently showing: ${before}`);
         const beforeNum = (before.match(/\d+/) || [])[0];
@@ -1029,6 +1113,7 @@ class MutualFundsPage extends BasePage {
             const after = await this.getListReturnPeriod();
             console.log(`List return period - selected "${option}", pill now reads: "${after}"`);
             results.push({ period: option, currentPeriod: after });
+            if (afterSelect) await afterSelect(option);
         }
         return results;
     }
@@ -1094,7 +1179,11 @@ class MutualFundsPage extends BasePage {
         return { names, allMatch };
     }
 
+    // The "Invest in New Fund Offering" banner sits just below the Handpick Collections tiles - one
+    // scroll down on Home brings it fully on-screen before tapping it.
     async clickNfoBanner(timeout = 5000) {
+        await this.swipe('down');
+        await this.pause(500);
         await this.click(this.nfoBanner, timeout);
         console.log('Opened "Invest in New Fund Offering" list');
     }
@@ -1337,10 +1426,14 @@ class MutualFundsPage extends BasePage {
     // until the visible set of category cards stops changing, collecting every distinct one along
     // the way (stableEntryId truncates each card down to just its category name), so the final
     // count reflects everything under Category Solutions rather than just what's on screen at rest.
+    // Uses the single-getPageSource scroller rather than scrollToBoundary: the per-card
+    // $$(selector) + getAttribute() round trips scrollToBoundary makes hung live on this screen
+    // ("Timed out after 15000ms waiting for: captureVisibleSignature", TC 28), the same failure
+    // BasePage.captureVisibleSignatureByDescRegex documents for Option Chain.
     async countCategorySolutionsHeaders(maxScrolls = 15) {
         await this.findElement(this.categorySolutionsLabel, 8000);
         const seen = new Set();
-        await this.scrollToBoundary(this.categorySolutionsCard, 'down', { maxScrolls, seen });
+        await this.scrollToBoundaryByDescRegex(this.categorySolutionsCardRegex, 'down', { maxScrolls, seen });
 
         const headers = [...seen];
         console.log(`Category Solutions - ${headers.length} header(s) found:`);
@@ -1349,7 +1442,7 @@ class MutualFundsPage extends BasePage {
     }
 
     async scrollExploreToTop(maxScrolls = 15) {
-        await this.scrollToBoundary(this.categorySolutionsCard, 'up', { maxScrolls });
+        await this.scrollToBoundaryByDescRegex(this.categorySolutionsCardRegex, 'up', { maxScrolls });
         console.log('Scrolled to top of Explore tab');
     }
 

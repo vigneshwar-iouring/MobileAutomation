@@ -6,7 +6,7 @@ class BasketPage extends BasePage {
         this.basketTab = 'android=new UiSelector().descriptionContains("Basket").descriptionContains("Tab")';
         // "Basket Orders" in the hamburger drawer navigates to the same Basket tab as
         // Orders -> Basket - just a different entry point into the identical screen.
-        this.basketOrdersMenuItem = 'android=new UiSelector().descriptionContains("Basket Orders")';
+        this.basketOrdersMenuItem = 'android=new UiSelector().description("Basket Orders, Double tap to open Basket Orders")';
         this.emptyBasketMessage = 'android=new UiSelector().description("Basket order is Empty")';
         this.newBasketButton = '~New Basket';
 

@@ -18,6 +18,9 @@ const SEL = {
   eventBtn:       '//*[@content-desc="Event" or @text="Event" or contains(@content-desc,"Event")]',
   seeAllBtn:      '//*[@content-desc="See All" or @text="See All" or contains(@content-desc,"See All") or contains(@text,"See All")]',
   swipeUpHandle:  '//*[@content-desc="Swipe up for Stock Details"]',
+  // Header card of the Quote sheet: "Stock IDEA, NSE. Last traded price 13.05. ..." - used
+  // only as a swipe start point when the handle itself isn't exposed.
+  stockSummary:   '//*[starts-with(@content-desc,"Stock ") or contains(@content-desc,"Swipe up to explore quote details")]',
 };
 
 class QuotePage extends BasePage {
@@ -417,28 +420,67 @@ class QuotePage extends BasePage {
 
   // ── Bottom sheet gestures ────────────────────────────────────────────────────
 
-  // Expands the bottom sheet to full screen. Tries tapping the "Swipe up for
-  // Stock Details" handle first (clickable="true" — a direct tap reliably
-  // triggers the same expand animation as an actual swipe), then falls back
-  // to dragging the handle upward for sheets where the handle isn't tappable.
-  async expandBottomQuotePanel() {
-    if (await this.findAndTap(SEL.swipeUpHandle, 3000)) {
-      await browser.pause(800);
-      return true;
+  // Tapping a symbol/index opens the Quote screen as a half-height bottom sheet; swiping
+  // it up expands it to full screen. Confirmed via before/after page sources (IDEA, NSE,
+  // 1080x2340): collapsed, the "Stock IDEA, NSE. Last traded price..." summary card sits
+  // at y≈789-992 with no tab strip; expanded, it moves to y≈150 and the
+  // "Overview / Futures / Fundamentals / Technicals" tab strip appears - so the Overview
+  // tab is the expanded-state signal.
+  async isQuoteExpanded(timeout = 0) {
+    const check = async () => {
+      try {
+        const src = await driver.getPageSource();
+        return /content-desc="Overview(?:&#10;|\n)Tab 1 of \d+"/.test(src);
+      } catch { return false; }
+    };
+    return timeout ? this.pollUntil(check, timeout, 400) : check();
+  }
+
+  // Real upward swipe on the sheet: starts on the "Swipe up for Stock Details" handle (or
+  // the summary card / ~40% height if the handle isn't exposed) and drags to near the top.
+  async swipeUpQuoteSheet() {
+    const { width, height } = await driver.getWindowRect();
+    let x = Math.round(width / 2);
+    let startY = Math.round(height * 0.40);
+    for (const sel of [SEL.swipeUpHandle, SEL.stockSummary]) {
+      try {
+        const el = await $(sel);
+        if (!(await el.isExisting())) continue;
+        const loc  = await el.getLocation();
+        const size = await el.getSize();
+        x      = Math.round(loc.x + size.width / 2);
+        startY = Math.round(loc.y + size.height / 2);
+        break;
+      } catch {}
     }
-    try {
-      const { width, height } = await driver.getWindowRect();
-      const x      = Math.round(width / 2);
-      const startY = Math.round(height * 0.32);
-      const endY   = Math.round(height * 0.10);
-      await browser.action('pointer', { parameters: { pointerType: 'touch' } })
-        .move({ x, y: startY })
-        .down().pause(200)
-        .move({ x, y: endY, duration: 800 })
-        .up().perform();
-      await browser.pause(800);
-      return true;
-    } catch { return false; }
+    await browser.action('pointer', { parameters: { pointerType: 'touch' } })
+      .move({ x, y: startY })
+      .down().pause(150)
+      .move({ x, y: Math.round(height * 0.08), duration: 600 })
+      .up().perform();
+    await browser.pause(800);
+    return startY;
+  }
+
+  // Expands the Quote sheet by swiping up (two attempts), verifying the expanded state each
+  // time. Tapping the handle is only a last-resort fallback, and is logged as such so a
+  // swipe that stops working is visible rather than silently papered over.
+  // Returns { expanded, method: 'already' | 'swipe' | 'tap-fallback' | 'failed' }.
+  async expandBottomQuotePanel() {
+    if (await this.isQuoteExpanded()) return { expanded: true, method: 'already' };
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      let startY = null;
+      try { startY = await this.swipeUpQuoteSheet(); } catch {}
+      if (await this.isQuoteExpanded(2500)) {
+        console.log(`  ℹ  Quote screen expanded by swipe-up (attempt ${attempt}, from y=${startY})`);
+        return { expanded: true, method: 'swipe' };
+      }
+    }
+    console.log('  ⚠  Swipe-up did not expand the Quote screen — falling back to tapping "Swipe up for Stock Details"');
+    if (await this.findAndTap(SEL.swipeUpHandle, 2000) && await this.isQuoteExpanded(2500)) {
+      return { expanded: true, method: 'tap-fallback' };
+    }
+    return { expanded: false, method: 'failed' };
   }
 
   // Scrolls DOWN inside the full-screen Quote view (below tab bar ~38%, above footer ~78%).

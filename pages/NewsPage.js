@@ -36,20 +36,13 @@ function parseTimeOfDay(text) {
 // "Equity" carries an "Equity" tag) - "All" is the merged view and is expected to mix every tag.
 const NEWS_TAGS = ['Result', 'Block Deals', 'Equity', 'Commentary', 'Global', 'Fixed Income', 'Commodities'];
 
-// The feed is one content-desc blob per tab, entries running newest-first as repeating
-// [optional headline] / time / tag groups (e.g. "...Kubota Branding Soon.\n03:35:05 PM\nEquity\n
-// 03:33:23 PM\nResult\n..."). The headline is often missing entirely between two entries, so the
-// only reliable anchor is a timestamp immediately followed by one of the known tag names.
-function extractEntries(feedText) {
-    const tagAlternation = NEWS_TAGS.join('|');
-    const pattern = new RegExp(`(\\d{1,2}:\\d{2}:\\d{2}\\s*(?:AM|PM))\\n(${tagAlternation})`, 'g');
-    const entries = [];
-    let match;
-    while ((match = pattern.exec(feedText)) !== null) {
-        entries.push({ time: match[1], tag: match[2] });
-    }
-    return entries;
-}
+// Each feed entry ends with its own "time\ntag" lines - either as a node of its own (Block Deals:
+// "11:54:26 AM\nBlock Deals", headline in separate nodes) or as the tail of the headline node
+// (Equity: "...Payment Is Made.\n11:42:20 AM\nEquity"). The feed used to be one merged content-desc
+// blob - it isn't any more (see ui_dumps/news_*.xml), so entries are read node by node in
+// on-screen order.
+const ENTRY_PATTERN = /(?:^|\n)(\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM))\n([^\n]+)$/i;
+const DATE_HEADER_PATTERN = /^\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+$/;
 
 class NewsPage extends BasePage {
     constructor(driver) {
@@ -197,14 +190,26 @@ class NewsPage extends BasePage {
         return /no data found|no news found/i.test(source);
     }
 
-    // The entire feed for a tab is one merged content-desc (not per-item cards) starting with a
-    // date header - the longest content-desc on screen is always this feed node.
-    async getFeedText() {
-        const source = await this.driver.getPageSource();
-        const descs = [...source.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]);
-        if (!descs.length) return null;
-        const longest = descs.reduce((a, b) => (b.length > a.length ? b : a), '');
-        return longest.replace(/&#10;/g, '\n').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+    // Visible entries top-to-bottom (newest first), each paired with the date it was published on.
+    // The topmost date header is the sticky one pinned under the tab strip - it belongs to the
+    // topmost entry; any further date header lower down starts a new (older) day for the entries
+    // below it. Pairing each time with its OWN day matters: mixing today's header with an older
+    // day's time is what made a past entry look like it was "in the future".
+    async getFeedEntries() {
+        const nodes = (await this.getDescribedElements()).sort((a, b) => a.y1 - b.y1);
+        const dateNodes = nodes.filter(n => DATE_HEADER_PATTERN.test(n.desc.trim()));
+        const sticky = dateNodes[0] || null;
+        let currentDate = sticky ? sticky.desc.trim() : null;
+        const entries = [];
+        for (const n of nodes) {
+            if (sticky && n !== sticky && n.y1 >= sticky.y2 && DATE_HEADER_PATTERN.test(n.desc.trim())) {
+                currentDate = n.desc.trim();
+                continue;
+            }
+            const m = n.desc.trim().match(ENTRY_PATTERN);
+            if (m) entries.push({ time: m[1], tag: m[2].trim(), date: currentDate });
+        }
+        return { stickyDate: sticky ? sticky.desc.trim() : null, entries };
     }
 
     // Reads the date header at the very top of the feed (the latest news item, since entries run
@@ -218,19 +223,15 @@ class NewsPage extends BasePage {
             return empty;
         }
 
-        const feedText = await this.getFeedText();
-        // Prefer the fixed date label below the search bar - it's what's actually displayed as
-        // "today's date" regardless of scroll position. Falls back to the feed blob's own first
-        // line only if that element couldn't be read.
-        const headerLine = (await this.getStickyDateHeaderText()) || (feedText ? feedText.split('\n')[0].trim() : null);
+        const { stickyDate, entries } = await this.getFeedEntries();
+        // The latest entry is the topmost one, dated by its own section header (the sticky one).
+        const latestTime = entries[0] ? entries[0].time : null;
+        const headerLine = (entries[0] && entries[0].date) || stickyDate || (await this.getStickyDateHeaderText());
         const date = headerLine ? parseNewsDateHeader(headerLine) : null;
         if (!date) {
             console.log(`Could not parse a date header from feed (got: "${headerLine}")`);
             return { ...empty, raw: headerLine };
         }
-
-        const entries = extractEntries(feedText);
-        const latestTime = entries[0] ? entries[0].time : null;
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -260,7 +261,7 @@ class NewsPage extends BasePage {
             mismatches = entries.filter(e => !NEWS_TAGS.includes(e.tag));
             console.log(`"${tabName}" tab contains tags: ${distinctTags.join(', ') || '(none found)'}`);
             if (!entries.length) {
-                console.log(`No tagged entries found to validate for "${tabName}"`);
+                console.log(`FAIL: no time/tag entries could be read for "${tabName}" (tab has data, so the feed layout may have changed)`);
             } else if (!mismatches.length) {
                 console.log(`All ${entries.length} tag(s) under "${tabName}" are valid category tags (PASS)`);
             } else {
@@ -270,7 +271,7 @@ class NewsPage extends BasePage {
         } else {
             mismatches = entries.filter(e => e.tag !== tabName);
             if (!entries.length) {
-                console.log(`No tagged entries found to validate for "${tabName}"`);
+                console.log(`FAIL: no time/tag entries could be read for "${tabName}" (tab has data, so the feed layout may have changed)`);
             } else if (!mismatches.length) {
                 console.log(`All ${entries.length} tag(s) under "${tabName}" match the tab (PASS)`);
             } else {

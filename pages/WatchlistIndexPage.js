@@ -102,7 +102,7 @@ class WatchlistIndexPage extends BasePage {
         // The count label shown directly above the Symbol/Weightage/Price table header, e.g.
         // "50 Stocks" for Nifty 50 or "30 Stocks" for Sensex - varies by index, not hardcoded.
         this.constituentsCountRegex = /^\d+ Stocks$/;
-        this.editIndicesButton = 'android=new UiSelector().description("edit Indices, Double tap to edit indices")';
+        this.editIndicesButton = 'android=new UiSelector().descriptionStartsWith("edit Indices")';
         // In edit mode, a currently-added index reads "<NAME>\nRemove Indices, Double tap to
         // remove indices" - a single merged node (name + the red "-" icon), same one-node-per-row
         // pattern as everywhere else on this screen.
@@ -345,7 +345,7 @@ class WatchlistIndexPage extends BasePage {
         // The on-screen keyboard stays up after typing (setValue doesn't submit/blur the field)
         // and covers the lower half of the results list, so it's dismissed here rather than left
         // for every caller to remember on its own.
-        await this.driver.hideKeyboard().catch(() => {});
+        await this.driver.hideKeyboard().catch(() => { });
         console.log('Dismissed keyboard');
     }
 
@@ -577,7 +577,7 @@ class WatchlistIndexPage extends BasePage {
         await input.clearValue();
         await input.setValue(newName);
         await this.pause(300);
-        await this.driver.hideKeyboard().catch(() => {});
+        await this.driver.hideKeyboard().catch(() => { });
         console.log(`Renamed watchlist group to "${newName}"`);
     }
 
@@ -895,9 +895,10 @@ class WatchlistIndexPage extends BasePage {
         console.log('Scrolled All Indices list to top');
     }
 
-    async clickSwipeUpForDetails(timeout = 5000) {
-        await this.click(this.swipeUpForDetails, timeout);
-        console.log('Clicked "Swipe up for Stock Details"');
+    // Expands the Quote screen opened by tapping a symbol/index/contract/constituent with a real
+    // swipe-up gesture (see BasePage.swipeUpToExpandQuote) instead of tapping the handle.
+    async swipeUpQuoteScreen() {
+        return this.swipeUpToExpandQuote();
     }
 
     async clickViewChart(timeout = 5000) {

@@ -187,20 +187,18 @@ class QuotesPage extends BasePage {
         return details;
     }
 
-    async clickSwipeUpIfAvailable() {
-        const available = await this.isElementVisible(this.swipeUpForDetails, 2000);
-        if (available) {
-            await this.click(this.swipeUpForDetails);
-            console.log('Clicked Swipe Up to expand quote details');
-        } else {
-            console.log('Swipe Up option not available - skipping');
-        }
-        return available;
+    // Expands the half-height Quotes sheet with a real swipe-up gesture (see
+    // BasePage.swipeUpToExpandQuote) instead of tapping the "Swipe up for Stock Details" handle.
+    async swipeUpQuoteScreen() {
+        return this.swipeUpToExpandQuote();
     }
 
+    // Derivative quotes (e.g. Research Calls' DERIVATIVE - TECHNICAL) keep rewriting their text
+    // (LTP, OI, market depth...), so a text-signature boundary check never matches and swipes on
+    // past the end - stop as soon as a swipe no longer moves anything instead.
     async scrollToBottom() {
-        await this.scrollToBoundary(this.anyDescribedElement, 'down');
-        console.log('Scrolled to bottom of Quotes screen');
+        const swipes = await this.scrollToBoundaryByMovement('down');
+        console.log(`Scrolled to bottom of Quotes screen (${swipes} swipe(s))`);
     }
 
     async clickBuy() {
@@ -261,6 +259,36 @@ class QuotesPage extends BasePage {
         await this.driver.back();
         await this.driver.pause(600);
         console.log('Returned to Research Calls list');
+    }
+
+    // A symbol with an upcoming/current corporate action shows an "Event" tag under its header
+    // ("Event  Stock split Ratio 10:5, Ex Date 06 Oct 2026"). Compose merges it into the header's
+    // own content-desc ("Stock BLSE, NSE. Last traded price ...\nEvent\n<event text>, Swipe up..."),
+    // so it's parsed from there. Returns { symbol, exchange, event } - event is null when the
+    // Quote has no Event tag - or null if no Quote header appeared within `timeout`.
+    async readEventTag(timeout = 8000) {
+        if (!(await this.isElementVisible(this.stockSummary, timeout))) return null;
+        const desc = await (await this.driver.$(this.stockSummary)).getAttribute('content-desc');
+        const head = desc.match(/^Stock\s+(.+?),\s*([A-Za-z]+)\./);
+        const event = desc.match(/\nEvent\n([\s\S]+?),\s*Swipe up to explore quote details/);
+        return {
+            symbol: head ? head[1].trim() : null,
+            exchange: head ? head[2].trim() : null,
+            event: event ? event[1].trim() : null,
+        };
+    }
+
+    // The Event tag has no node of its own (it's drawn inside the merged header node), so it's
+    // tapped by position: the tag is the last line of the header card, at its left edge (verified
+    // live on 1080x2340 - card [42,745][1038,1018], tag centred at ~(90, 994)).
+    async tapEventTag() {
+        const el = await this.driver.$(this.stockSummary);
+        const { x, y } = await el.getLocation();
+        const { height } = await el.getSize();
+        await this.driver.action('pointer')
+            .move({ duration: 0, x: Math.round(x + 48), y: Math.round(y + height - 24) })
+            .down().up().perform();
+        console.log('Tapped the "Event" tag on the Quote screen');
     }
 }
 

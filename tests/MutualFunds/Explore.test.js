@@ -10,17 +10,17 @@ async function run() {
     try {
         const mutualFundsPage = new MutualFundsPage(driver);
 
-        console.log('TC 21: Opening Mutual Funds (bottom navigation)...');
+        console.log('TC 26: Opening Mutual Funds (bottom navigation)...');
         await mutualFundsPage.openMutualFunds();
 
-        console.log('\nTC 22: Clicking Explore tab...');
+        console.log('\nTC 27: Clicking Explore tab...');
         await mutualFundsPage.clickExploreTab();
         await driver.pause(1000);
 
-        console.log('\nTC 23: Scrolling through Category Solutions and counting headers...');
+        console.log('\nTC 28: Scrolling through Category Solutions and counting headers...');
         await mutualFundsPage.countCategorySolutionsHeaders();
 
-        console.log('\nTC 24: Scrolling back to top and expanding the Equity category...');
+        console.log('\nTC 29: Scrolling back to top and expanding the Equity category...');
         await mutualFundsPage.scrollExploreToTop();
         const categoryCount = await mutualFundsPage.getCategoryFundCount('Equity');
         console.log(`Equity category card shows: ${categoryCount} funds`);
@@ -31,19 +31,18 @@ async function run() {
         const tags = await mutualFundsPage.getCategoryTags();
         console.log(`Equity tags (in order): ${tags.join(', ')}`);
 
-        console.log('\nTC 25: Selecting "All" and verifying the fund count matches the category card...');
+        console.log('\nTC 30: Selecting "All" and verifying the fund count matches the category card...');
         await mutualFundsPage.clickCategoryTag('All');
         await driver.pause(1500);
         const allResultsCount = await mutualFundsPage.getFilteredResultsCount();
         console.log(`"All" tag results: ${allResultsCount}`);
         console.log(`Count check: category card (${categoryCount}) vs "All" results (${allResultsCount}) - ${categoryCount !== null && categoryCount === allResultsCount ? 'PASS (match)' : 'FAIL (mismatch)'}`);
 
-        console.log('\nTC 26: Clicking the first fund in Equity - All...');
-        const equityFundName = await mutualFundsPage.clickFirstFund();
+        console.log('\nTC 31: Clicking the first fund in Equity - All and verifying its list % matches its Annualised %...');
+        const equityFundName = await mutualFundsPage.openFirstFundAndVerifyReturn();
         console.log(`First fund: ${equityFundName}`);
-        await driver.pause(1500);
 
-        console.log('\nTC 27: Opening One Time order pad, clearing the amount, closing the keypad, and verifying SUBMIT is disabled...');
+        console.log('\nTC 32: Opening One Time order pad, clearing the amount, closing the keypad, and verifying SUBMIT is disabled...');
         await mutualFundsPage.clickOneTimeButton();
         await mutualFundsPage.clearOrderPadAmount();
         await driver.hideKeyboard().catch(() => { });
@@ -51,7 +50,7 @@ async function run() {
         console.log(`One Time - SUBMIT disabled after clearing amount: ${oneTimeSubmitDisabled ? 'PASS' : 'FAIL'}`);
         await mutualFundsPage.goBackFromOrderPad();
 
-        console.log('\nTC 28: Opening Start SIP order pad, clearing the amount, closing the keypad, and verifying SUBMIT is disabled...');
+        console.log('\nTC 33: Opening Start SIP order pad, clearing the amount, closing the keypad, and verifying SUBMIT is disabled...');
         const sipOpened = await mutualFundsPage.clickStartSipButtonIfApplicable();
         if (sipOpened) {
             await mutualFundsPage.clearOrderPadAmount();
@@ -63,10 +62,10 @@ async function run() {
             console.log('Start SIP not applicable for this fund - skipping');
         }
 
-        console.log('\nTC 29: Navigating back to the Equity fund list...');
+        console.log('\nTC 34: Navigating back to the Equity fund list...');
         await mutualFundsPage.goBackFromFundDetail();
 
-        console.log('\nTC 30: Searching "SBI" in the local search bar and verifying SBI funds are listed...');
+        console.log('\nTC 35: Searching "SBI" in the local search bar and verifying SBI funds are listed...');
         const searchQuery = 'SBI';
         await mutualFundsPage.searchLocalFundList(searchQuery);
         const searchResultNames = await mutualFundsPage.getSearchResultNames();
@@ -74,12 +73,12 @@ async function run() {
         const allMatchSbi = searchResultNames.length > 0 && searchResultNames.every(name => name.toUpperCase().includes(searchQuery));
         console.log(`SBI search check: ${allMatchSbi ? 'PASS (all results are SBI funds)' : 'FAIL'}`);
 
-        console.log('\nTC 30a: Clearing the search bar by backspacing...');
+        console.log('\nTC 36: Clearing the search bar by backspacing...');
         await mutualFundsPage.clearLocalSearch(searchQuery.length);
         const clearedResultsCount = await mutualFundsPage.getFilteredResultsCount();
         console.log(`Results after clearing search: ${clearedResultsCount}`);
 
-        console.log('\nTC 31: Clicking + and selecting the next tag observed after "All"...');
+        console.log('\nTC 37: Clicking + and selecting the next tag observed after "All"...');
         await mutualFundsPage.clickAddFilterButton();
         await driver.pause(800);
         const nextTag = tags[1];
@@ -88,18 +87,17 @@ async function run() {
         const nextTagResultsCount = await mutualFundsPage.getFilteredResultsCount();
         console.log(`"${nextTag}" tag results: ${nextTagResultsCount}`);
 
-        console.log('\nTC 32: Selecting 3Y and 5Y return periods...');
+        console.log('\nTC 38: Selecting 3Y and 5Y return periods...');
         await mutualFundsPage.changeSectionReturnPeriod('Equity', '3 Years Return');
         await mutualFundsPage.changeSectionReturnPeriod('Equity', '5 Years Return');
 
         await mutualFundsPage.goBackFromFundList();
         await mutualFundsPage.clickCategoryCard('Equity');
 
-        console.log('\nTC 33: Repeating for each remaining category below Equity (All -> search "SBI" -> verify -> clear -> + -> next tag, excluding "Index Fund")...');
-        const remainingCategories = ['Debt', 'Hybrid', 'Index Fund', 'Funds of Funds', 'Solution Oriented'];
-
-        for (const category of remainingCategories) {
-            console.log(`\n--- Category: ${category} ---`);
+        // One TC per remaining category below Equity, each repeating Equity's flow: first tag
+        // (normally "All") -> search "SBI" -> verify -> clear -> + -> next tag (excluding "Index
+        // Fund") -> back to Explore with the card collapsed again.
+        const verifyCategory = async (category) => {
             await mutualFundsPage.scrollToCategoryCard(category);
             await mutualFundsPage.clickCategoryCard(category);
             await driver.pause(1000);
@@ -115,7 +113,7 @@ async function run() {
                 await mutualFundsPage.scrollToCategoryCard(category);
                 await mutualFundsPage.clickCategoryCard(category);
                 await mutualFundsPage.scrollExploreDown();
-                continue;
+                return;
             }
             await mutualFundsPage.clickCategoryTag(firstTag);
             await driver.pause(1500);
@@ -155,7 +153,22 @@ async function run() {
             await mutualFundsPage.scrollToCategoryCard(category);
             await mutualFundsPage.clickCategoryCard(category);
             await mutualFundsPage.scrollExploreDown();
-        }
+        };
+
+        console.log('\nTC 39: "Debt" category - All -> search "SBI" -> verify -> clear -> + -> next tag...');
+        await verifyCategory('Debt');
+
+        console.log('\nTC 40: "Hybrid" category - All -> search "SBI" -> verify -> clear -> + -> next tag...');
+        await verifyCategory('Hybrid');
+
+        console.log('\nTC 41: "Index Fund" category - its only tag -> search "SBI" -> verify -> clear (no "+" step - single tag)...');
+        await verifyCategory('Index Fund');
+
+        console.log('\nTC 42: "Funds of Funds" category - All -> search "SBI" -> verify -> clear -> + -> next tag...');
+        await verifyCategory('Funds of Funds');
+
+        console.log('\nTC 43: "Solution Oriented" category - All -> search "SBI" -> verify -> clear -> + -> next tag...');
+        await verifyCategory('Solution Oriented');
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);

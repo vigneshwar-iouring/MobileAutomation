@@ -38,7 +38,10 @@ async function run() {
             const symbol = await watchlistPage.clickFirstWatchlistSymbol();
             await driver.pause(1200);
             console.log(`  "${firstTabName}" has symbols - opened first symbol "${symbol}"`);
-            await watchlistPage.goBackToQuotes();
+            await watchlistPage.swipeUpQuoteScreen();
+            // Backs out until Watchlist is actually showing - doesn't assume one back press
+            // leaves an expanded Quote screen rather than just collapsing it.
+            await watchlistPage.navigateToWatchlist();
         }
 
         console.log('\nTC 5: Reading the 1st watchlist tab\'s current symbol count...');
@@ -112,7 +115,7 @@ async function run() {
         await watchlistPage.clickFirstWatchlistTab();
         await watchlistPage.openManageWatchlist();
         await watchlistPage.openEditWatchlistForGroup(firstTabName);
-        const newGroupName = 'Watchlist_1';
+        const newGroupName = 'Watchlist1abcd';
         await watchlistPage.renameEditWatchlistGroup(newGroupName);
         await watchlistPage.closeEditWatchlist();
 

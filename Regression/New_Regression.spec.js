@@ -329,7 +329,16 @@ async function logMatchingElementsDiagnostic(selector, label) {
 // instead of rejecting it, so no error ever appears to bounce off of. Reading the real
 // lower circuit directly and entering it as a genuine in-range limit price sidesteps
 // that entirely.
+// Every flow that taps a symbol/index lands on the Quote screen as a half-height sheet —
+// swipe it up to expand it to full screen before doing anything else on it.
+async function expandQuoteScreen(label) {
+  const { expanded, method } = await quotePage.expandBottomQuotePanel();
+  console.log(`  ℹ  Quote screen expanded: ${expanded} (${method})`);
+  await assertOrDump(expanded, `${label}: Quote screen did not expand after swiping up`, 'Swiping up on the Quote screen should expand it to full screen');
+}
+
 async function getLowerCircuitFromQuote(label) {
+  // No-op when the caller already expanded the Quote screen (expandQuoteScreen above).
   await quotePage.expandBottomQuotePanel();
   await browser.pause(500);
   let limits = await quotePage.getCircuitLimits();
@@ -947,6 +956,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R23: Quote screen did not open', 'Quote screen should open after tapping a symbol');
+    await expandQuoteScreen('R23');
 
     const buyVisible  = await quotePage.isBuyButtonDisplayed();
     const sellVisible = await quotePage.isSellButtonDisplayed();
@@ -1340,6 +1350,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R34: Quote screen did not open for IDEA', 'Quote screen should open after selecting IDEA from search');
+    await expandQuoteScreen('R34');
 
     const limits = await getLowerCircuitFromQuote('R34');
     console.log(`  ℹ  IDEA (NSE) — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
@@ -1385,6 +1396,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R35: Quote screen did not open for RTNPOWER', 'Quote screen should open after selecting RTNPOWER from search');
+    await expandQuoteScreen('R35');
 
     const limits = await getLowerCircuitFromQuote('R35');
     console.log(`  ℹ  RTNPOWER — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
@@ -1437,6 +1449,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R36: Quote screen did not open for NIFTY 25100 CE', 'Quote screen should open after selecting the contract');
+    await expandQuoteScreen('R36');
 
     const limits = await getLowerCircuitFromQuote('R36');
     console.log(`  ℹ  NIFTY 25100 CE — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
@@ -1481,6 +1494,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R37: Quote screen did not open for SENSEX 77100 CE', 'Quote screen should open after selecting the contract');
+    await expandQuoteScreen('R37');
 
     const limits = await getLowerCircuitFromQuote('R37');
     console.log(`  ℹ  SENSEX 77100 CE — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
@@ -1520,6 +1534,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R38: Quote screen did not open for the Currency mover', 'Quote screen should open after selecting the symbol');
+    await expandQuoteScreen('R38');
 
     const limits = await getLowerCircuitFromQuote('R38');
     const symbolR38 = await quotePage.getSymbolName();
@@ -1557,6 +1572,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R39: Quote screen did not open for the Commodity mover', 'Quote screen should open after selecting the symbol');
+    await expandQuoteScreen('R39');
 
     const limits = await getLowerCircuitFromQuote('R39');
     const symbolR39 = await quotePage.getSymbolName();

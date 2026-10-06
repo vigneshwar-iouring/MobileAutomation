@@ -12,7 +12,7 @@ console.log(`Logging this run to: ${logFile}`);
 const LOGIN_ID = 'TEMPMF11';
 const PASSWORD = 'Globe@1234';
 const LOGIN_ID2 = 'HOGC1103';
-const PASSWORD2 = 'Jaya@0005';
+const PASSWORD2 = 'Jaya@0006';
 const LOGIN_ID3 = 'TEMPMF2';
 const PASSWORD3 = 'Globe@9876';
 const LOGIN_ID4 = 'EKY6998';

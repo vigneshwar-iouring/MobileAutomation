@@ -65,12 +65,13 @@ async function runSymbolQuoteFlow(driver, researchCalls, label) {
     await quotesPage.openQuote();
     const onQuotes = await quotesPage.isDisplayed();
     console.log(`Quotes screen displayed: ${onQuotes}`);
+    // Opens as a half-height sheet - swipe up to expand it to full screen first.
+    await quotesPage.swipeUpQuoteScreen();
 
     console.log('TC 6: Reading quote details...');
     await quotesPage.readQuoteDetails();
 
-    console.log('TC 8: Expanding Quotes screen and scrolling to bottom...');
-    await quotesPage.clickSwipeUpIfAvailable();
+    console.log('TC 8: Scrolling the expanded Quotes screen to bottom...');
     await quotesPage.scrollToBottom();
 
     console.log('TC 9: Clicking SELL...');

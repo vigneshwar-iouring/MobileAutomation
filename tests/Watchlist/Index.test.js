@@ -16,7 +16,7 @@ async function run() {
         console.log('\nTC 2: Clicking the first index observed at the top...');
         await watchlistPage.clickFirstIndex();
         await driver.pause(1500);
-        await watchlistPage.clickSwipeUpForDetails();
+        await watchlistPage.swipeUpQuoteScreen();
         await driver.pause(1000);
 
         console.log('\nTC 3: Printing the details observed in the Quotes screen...');
@@ -87,13 +87,13 @@ async function run() {
 
             await watchlistPage.clickOptionRow('above');
             await driver.pause(1000);
-            await watchlistPage.clickSwipeUpForDetails();
+            await watchlistPage.swipeUpQuoteScreen();
             await driver.pause(1000);
             await watchlistPage.goBackToQuotes();
 
             await watchlistPage.clickOptionRow('below');
             await driver.pause(1000);
-            await watchlistPage.clickSwipeUpForDetails();
+            await watchlistPage.swipeUpQuoteScreen();
             await driver.pause(1000);
             await watchlistPage.goBackToQuotes();
 
@@ -163,7 +163,7 @@ async function run() {
 
                 await watchlistPage.clickFuturesContract(i);
                 await driver.pause(1200);
-                await watchlistPage.clickSwipeUpForDetails();
+                await watchlistPage.swipeUpQuoteScreen();
                 await driver.pause(800);
                 await watchlistPage.scrollQuoteScreenToBottom();
                 await watchlistPage.goBackToQuotes();
@@ -237,7 +237,7 @@ async function run() {
 
         await watchlistPage.clickConstituentStock(0);
         await driver.pause(1200);
-        await watchlistPage.clickSwipeUpForDetails();
+        await watchlistPage.swipeUpQuoteScreen();
         await driver.pause(800);
 
         await watchlistPage.goBackToQuotes();

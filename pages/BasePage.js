@@ -119,6 +119,82 @@ class BasePage {
         await this.swipe('down');
     }
 
+    // Tapping a symbol/index opens its Quote screen as a half-height bottom sheet; swiping it up
+    // expands it to full screen. Confirmed via before/after page sources (IDEA, NSE, 1080x2340):
+    // collapsed, the "Stock IDEA, NSE. Last traded price..." summary card sits at y≈789-992 with
+    // no tab strip; expanded, it moves to y≈150 and the "Overview / Futures / ..." tab strip
+    // appears - so the Overview tab is the expanded-state signal (an index's Quote screen has it
+    // too: Overview / Futures / Technicals / Constituents).
+    async isQuoteExpanded(timeout = 0) {
+        const check = async () => {
+            try {
+                const src = await this.driver.getPageSource();
+                return /content-desc="Overview(?:&#10;|\n)Tab 1 of \d+"/.test(src);
+            } catch { return false; }
+        };
+        if (!timeout) return check();
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+            if (await check()) return true;
+            await this.driver.pause(400);
+        }
+        return false;
+    }
+
+    // Real upward swipe on the Quote sheet - starts on the "Swipe up for Stock Details" handle
+    // (or the summary card, or ~40% height if neither is exposed) and drags to near the top,
+    // verifying the expanded state after each of two attempts. Tapping the handle is only a
+    // last-resort fallback, logged as such so a swipe that stops working is visible rather than
+    // silently papered over. Logs PASS/FAIL for getFailedTCs; returns true once expanded.
+    async swipeUpToExpandQuote() {
+        if (await this.isQuoteExpanded()) {
+            console.log('Quote screen already expanded');
+            return true;
+        }
+        const handle = 'android=new UiSelector().description("Swipe up for Stock Details")';
+        const summary = 'android=new UiSelector().descriptionMatches("(?s)(Stock .*|.*Swipe up to explore quote details.*)")';
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            const { width, height } = await this.driver.getWindowSize();
+            let x = Math.floor(width / 2);
+            let startY = Math.floor(height * 0.40);
+            for (const sel of [handle, summary]) {
+                try {
+                    const el = await this.driver.$(sel);
+                    if (!(await el.isExisting())) continue;
+                    const loc = await el.getLocation();
+                    const size = await el.getSize();
+                    x = Math.round(loc.x + size.width / 2);
+                    startY = Math.round(loc.y + size.height / 2);
+                    break;
+                } catch { }
+            }
+            await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
+                .move({ duration: 0, x, y: startY })
+                .down()
+                .pause(150)
+                .move({ duration: 600, x, y: Math.floor(height * 0.08) })
+                .up()
+                .perform();
+            await this.driver.pause(800);
+            if (await this.isQuoteExpanded(2500)) {
+                console.log(`Swiped up on the Quote screen - expanded to full screen: PASS (attempt ${attempt}, from y=${startY})`);
+                return true;
+            }
+        }
+        console.log('Swipe-up did not expand the Quote screen - falling back to tapping "Swipe up for Stock Details"');
+        try {
+            if (await this.isElementVisible(handle, 2000)) {
+                await (await this.driver.$(handle)).click();
+                if (await this.isQuoteExpanded(2500)) {
+                    console.log('Quote screen expanded via handle tap (swipe-up did not work): FAIL');
+                    return true;
+                }
+            }
+        } catch { }
+        console.log('Quote screen expanded after swipe-up: FAIL');
+        return false;
+    }
+
     // Entry cards embed live market data in their content-desc (e.g. "...Returns % : \n8.73 %\n
     // BUY\nREVISED\nEntry Price\n602.40\nStop Loss\n580.00\nLTP\n₹584.10") - the LTP, and the
     // return % derived from it, tick in real time. Comparing the raw content-desc across a scroll
@@ -228,6 +304,44 @@ class BasePage {
             if (signature === previousSignature) break;
             previousSignature = signature;
         }
+    }
+
+    // Boundary scroll for screens whose text never settles - e.g. a derivative Quote, where LTP,
+    // OI, bid/ask, market depth and other live parts keep rewriting content-desc text, so a
+    // text-signature comparison (above) never repeats and swipes on long past the real end.
+    // Instead this checks whether the page physically moved: the same element (matched by its
+    // text with digits blanked out) sits at the same y after a swipe only if nothing scrolled.
+    // Sticky header/footer elements never move either way, so "moved" means ANY matched element
+    // changed y - only when none did is the boundary reached.
+    async scrollToBoundaryByMovement(direction, { maxScrolls = 20, settleMs = 500, stepTimeoutMs = 15000 } = {}) {
+        const positions = async () => {
+            const nodes = await this.withTimeout(this.getDescribedElements(), stepTimeoutMs, 'getDescribedElements');
+            const map = new Map();
+            for (const n of nodes) {
+                const key = this.stableEntryId(n.desc).replace(/\d/g, '#');
+                if (!map.has(key)) map.set(key, []);
+                map.get(key).push(n.y1);
+            }
+            return map;
+        };
+        let previous = await positions();
+        for (let i = 0; i < maxScrolls; i++) {
+            await this.withTimeout(this.swipe(direction), stepTimeoutMs, 'swipe');
+            await this.driver.pause(settleMs);
+            const current = await positions();
+            let compared = 0;
+            let moved = false;
+            for (const [key, ys] of current) {
+                const prevYs = previous.get(key);
+                if (!prevYs || prevYs.length !== ys.length) continue;
+                compared++;
+                if (ys.some((y, idx) => y !== prevYs[idx])) { moved = true; break; }
+            }
+            // compared === 0: nothing recognisable carried over, i.e. the page jumped a full screen.
+            if (!moved && compared > 0) return i + 1;
+            previous = current;
+        }
+        return maxScrolls;
     }
 
     async pause(ms) {

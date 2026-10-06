@@ -10,7 +10,7 @@ const testData = {
     id1: 'TEMPMF11',
     password1: 'Globe@1234',
     id2: 'HOGC1103',
-    password2: 'Jaya@0005',
+    password2: 'Jaya@0006',
     id3: 'TEMPMF2',
     password3: 'Globe@9876',
   },

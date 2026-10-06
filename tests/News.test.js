@@ -20,9 +20,11 @@ function printSummary(results) {
         const dateStatus = !r.isPastOrNow
             ? 'FAIL (in the future)'
             : (r.isWithinLast10Days ? 'PASS' : 'FAIL (older than 10 days)');
-        const tagStatus = r.tab === 'All'
-            ? `tags seen: ${r.distinctTags.join(', ') || 'none'}`
-            : (r.mismatches.length ? `FAIL - ${r.mismatches.length} mismatched tag(s): ${[...new Set(r.mismatches.map(e => e.tag))].join(', ')}` : 'PASS - all tags match');
+        const tagStatus = !r.entryCount
+            ? 'FAIL - no entries read'
+            : r.tab === 'All'
+                ? `tags seen: ${r.distinctTags.join(', ') || 'none'}`
+                : (r.mismatches.length ? `FAIL - ${r.mismatches.length} mismatched tag(s): ${[...new Set(r.mismatches.map(e => e.tag))].join(', ')}` : 'PASS - all tags match');
         console.log(`  ${r.tab}: ${r.raw} ${r.latestTime || ''} - ${dateStatus} | ${tagStatus}`);
     }
 }
@@ -77,11 +79,11 @@ async function run() {
             tc++;
 
             if (tabName === 'All') {
-                console.log(`TC ${tc}: Opening search bar and searching "Manufacturing"...`);
+                console.log(`TC ${tc}: Opening search bar and searching "News"...`);
                 await newsPage.clickSearchBar();
-                await newsPage.searchNews('Manufacturing');
+                await newsPage.searchNews('News');
                 await driver.pause(3000);
-                await newsPage.verifyNewsSearchResults('Manufacturing');
+                await newsPage.verifyNewsSearchResults('News');
                 await newsPage.closeSearch();
                 await driver.pause(1000);
                 tc++;
