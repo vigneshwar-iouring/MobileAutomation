@@ -50,8 +50,10 @@ function decodePng(buf) {
 
 // Fraction (0-1) of pixels in the region that differ noticeably from the region's most
 // common colour (its background). A blank chart area scores ~0; drawn lines, axes, grid
-// or rows score well above it. Samples every `step`th pixel for speed.
-function regionCoverage(img, { top, bottom, left = 0, right = img.width }, step = 3) {
+// or rows score well above it. Samples every `step`th pixel for speed. Pass `bgColor`
+// ([r, g, b]) when the background is known - for a small icon whose drawn shape can
+// cover most of the region, the most common colour would be the shape itself.
+function regionCoverage(img, { top, bottom, left = 0, right = img.width }, step = 3, bgColor = null) {
   top = Math.max(0, Math.round(top)); bottom = Math.min(img.height, Math.round(bottom));
   left = Math.max(0, Math.round(left)); right = Math.min(img.width, Math.round(right));
   const px = (x, y) => {
@@ -68,7 +70,7 @@ function regionCoverage(img, { top, bottom, left = 0, right = img.width }, step 
   }
   if (!counts.size) return 0;
   const bgKey = [...counts.entries()].sort((p, q) => q[1] - p[1])[0][0];
-  const bg = [(bgKey >> 10) << 3, ((bgKey >> 5) & 31) << 3, (bgKey & 31) << 3];
+  const bg = bgColor || [(bgKey >> 10) << 3, ((bgKey >> 5) & 31) << 3, (bgKey & 31) << 3];
   let total = 0, differ = 0;
   for (let y = top; y < bottom; y += step) {
     for (let x = left; x < right; x += step) {
@@ -80,4 +82,9 @@ function regionCoverage(img, { top, bottom, left = 0, right = img.width }, step 
   return total ? differ / total : 0;
 }
 
-module.exports = { decodePng, regionCoverage };
+function pixelAt(img, x, y) {
+  const i = (Math.round(y) * img.width + Math.round(x)) * img.channels;
+  return [img.data[i], img.data[i + 1], img.data[i + 2]];
+}
+
+module.exports = { decodePng, regionCoverage, pixelAt };

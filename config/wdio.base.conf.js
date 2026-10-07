@@ -83,11 +83,13 @@ exports.config = {
   // Save a screenshot to reports/screenshots/ on test failure, and record this test case
   // (status/duration/error/captured console output) for the standalone regression report
   // written in the "after" hook below.
-  afterTest: async function (test, context, { error, passed, duration }) {
+  afterTest: async function (test, context, { error, passed, skipped, duration }) {
     const logs = stopLogCapture();
     regressionResults.push({
       title: test.title,
-      state: passed ? 'passed' : 'failed',
+      // `skipped` is set when the test calls this.skip() itself (e.g. R34-R39 outside market
+      // hours) - without it those would show as failed, since `passed` is false for a skip.
+      state: skipped ? 'skipped' : (passed ? 'passed' : 'failed'),
       duration,
       error: error && error.message,
       logs,

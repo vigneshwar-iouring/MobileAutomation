@@ -20,6 +20,15 @@ const PASSWORD4 = 'May@2026';
 const DEVICE_PASSWORD = '11111'; // device screen-lock PIN, used to confirm biometric enrollment
 // ─────────────────────────────────────────────────────────────────────
 
+// SUBMIT on the OTP screen must stay greyed out until an OTP is entered - logged as FAIL
+// (picked up by getFailedTCs) rather than thrown, so the login itself still proceeds.
+async function verifyOtpSubmitDisabled(loginPage, label) {
+    const enabled = await loginPage.isOtpSubmitEnabled();
+    console.log(enabled
+        ? `${label}: SUBMIT is enabled with no OTP entered - FAIL`
+        : `${label}: SUBMIT is greyed out with no OTP entered - PASS`);
+}
+
 async function run() {
     const driver = await DriverManager.getDriver();
     // Tracks whichever step is currently in progress, so if one throws, the catch block below can
@@ -51,8 +60,8 @@ async function run() {
 
         currentStep = 'TC 3: Entering login ID and password...';
         console.log(currentStep);
-        await loginPage.enterLoginId(LOGIN_ID3);
-        await loginPage.enterPassword(PASSWORD3);
+        await loginPage.enterLoginId(LOGIN_ID4);
+        await loginPage.enterPassword(PASSWORD4);
         await loginPage.clickLogin();
 
         // Wrong credentials show a Toast here instead of advancing to OTP - it vanishes from the
@@ -67,13 +76,14 @@ async function run() {
 
         currentStep = 'TC 4: Fetching and entering login OTP...';
         console.log(currentStep);
+        await verifyOtpSubmitDisabled(loginPage, 'Login OTP');
         const loginOtp = await fetchLatestOtp(sinceUid, 'One time password');
         await loginPage.enterOtp(loginOtp);
+        await loginPage.clickOtpSubmit();
         await driver.pause(2000);
 
-        // The OTP field auto-validates on entry (no submit button) - if the fetched OTP was
-        // somehow already stale/wrong by the time it's entered, the screen shows "Incorrect OTP."
-        // in place rather than advancing. Resend and retry with a freshly fetched OTP instead of
+        // If the fetched OTP was somehow already stale/wrong by the time it's submitted, the
+        // screen shows "Incorrect OTP." in place rather than advancing. Resend and retry with a freshly fetched OTP instead of
         // failing the run outright.
         if (await loginPage.isIncorrectOtpShown()) {
             currentStep = 'TC 5: Incorrect OTP shown - waiting to resend...';
@@ -89,6 +99,7 @@ async function run() {
             console.log(currentStep);
             const resentOtp = await fetchLatestOtp(resendUid, 'One time password');
             await loginPage.enterOtp(resentOtp);
+            await loginPage.clickOtpSubmit();
             await driver.pause(2000);
 
             if (await loginPage.isIncorrectOtpShown()) {
@@ -108,8 +119,10 @@ async function run() {
 
             currentStep = 'TC 7: Fetching and entering Enable Globe Secure OTP...';
             console.log(currentStep);
+            await verifyOtpSubmitDisabled(loginPage, 'Enable Globe Secure OTP');
             const secureOtp = await fetchLatestOtp(sinceUid, 'One time password');
             await loginPage.enterOtp(secureOtp);
+            await loginPage.clickOtpSubmit();
             await driver.pause(2000);
 
             if (await loginPage.isDeviceCredentialPromptShown()) {

@@ -22,8 +22,12 @@ class LoginPage extends BasePage {
         // screen at that point.
         this.otpField = 'android=new UiSelector().className("android.widget.EditText").instance(0)';
 
-        // The OTP field auto-validates on entry (no separate submit button) - a wrong OTP surfaces
-        // this text in place, rather than a Toast like the login-credentials error above.
+        // Both OTP screens need an explicit SUBMIT tap after entry; it stays greyed out
+        // (enabled="false") until an OTP has been entered.
+        this.otpSubmitButton = 'android=new UiSelector().description("SUBMIT")';
+
+        // A wrong OTP surfaces this text in place (after SUBMIT), rather than a Toast like the
+        // login-credentials error above.
         this.incorrectOtpText = 'android=new UiSelector().description("Incorrect OTP.")';
 
         // Reads "Resend OTP 27" (clickable=false) while the cooldown counts down, then "Resend OTP "
@@ -94,6 +98,21 @@ class LoginPage extends BasePage {
         await el.clearValue().catch(() => { });
         await el.setValue(otp.toString());
         console.log(`Entered OTP: ${otp}`);
+    }
+
+    // While the keyboard is open SUBMIT is not in the accessibility tree at all, so hide it first.
+    async isOtpSubmitEnabled(timeout = 10000) {
+        await this.driver.hideKeyboard().catch(() => { });
+        await this.driver.pause(500);
+        const el = await this.driver.$(this.otpSubmitButton);
+        await el.waitForDisplayed({ timeout });
+        return (await el.getAttribute('enabled')) === 'true';
+    }
+
+    async clickOtpSubmit() {
+        await this.driver.hideKeyboard().catch(() => { });
+        await this.click(this.otpSubmitButton);
+        console.log('Clicked SUBMIT');
     }
 
     async isIncorrectOtpShown(timeout = 3000) {

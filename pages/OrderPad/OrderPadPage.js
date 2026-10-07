@@ -1,4 +1,5 @@
 const BasePage = require('../Login/BasePage');
+const { decodePng, regionCoverage, pixelAt } = require('../../utils/pngPixels');
 
 // Order Entry / Order Pad — opened from the Quote bottom-sheet's BUY or SELL button.
 // Field labels are best-effort selectors (no confirmed UI dump yet) — soft-matching
@@ -86,20 +87,22 @@ const SEL = {
   dprError: '//*[starts-with(@content-desc,"DPR Range")]',
 };
 
-// Every line the Applicable Charges panel must list (as given by the user) - matched
-// case-insensitively by label only, values are not checked.
+// Every line the Applicable Charges panel must list (as given by the user), each with
+// the pattern its label line must fully match (case-insensitive, whitespace-normalised).
+// The app spells some out in full ("Goods And Services Tax - GST").
 const CHARGE_LABELS = [
-  'Order Value',
-  'Total Brokerage & charges',
-  'Brokerage',
-  'Securities Transaction Tax',
-  'Transaction Charges',
-  'GST',
-  'Stamp Duty',
-  'SEBI Charges',
-  'DP Charges',
-  'Clearing Charges',
+  { name: 'Total Brokerage & charges',        re: /^total brokerage & charges$/ },
+  { name: 'Brokerage',                        re: /^brokerage$/ },
+  { name: 'Securities Transaction Tax - STT', re: /^securities transaction tax( - stt)?$/ },
+  { name: 'Transaction Charges',              re: /^transaction charges$/ },
+  { name: 'GST',                              re: /^(goods and services tax - )?gst$/ },
+  { name: 'Stamp Duty',                       re: /^stamp duty$/ },
+  { name: 'SEBI Charges',                     re: /^sebi charges$/ },
+  { name: 'DP Charges',                       re: /^dp charges$/ },
+  { name: 'Clearing Charges',                 re: /^clearing charges$/ },
 ];
+// A charge's value is the line right after its label: "0.05", "0", "₹1,234.50", ...
+const CHARGE_VALUE_RE = /^-?₹?\s*\d[\d,]*(\.\d+)?$/;
 
 // Page source attributes are XML-escaped ("&amp;" etc.) - needed for "&" in the labels.
 const decodeXml = s => s
@@ -193,6 +196,34 @@ class OrderPadPage extends BasePage {
   async tapExchange(exchange) {
     const sel = exchange.toUpperCase() === 'BSE' ? SEL.exchangeBSE : SEL.exchangeNSE;
     return this.findAndTap(sel, 3000);
+  }
+
+  // Which NSE/BSE radio is selected, measured from screenshot pixels - both toggles read
+  // selected="false"/checked="false" in the accessibility tree regardless of state, so the
+  // only signal is the radio icon itself (each toggle's child ImageView, confirmed via the
+  // r20 OrderPad dump). The selected radio draws its filled dot on top of the ring, so it
+  // covers clearly more pixels than the empty one. Background is sampled from the icon's
+  // own corner (outside the inscribed circle) rather than the region's most common colour,
+  // which a filled circle would win. Returns { selected: 'NSE'|'BSE'|null, coverage }.
+  async getSelectedExchange() {
+    try {
+      const src = await driver.getPageSource();
+      const img = decodePng(Buffer.from(await driver.takeScreenshot(), 'base64'));
+      const coverage = {};
+      for (const ex of ['NSE', 'BSE']) {
+        const m = src.match(new RegExp(`content-desc="${ex} ?&#10;Exchange is ${ex}[^"]*"[^>]*?bounds="\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]"[^>]*>\\s*<android\\.widget\\.ImageView[^>]*?bounds="\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]"`));
+        if (!m) return { selected: null, coverage, error: `${ex} radio icon not found` };
+        const [left, top, right, bottom] = m.slice(5, 9).map(Number);
+        const bg = pixelAt(img, left + 1, top + 1);
+        coverage[ex] = regionCoverage(img, { top, bottom, left, right }, 1, bg);
+      }
+      const [hi, lo] = coverage.NSE >= coverage.BSE ? ['NSE', 'BSE'] : ['BSE', 'NSE'];
+      // Too close to call - don't guess which exchange the order is going to.
+      const selected = coverage[hi] >= coverage[lo] * 1.25 + 0.02 ? hi : null;
+      return { selected, coverage };
+    } catch (e) {
+      return { selected: null, coverage: {}, error: e.message };
+    }
   }
 
   // ── Order type ────────────────────────────────────────────────────────────────
@@ -450,37 +481,55 @@ class OrderPadPage extends BasePage {
     } catch { return []; }
   }
 
-  // Pass/fail status of the Applicable Charges panel, read from a single page source so
-  // the breakdown and any (transient) toast are captured at the same instant. Charge
-  // values are deliberately not checked - only that every line in CHARGE_LABELS is
-  // listed and no error is shown, either inline (confirmed live: "Order Value | 12.08 |
-  // Something went wrong") or as a toast.
-  async getChargesPanelStatus() {
-    let src = '';
-    try { src = await driver.getPageSource(); } catch { /* treated as empty below */ }
-    const breakdown = await this.getChargesBreakdown(src);
+  // Pass/fail status of the Applicable Charges panel, each attempt read from a single page
+  // source so the breakdown and any (transient) toast are captured at the same instant.
+  // Fails if any CHARGE_LABELS line is missing, any listed charge has no value next to it,
+  // every value is zero (individual zeros are normal - e.g. Stamp Duty 0), or an error is
+  // shown inline (confirmed live: "Order Value | 12.08 | Something went wrong") or as a
+  // toast. Values render after the labels (confirmed live: GST onwards had no values on
+  // the first read), so retries for up to `timeout` until valid or an error appears.
+  async getChargesPanelStatus({ timeout = 6000 } = {}) {
     const isError = d => /something went wrong|error|failed|unable to|try again|not available|no data/i.test(d);
     const norm = s => decodeXml(s).replace(/\s+/g, ' ').trim().toLowerCase();
 
-    const inlineErrors = breakdown.filter(isError).map(decodeXml);
-    const toasts = [...src.matchAll(/<android\.widget\.Toast[^>]*\btext="([^"]+)"/g)].map(m => decodeXml(m[1]));
-    const errors = [...inlineErrors, ...toasts.map(t => `toast: ${t}`)];
+    const read = async () => {
+      let src = '';
+      try { src = await driver.getPageSource(); } catch { /* treated as empty below */ }
+      const breakdown = await this.getChargesBreakdown(src);
 
-    // A label counts as listed if a line equals it or starts with it followed by a
-    // non-letter (so "Brokerage" isn't satisfied by "Total Brokerage & charges").
-    const lines = breakdown.map(norm);
-    const isListed = label => {
-      const l = norm(label);
-      return lines.some(d => d === l || (d.startsWith(l) && !/[a-z]/.test(d[l.length])));
+      const inlineErrors = breakdown.filter(isError).map(decodeXml);
+      const toasts = [...src.matchAll(/<android\.widget\.Toast[^>]*\btext="([^"]+)"/g)].map(m => decodeXml(m[1]));
+      const errors = [...inlineErrors, ...toasts.map(t => `toast: ${t}`)];
+
+      const lines = breakdown.map(norm);
+      const charges = [], missing = [], noValue = [], values = {};
+      for (const { name, re } of CHARGE_LABELS) {
+        const idx = lines.findIndex(d => re.test(d));
+        if (idx === -1) { missing.push(name); continue; }
+        charges.push(name);
+        const next = lines[idx + 1];
+        if (next !== undefined && CHARGE_VALUE_RE.test(next)) values[name] = next;
+        else noValue.push(name);
+      }
+      const shown = Object.values(values);
+      const allZero = shown.length > 0 && shown.every(v => Number(v.replace(/[₹,\s]/g, '')) === 0);
+
+      const causes = [];
+      if (errors.length) causes.push(`error message shown (${errors.join(' | ')})`);
+      if (missing.length) causes.push(`charges not listed: ${missing.join(', ')}`);
+      if (noValue.length) causes.push(`no value displayed for: ${noValue.join(', ')}`);
+      if (allZero) causes.push('every charge shows 0');
+      return { breakdown: breakdown.map(decodeXml), charges, missing, noValue, values, allZero, errors,
+        isValid: causes.length === 0, failureCause: causes.join('; ') };
     };
-    const charges = CHARGE_LABELS.filter(isListed);
-    const missing = CHARGE_LABELS.filter(l => !isListed(l));
 
-    const causes = [];
-    if (errors.length) causes.push(`error message shown (${errors.join(' | ')})`);
-    if (missing.length) causes.push(`charges not listed: ${missing.join(', ')}`);
-    return { breakdown: breakdown.map(decodeXml), charges, missing, errors,
-      isValid: causes.length === 0, failureCause: causes.join('; ') };
+    let status = await read();
+    const deadline = Date.now() + timeout;
+    while (!status.isValid && !status.errors.length && Date.now() < deadline) {
+      await browser.pause(750);
+      status = await read();
+    }
+    return status;
   }
 
   async getChargesDisclaimer() {

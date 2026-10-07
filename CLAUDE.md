@@ -86,6 +86,12 @@ NSE/BSE/NFO/BFO/CDS/MCX. They are **off by default**: without
 `PLACE_REAL_ORDERS=1` they only read and print the Quote screen's lower/upper
 circuit limits, then back out to Watchlist without ever tapping Buy.
 
+Independently of that flag, R34-R39 (NSE, BSE, NFO, BFO, CDS, MCX) only run inside
+their segment's trading hours (`MARKET_HOURS` in the spec, IST, Mon-Fri: NSE/BSE
+09:15-15:30, NFO/BFO 09:15-15:40, CDS/MCX 09:00-17:00). Outside them,
+`skipIfMarketClosed()` logs "Market closed - unable to place orders" and skips the test
+(reported as skipped, via `afterTest`'s `skipped` flag in `wdio.base.conf.js`).
+
 ```bash
 PLACE_REAL_ORDERS=1 npx wdio run ./config/wdio.android.conf.js --spec ./Regression/New_Regression.spec.js --mochaOpts.grep "R3[3-8]"
 ```

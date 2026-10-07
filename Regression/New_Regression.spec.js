@@ -50,6 +50,41 @@ const RESUME_SESSION = !!process.env.RESUME_SESSION;
 // place real trades on a live account, so this stays off until explicitly confirmed.
 const PLACE_REAL_ORDERS = !!process.env.PLACE_REAL_ORDERS;
 
+// Trading hours (IST) per segment - R34-R39 only run inside their segment's window and are
+// skipped (reported as skipped, not failed) outside it, including Saturday/Sunday. Times are
+// [open, close) in minutes after midnight: an order at exactly the close time is outside.
+// Exchange holidays are not known here, so a weekday holiday still runs (and fails).
+const MARKET_HOURS = {
+  NSE: { open: 9 * 60 + 15, close: 15 * 60 + 30 },
+  BSE: { open: 9 * 60 + 15, close: 15 * 60 + 30 },
+  NFO: { open: 9 * 60 + 15, close: 15 * 60 + 40 },
+  BFO: { open: 9 * 60 + 15, close: 15 * 60 + 40 },
+  CDS: { open: 9 * 60, close: 17 * 60 },
+  MCX: { open: 9 * 60, close: 17 * 60 },
+};
+
+// Current IST weekday and minutes after midnight, independent of the machine's own timezone.
+function nowInIST() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date()).map(p => [p.type, p.value]));
+  return { weekday: parts.weekday, minutes: Number(parts.hour) * 60 + Number(parts.minute), label: `${parts.weekday} ${parts.hour}:${parts.minute} IST` };
+}
+
+const fmtMinutes = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+// Call first thing in an order test: skips it (this.skip()) when `segment` is outside its
+// trading hours, so no order is attempted on a closed market.
+function skipIfMarketClosed(ctx, label, segment) {
+  const { open, close } = MARKET_HOURS[segment];
+  const now = nowInIST();
+  const weekend = now.weekday === 'Sat' || now.weekday === 'Sun';
+  if (weekend || now.minutes < open || now.minutes >= close) {
+    console.log(`  ⏸  ${label}: Market closed - unable to place orders (${segment} trades ${fmtMinutes(open)}-${fmtMinutes(close)} IST, Mon-Fri; now ${now.label})`);
+    ctx.skip();
+  }
+}
+
 // Reads like "Globe Capital Stock Trading: v1.0.0 (68)" on the Login screen — ported from
 // SplashPage.buildVersionLabel (DriverManager stack) since that page object's BasePage isn't
 // compatible with this one. Not anchored to start with "v": the label gained that app-name
@@ -110,6 +145,11 @@ const MARKET_SEL = {
 // this repo's existing gmailOtpHelper/credentials/gmail-config.json, same as tests/loginWithOtp.test.js.
 // One resend-and-retry on rejection, mirroring that file's incorrect-OTP recovery.
 async function submitOtp(label, sinceUid) {
+  // SUBMIT must stay greyed out while no OTP has been entered.
+  const submitEnabled = await otpPage.isSubmitEnabled();
+  await assertOrDump(!submitEnabled, `${label}: SUBMIT enabled with empty OTP`,
+    `${label}: SUBMIT should be disabled when no OTP is entered`);
+
   // The Enable Globe Secure OTP email was observed live to sometimes take longer than the
   // default 60s to arrive (unlike the first login OTP, which always arrived within ~15s) - so a
   // timed-out fetch here falls through to the same resend-and-refetch path used below for an
@@ -371,6 +411,10 @@ async function enterPriceOnOrderPad(label, price) {
   await browser.pause(300);
   const priceAfter = await orderPadPage.getPrice();
   console.log(`  ℹ  Price field now reads: ${priceAfter}`);
+  // Only the field's accessibility text - can read back correctly without the real order
+  // state changing (see setPrice), so the confirmation popup's price check remains the
+  // authoritative guard. This just catches an obviously wrong entry earlier.
+  await assertOrDump(Number(priceAfter) === Number(price), `${label}: price field reads ${priceAfter}, expected the lower circuit price ${price}`, 'Price field should show the lower circuit value after entry');
 
   return symbolName;
 }
@@ -380,7 +424,7 @@ async function enterPriceOnOrderPad(label, price) {
 // field already set (via enterPriceOnOrderPad above). Taps BUY submit, continues
 // through any surveillance warning, confirms the order, and verifies it lands in the
 // Orderbook before returning to Watchlist.
-async function submitAndConfirmOrder(label, price, symbolName) {
+async function submitAndConfirmOrder(label, price, symbolName, expectedExchange) {
   const buyTapped = await orderPadPage.tapBuySubmit();
   console.log(`  ℹ  BUY tapped at lower circuit price (${price}): ${buyTapped}`);
   await assertOrDump(buyTapped, `${label}: could not tap BUY submit on OrderPad`, 'BUY submit button should be tappable on the OrderPad screen');
@@ -424,6 +468,18 @@ async function submitAndConfirmOrder(label, price, symbolName) {
     try { await driver.back(); await browser.pause(500); } catch {}
     await watchlistPage.goToWatchlist();
     expect.fail(`${label}: confirmation popup shows price ${confirmedPrice}, expected the lower circuit price ${price} - refusing to tap Confirm`);
+  }
+
+  // Same guard for the exchange: the OrderPad's NSE/BSE toggles expose no selected state
+  // (both read selected="false"), so the popup is the only place to confirm the order is
+  // going to the exchange whose circuit limits were read. NSE and BSE bands overlap, so
+  // the price check alone would not catch an order silently left on the wrong exchange.
+  console.log(`  ℹ  Confirmation popup exchange: ${confirmDetails.Exchange}  (expected: ${expectedExchange})`);
+  if (confirmDetails.Exchange !== expectedExchange) {
+    await dumpScreen(`${label}: confirmation popup exchange mismatch`);
+    try { await driver.back(); await browser.pause(500); } catch {}
+    await watchlistPage.goToWatchlist();
+    expect.fail(`${label}: confirmation popup shows exchange ${confirmDetails.Exchange}, expected ${expectedExchange} - refusing to tap Confirm`);
   }
 
   const confirmTapped = await orderPadPage.tapConfirmOrder();
@@ -578,6 +634,8 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       console.log(`  ✅ ${this.currentTest.title} — succeeded`);
     } else if (this.currentTest.state === 'failed') {
       console.log(`  ❌ ${this.currentTest.title} — FAILED`);
+    } else if (this.currentTest.isPending()) {
+      console.log(`  ⏭  ${this.currentTest.title} — skipped`);
     }
   });
 
@@ -1082,18 +1140,20 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       console.log(`  ℹ  Applicable Charges header: ${chargesHeader}`);
       await assertOrDump(!!chargesHeader, 'R26: Applicable Charges header not found', 'Applicable Charges panel should show a header');
 
-      // Values aren't checked — pass only if every expected charge is listed and no error
-      // message/toast is shown; otherwise fail with the cause.
+      // Pass only if every expected charge is listed with a value next to it, not every
+      // value is 0, and no error message/toast is shown; otherwise fail with the cause.
       const charges = await orderPadPage.getChargesPanelStatus();
       console.log(`  ℹ  Brokerage/charges details: ${charges.breakdown.join(' | ')}`);
-      console.log(`  ℹ  Charges listed (${charges.charges.length}): ${charges.charges.join(', ') || 'none'}`);
+      console.log(`  ℹ  Charges listed (${charges.charges.length}): ${charges.charges.map(c => `${c} = ${charges.values[c] ?? '(no value)'}`).join(', ') || 'none'}`);
       if (charges.missing.length) console.log(`  ℹ  Charges missing (${charges.missing.length}): ${charges.missing.join(', ')}`);
+      if (charges.noValue.length) console.log(`  ℹ  Charges with no value (${charges.noValue.length}): ${charges.noValue.join(', ')}`);
+      if (charges.allZero) console.log('  ℹ  Every charge shows 0');
       if (!charges.isValid) {
         console.log(`  ✗  Applicable Charges failure cause: ${charges.failureCause}`);
         await orderPadPage.dumpPageSource('r26-charges-breakdown-invalid');
       }
       await assertOrDump(charges.isValid, `R26: Applicable Charges failed — ${charges.failureCause}`,
-        `Applicable Charges panel should list all charges with no error message — cause: ${charges.failureCause}`);
+        `Applicable Charges panel should list every charge with a value (not all 0) and no error message — cause: ${charges.failureCause}`);
 
       const chargesDisclaimer = await orderPadPage.getChargesDisclaimer();
       console.log(`  ℹ  Disclaimer: ${chargesDisclaimer}`);
@@ -1335,6 +1395,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // parsed lower circuit price, and confirm. Explicitly authorized per segment.
   it('R34: Place a real order for the NSE segment — search "IDEA", DPR-bounce to the lower circuit', async function () {
     this.timeout(120000);
+    skipIfMarketClosed(this, 'R34', 'NSE');
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
@@ -1372,34 +1433,45 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       return;
     }
 
-    await submitAndConfirmOrder('R34', limits.lower, symbolName);
+    await submitAndConfirmOrder('R34', limits.lower, symbolName, 'NSE');
   });
 
-  // Places a REAL order on the BSE segment — RTNPOWER trades on both NSE and BSE, so
-  // it doesn't matter which of the two search rows is opened (the search results don't
-  // expose which is which via accessibility); the exchange toggle on the OrderPad is
-  // used to explicitly select BSE regardless.
-  it('R35: Place a real order for the BSE segment — search "RTN POWER", DPR-bounce to the lower circuit', async function () {
+  // Places a REAL order on the BSE segment — RTNPOWER trades on both NSE and BSE with
+  // different circuit limits (confirmed live: NSE 5.40 - 8.10, BSE 5.41 - 8.11), so the
+  // lower circuit must be read off the BSE quote. Opens the first search result, expands
+  // the Quote screen, switches it to BSE via the toggle next to the symbol name, reads the
+  // lower circuit, then taps Buy and checks the OrderPad carried BSE over (its BSE radio
+  // is selected) before entering the price. The confirmation popup's exchange check in
+  // submitAndConfirmOrder remains the final guard before Confirm.
+  it('R35: Place a real order for the BSE segment — search "RTNPOWER", switch the Quote to BSE, DPR-bounce to the lower circuit', async function () {
     this.timeout(120000);
+    skipIfMarketClosed(this, 'R35', 'BSE');
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
     const searchOpen = await watchlistPage.isDisplayed(WL_SEL.searchInput, 5000);
     await assertOrDump(searchOpen, 'R35: search overlay did not open', 'Search overlay input should be visible after tapping search');
 
-    const results = await searchAndGetResults('RTN POWER');
-    console.log(`  ℹ  "RTN POWER" search results: ${results.length}`);
-    await assertOrDump(results.length > 0, 'R35: "RTN POWER" not found in search results', 'Search should return at least one result for "RTN POWER"');
+    const results = await searchAndGetResults('RTNPOWER');
+    console.log(`  ℹ  "RTNPOWER" search results: ${results.length}`);
+    await assertOrDump(results.length > 0, 'R35: "RTNPOWER" not found in search results', 'Search should return at least one result for "RTNPOWER"');
 
     await results[0].click();
     await browser.pause(500);
 
     const quoteOpen = await quotePage.isLoaded(8000);
     await assertOrDump(quoteOpen, 'R35: Quote screen did not open for RTNPOWER', 'Quote screen should open after selecting RTNPOWER from search');
+    console.log(`  ℹ  Quote screen opened on: ${await quotePage.getExchange()}`);
     await expandQuoteScreen('R35');
 
+    const { tapped: bseTapped, exchange: quoteExchange } = await quotePage.tapExchange('BSE');
+    console.log(`  ℹ  BSE toggle tapped on the Quote screen: ${bseTapped} — Quote now shows: ${quoteExchange}`);
+    await assertOrDump(bseTapped, 'R35: Quote header card not found - could not locate the BSE toggle', 'BSE toggle should be tappable on the expanded Quote screen');
+    await assertOrDump(quoteExchange === 'BSE', `R35: Quote screen shows ${quoteExchange} after tapping BSE`, 'Quote screen should switch to BSE after tapping the BSE toggle');
+    await browser.pause(500);
+
     const limits = await getLowerCircuitFromQuote('R35');
-    console.log(`  ℹ  RTNPOWER — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
+    console.log(`  ℹ  RTNPOWER (BSE) — Lower circuit: ${limits.lower}  Upper circuit: ${limits.upper}`);
 
     const buyTapped = await quotePage.tapBuyButton();
     console.log(`  ℹ  Buy button tapped: ${buyTapped}`);
@@ -1409,10 +1481,9 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const onOrderPad = await orderPadPage.isLoaded(8000);
     await assertOrDump(onOrderPad, 'R35: OrderPad screen did not open for RTNPOWER', 'OrderPad screen should open after tapping Buy');
 
-    const bseSelected = await orderPadPage.tapExchange('BSE');
-    console.log(`  ℹ  BSE exchange selected: ${bseSelected}`);
-    await assertOrDump(bseSelected, 'R35: could not select the BSE exchange toggle', 'BSE exchange toggle should be tappable on the OrderPad screen');
-    await browser.pause(300);
+    const radio = await orderPadPage.getSelectedExchange();
+    console.log(`  ℹ  OrderPad selected exchange radio: ${radio.selected}  (pixel coverage NSE ${radio.coverage.NSE?.toFixed(3)} / BSE ${radio.coverage.BSE?.toFixed(3)}${radio.error ? `, ${radio.error}` : ''})`);
+    await assertOrDump(radio.selected === 'BSE', `R35: OrderPad BSE radio is not selected (detected: ${radio.selected})`, 'BSE radio button next to the symbol name should be selected on the OrderPad');
 
     const symbolName = await enterPriceOnOrderPad('R35', limits.lower);
 
@@ -1423,7 +1494,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       return;
     }
 
-    await submitAndConfirmOrder('R35', limits.lower, symbolName);
+    await submitAndConfirmOrder('R35', limits.lower, symbolName, 'BSE');
   });
 
   // Places a REAL order on the NFO segment — NIFTY 25100 CE. Searches the contract
@@ -1434,6 +1505,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // itself exists and is searchable.
   it('R36: Place a real order for the NFO segment — NIFTY 25100 CE, DPR-bounce to the lower circuit', async function () {
     this.timeout(120000);
+    skipIfMarketClosed(this, 'R36', 'NFO');
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
@@ -1471,7 +1543,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       return;
     }
 
-    await submitAndConfirmOrder('R36', limits.lower, symbolName);
+    await submitAndConfirmOrder('R36', limits.lower, symbolName, 'NFO');
   });
 
   // Places a REAL order on the BFO segment — SENSEX 77100 CE. Same direct-search
@@ -1479,6 +1551,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // Chain screen's default visible range).
   it('R37: Place a real order for the BFO segment — SENSEX 77100 CE, DPR-bounce to the lower circuit', async function () {
     this.timeout(120000);
+    skipIfMarketClosed(this, 'R37', 'BFO');
 
     await watchlistPage.goToWatchlist();
     await watchlistPage.tapSearchBox();
@@ -1516,7 +1589,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       return;
     }
 
-    await submitAndConfirmOrder('R37', limits.lower, symbolName);
+    await submitAndConfirmOrder('R37', limits.lower, symbolName, 'BFO');
   });
 
   // Places a REAL order on the CDS segment — Market tab -> Currency -> whichever movers
@@ -1527,6 +1600,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // filtered out here per instruction.
   it('R38: Place a real order for the CDS segment — first Currency market mover, DPR-bounce to the lower circuit', async function () {
     this.timeout(120000);
+    skipIfMarketClosed(this, 'R38', 'CDS');
 
     const opened = await tapFirstMarketMover('Currency', 'Top Losers');
     await assertOrDump(opened, 'R38: could not open a Currency market mover', 'Should be able to open a symbol from the Currency market movers list');
@@ -1557,7 +1631,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       return;
     }
 
-    await submitAndConfirmOrder('R38', limits.lower, symbolName);
+    await submitAndConfirmOrder('R38', limits.lower, symbolName, 'CDS');
   });
 
   // Places a REAL order on the MCX segment — Market tab -> Commodity -> whichever movers
@@ -1565,6 +1639,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   // list is empty -> first symbol shown.
   it('R39: Place a real order for the MCX segment — first Commodity market mover, DPR-bounce to the lower circuit', async function () {
     this.timeout(120000);
+    skipIfMarketClosed(this, 'R39', 'MCX');
 
     const opened = await tapFirstMarketMover('Commodity', 'Top Losers');
     await assertOrDump(opened, 'R39: could not open a Commodity market mover', 'Should be able to open a symbol from the Commodity market movers list');
@@ -1595,7 +1670,7 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       return;
     }
 
-    await submitAndConfirmOrder('R39', limits.lower, symbolName);
+    await submitAndConfirmOrder('R39', limits.lower, symbolName, 'MCX');
   });
 
   // Read-only pass over the Basket screen (Orders -> Basket tab). A saved basket's
@@ -2010,15 +2085,33 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const chartAnchor = /^(oi|oi change|pcr chart|line|area)$|\d{2} \w{3} \d{4}/i;
     try {
       await ensureNxtOptionScreen('R56', 'OI Analysis');
-      const oiSelected = await nxtOptionPage.getSelectedState('OI', { exact: true });
+      // The tab row's selected state isn't set the instant the screen opens (all three
+      // tabs read selected="false" right after landing) - give it 2s, then poll a bit more.
+      await browser.pause(2000);
+      let oiSelected = null;
+      await nxtOptionPage.pollUntil(async () => {
+        oiSelected = await nxtOptionPage.getSelectedState('OI', { exact: true });
+        return oiSelected === 'true';
+      }, 5000, 500);
       console.log(`  ℹ  OI selected by default: ${oiSelected ?? 'unknown'}`);
-      if (oiSelected === 'false') {
+      if (oiSelected !== 'true') {
+        // If no tab reports selected at all, the app isn't exposing selection - fall
+        // back to the OI chart's own legend, which only renders while OI is active.
+        const othersSelected = [];
+        for (const t of ['OI Change', 'PCR Chart']) {
+          if ((await nxtOptionPage.getSelectedState(t, { exact: true })) === 'true') othersSelected.push(t);
+        }
+        const oiLegendShown = await nxtOptionPage.isDisplayed('//*[@content-desc="Cumulative OI"]', 2000);
+        console.log(`  ℹ  Other tabs selected: ${othersSelected.join(', ') || 'none'} | OI chart legend ("Cumulative OI") shown: ${oiLegendShown}`);
+        if (othersSelected.length === 0 && oiLegendShown) oiSelected = 'true';
+      }
+      if (oiSelected !== 'true') {
         // Capture the OI screen itself — the failure screenshot is only taken after the
         // finally below has already backed out to Watchlist.
         await nxtOptionPage.takeScreenshot('R56-OI_default_tab');
         await nxtOptionPage.dumpPageSource('r56-oi-default-tab');
       }
-      await assertOrDump(oiSelected !== 'false', 'R56: OI is not the default tab', 'OI should be selected by default on OI Analysis');
+      await assertOrDump(oiSelected === 'true', 'R56: OI is not the default tab', 'OI should be selected by default on OI Analysis');
       await assertNxtOptionHealthy('R56', 'OI', tabLabels, { chartAnchor });
 
       for (const tab of ['OI Change', 'PCR Chart']) {

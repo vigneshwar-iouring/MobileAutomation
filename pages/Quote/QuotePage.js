@@ -62,6 +62,48 @@ class QuotePage extends BasePage {
     } catch { return null; }
   }
 
+  // Exchange this Quote screen is showing, from the header card - "Stock RTNPOWER, BSE.
+  // Last traded price ..." -> "BSE". Circuit limits differ per exchange (confirmed live:
+  // RTNPOWER NSE 5.40 - 8.10 vs BSE 5.41 - 8.11), so callers must check this before
+  // trusting getCircuitLimits() for a given exchange.
+  async getExchange() {
+    try {
+      const src = await driver.getPageSource();
+      const m = src.match(/content-desc="Stock [^",]+, ([A-Z]+)\./);
+      return m ? m[1] : null;
+    } catch { return null; }
+  }
+
+  // Taps the NSE/BSE toggle under the symbol name in the expanded Quote header, then waits
+  // for the header to report the new exchange. The toggle has no node of its own - it's
+  // merged into the header card ("Stock RTNPOWER, BSE. Last traded price ...", confirmed
+  // live via r35_quote_expanded dump + screenshot), so it's tapped at a fixed dp offset
+  // from the card's top-left, measured on the Pixel 4a (440dpi, card at [42,150]: NSE
+  // centre (181,263), BSE (283,263)) and scaled by display density for other devices.
+  // The header's "Stock X, EX." text and the circuit limits both update on the tap
+  // (confirmed live through Appium; a raw `adb shell uiautomator dump` showed them stale).
+  // Returns { tapped, exchange } - exchange is what the header reads after the tap.
+  async tapExchange(exchange, timeout = 5000) {
+    const TOGGLE_DP = { NSE: { dx: 50.5, dy: 41 }, BSE: { dx: 87.6, dy: 41 } }[exchange];
+    let card = null;
+    try {
+      const src = await driver.getPageSource();
+      const m = src.match(/content-desc="Stock [^"]*"[^>]*?bounds="\[(\d+),(\d+)\]\[\d+,\d+\]"/);
+      if (m) card = { x: Number(m[1]), y: Number(m[2]) };
+    } catch {}
+    if (!TOGGLE_DP || !card) return { tapped: false, exchange: await this.getExchange() };
+
+    let scale = 2.75;
+    try { scale = (await driver.getDisplayDensity()) / 160; } catch {}
+    await browser.action('pointer', { parameters: { pointerType: 'touch' } })
+      .move({ x: Math.round(card.x + TOGGLE_DP.dx * scale), y: Math.round(card.y + TOGGLE_DP.dy * scale) })
+      .down().pause(80).up().perform();
+
+    let current = null;
+    await this.pollUntil(async () => (current = await this.getExchange()) === exchange, timeout, 500);
+    return { tapped: true, exchange: current };
+  }
+
   async getSegment() {
     try {
       return await this.findAndGetAttribute(SEL.segmentLabel, 'content-desc', 3000);
