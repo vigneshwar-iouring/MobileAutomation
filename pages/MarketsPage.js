@@ -1,6 +1,17 @@
 const BasePage = require('./BasePage');
 const { isResultRow, parseResultRow } = require('./ResultsPage');
 
+// High Return Achievers sub-tabs and its return-period dropdown options, in on-screen order
+// (verified live).
+const HRA_TABS = ['Large Cap', 'Mid Cap', 'Small Cap'];
+const HRA_PERIODS = ['1 Month', '6 Month', '1 Year', '3 Year'];
+const HRA_PERIOD_RE = /^\d+ (Month|Year)s?$/;
+
+// Each High Return Achievers row is one node: " MEESHO. Company profit 0.0 percent. Last traded
+// price 232.74. One year return 10.01 percent., Double tap to view MEESHO details." The row always
+// says "One year return", whichever period is selected, so the period is read from the pill instead.
+const isHraRow = desc => desc.includes('Company profit') && desc.includes('Double tap to view');
+
 // Left-to-right order of the "Trading Tools & Products" quick-access row (verified live). The row
 // is a horizontal scroller that keeps its scroll offset between visits, so any one of these can be
 // off-screen at either edge - the order tells revealTile() which way to swipe for a missing tile.
@@ -298,6 +309,102 @@ class MarketsPage extends BasePage {
         console.log('Clicked "See all" on Corporate Action');
     }
 
+    async scrollToHighReturnAchievers() {
+        return this.scrollToSection('High Return Achievers', isHraRow);
+    }
+
+    // Rows currently listed under High Return Achievers, as { symbol, desc }.
+    async getHraRows() {
+        const nodes = await this.getDescribedElements();
+        return nodes
+            .filter(n => isHraRow(n.desc))
+            .map(n => ({ symbol: (n.desc.trim().match(/^([^.\s]+)\./) || [])[1] || null, desc: n.desc }));
+    }
+
+    // Taps High Return Achievers sub-tab `label` ("Large Cap\nTab 1 of 3") and checks it carries
+    // selected="true" (a real attribute here, verified live) and lists at least one symbol.
+    async clickHraTab(label, timeout = 5000) {
+        const index = HRA_TABS.indexOf(label) + 1;
+        const sel = `//*[starts-with(@content-desc,"${label}") and contains(@content-desc,"Tab ${index} of ${HRA_TABS.length}")]`;
+        const el = await this.driver.$(sel);
+        try {
+            await el.waitForDisplayed({ timeout });
+        } catch (_) {
+            console.log(`High Return Achievers "${label}" tab not found: FAIL`);
+            return null;
+        }
+        await el.click();
+        await this.pause(1500);
+
+        const selected = (await (await this.driver.$(sel)).getAttribute('selected')) === 'true';
+        const rows = await this.getHraRows();
+        console.log(`High Return Achievers "${label}" tab - selected: ${selected ? 'PASS' : 'FAIL'} | symbols listed: ${rows.length}${rows.length ? ` (first: ${rows[0].symbol})` : ' - FAIL'}`);
+        return { label, selected, rowCount: rows.length, firstSymbol: rows.length ? rows[0].symbol : null };
+    }
+
+    // The period pill ("1 Month") sits at the right end of the High Return Achievers tab row.
+    async getHraPeriodPill() {
+        const nodes = await this.getDescribedElements();
+        const tab = nodes.find(n => /^Large Cap\nTab 1 of \d+$/.test(n.desc));
+        if (!tab) return null;
+        return nodes.find(n => HRA_PERIOD_RE.test(n.desc) && n.y1 < tab.y2 && n.y2 > tab.y1) || null;
+    }
+
+    async getHraPeriod() {
+        const pill = await this.getHraPeriodPill();
+        return pill ? pill.desc : null;
+    }
+
+    // Opens the period dropdown and returns its options top-to-bottom. While open, a full-screen
+    // "Dismiss" scrim covers the page and the pill drops out of the tree, so every period-shaped
+    // node left is an option.
+    async openHraPeriodDropdown() {
+        const pill = await this.getHraPeriodPill();
+        if (!pill) {
+            console.log('High Return Achievers period dropdown not found: FAIL');
+            return [];
+        }
+        await this.tapNode(pill);
+        await this.pause(1200);
+        const nodes = await this.getDescribedElements();
+        if (!nodes.some(n => n.desc === 'Dismiss')) {
+            console.log('High Return Achievers period dropdown did not open: FAIL');
+            return [];
+        }
+        return nodes.filter(n => HRA_PERIOD_RE.test(n.desc)).sort((a, b) => a.y1 - b.y1).map(n => n.desc);
+    }
+
+    // Verifies the open dropdown lists exactly 1 Month, 6 Month, 1 Year and 3 Year, in that order.
+    verifyHraPeriodOptions(options) {
+        const ok = options.length === HRA_PERIODS.length && HRA_PERIODS.every((p, i) => options[i] === p);
+        console.log(`Period dropdown options: ${options.join(', ') || 'none'} - ${ok ? 'PASS' : `FAIL (expected ${HRA_PERIODS.join(', ')})`}`);
+        return ok;
+    }
+
+    // Picks `period` from the dropdown (opening it first if needed), then checks the pill shows it
+    // and the list still has symbols.
+    async selectHraPeriod(period) {
+        let option = (await this.getDescribedElements()).find(n => n.desc === period);
+        if (!option || !(await this.isElementVisible('android=new UiSelector().description("Dismiss")', 300))) {
+            await this.openHraPeriodDropdown();
+            option = (await this.getDescribedElements()).find(n => n.desc === period);
+        }
+        if (!option) {
+            console.log(`Period "${period}" not listed in the dropdown: FAIL`);
+            await this.driver.back(); // close the dropdown
+            await this.pause(600);
+            return null;
+        }
+        await this.tapNode(option);
+        await this.pause(1500);
+
+        const shown = await this.getHraPeriod();
+        const rows = await this.getHraRows();
+        const ok = shown === period && rows.length > 0;
+        console.log(`Selected period "${period}" - pill shows "${shown}" | symbols listed: ${rows.length}${rows.length ? ` (first: ${rows[0].symbol})` : ''} - ${ok ? 'PASS' : 'FAIL'}`);
+        return { period, shown, rowCount: rows.length, firstSymbol: rows.length ? rows[0].symbol : null };
+    }
+
     // Horizontal drag across one row at height `y`. 'left' drags content leftward to reveal tiles
     // further right; 'right' reveals tiles further left (same convention as BasePage.swipe).
     async swipeRowAt(y, direction) {
@@ -461,4 +568,4 @@ class MarketsPage extends BasePage {
     }
 }
 
-module.exports = { MarketsPage };
+module.exports = { MarketsPage, HRA_TABS, HRA_PERIODS };

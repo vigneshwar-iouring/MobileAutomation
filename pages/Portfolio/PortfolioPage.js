@@ -23,8 +23,11 @@ const SEL = {
   buyMoreBtn:      '//*[@content-desc="BUY MORE"]',
 
   // ── Positions tab ───────────────────────────────────────────────────────────
-  positionsTodayTab:       '//*[contains(@content-desc,"Today") and contains(@content-desc,"tab")]',
-  positionsDerivativesTab: '//*[contains(@content-desc,"Derivatives tab")]',
+  // Confirmed via a real dump: "Selected. Today's tab. 0 items., Currently selected tab."
+  // and "Derivatives tab. 1 items., Double tap to switch to Derivatives tab" — the
+  // "Selected." prefix moves to whichever sub-tab is active.
+  positionsTodayTab:       '//*[contains(@content-desc,"Today\'s tab")]',
+  positionsDerivativesTab: '//*[contains(@content-desc,"Derivatives tab.")]',
   noPositionsMsg:          '//*[contains(@content-desc,"don\'t have any positions") or contains(@text,"don\'t have any positions")]',
   positionRow:             '//*[contains(@content-desc,"Double tap to view position details")]',
 };
@@ -145,6 +148,46 @@ class PortfolioPage extends BasePage {
       const rows = [...src.matchAll(/content-desc="([^"]*Double tap to view position details[^"]*)"/g)].map(m => m[1]);
       return rows;
     } catch { return []; }
+  }
+
+  // ── Positions sub-tabs: Today (default) / Derivatives ───────────────────────
+
+  _positionsSubTab(name) { return name === 'Today' ? SEL.positionsTodayTab : SEL.positionsDerivativesTab; }
+
+  async tapPositionsSubTab(name) { return this.findAndTap(this._positionsSubTab(name), 5000); }
+
+  // The sub-tab's label, e.g. "Today (2)" — null when the tab isn't found.
+  async getPositionsSubTabLabel(name) {
+    try {
+      const el = await $(this._positionsSubTab(name));
+      if (!(await el.isExisting())) return null;
+      return (await el.getAttribute('content-desc')) || (await el.getAttribute('text')) || null;
+    } catch { return null; }
+  }
+
+  // Count shown in the sub-tab's own label, or null when the label carries no number.
+  async getPositionsSubTabCount(name) {
+    const label = await this.getPositionsSubTabLabel(name);
+    const m = label && label.match(/(\d+)/);
+    return m ? parseInt(m[1], 10) : null;
+  }
+
+  // 'true' / 'false' from the sub-tab's own content-desc ("Selected. … Currently selected
+  // tab." vs "… Double tap to switch to …"), or null when the tab isn't found.
+  async getPositionsSubTabSelected(name) {
+    const label = await this.getPositionsSubTabLabel(name);
+    if (!label) return null;
+    return /^Selected\.|Currently selected/i.test(label) ? 'true' : 'false';
+  }
+
+  async dumpPageSource(label) {
+    try {
+      const fs = require('fs'), path = require('path');
+      const file = path.join(__dirname, '../../ui_dumps', `${label}.xml`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, await driver.getPageSource());
+      console.log(`  Full XML → ui_dumps/${label}.xml`);
+    } catch {}
   }
 }
 

@@ -295,6 +295,7 @@ async function assertNxtOptionHealthy(label, what, tabLabels = [], { chartAnchor
     await assertOrDump(chart.rendered, `${label}: ${what} — chart area is blank`,
       `${what} chart should be displayed — chart area is blank (${chart.coverage === null ? chart.error : `${(chart.coverage * 100).toFixed(2)}% drawn pixels`})`);
   }
+  return health;
 }
 
 // Types `query` into the already-open search input and waits until the FIRST result
@@ -2055,11 +2056,11 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await browser.pause(2000);
   });
 
-  it('R54: NxtOption — IV Analysis → IV Charts (default) displays charts', async function () {
-    this.timeout(45000);
+  it('R54: NxtOption — IV Analysis → IV Charts (default) displays charts, IVR-IVP Scan lists values', async function () {
+    this.timeout(75000);
     try {
       await ensureNxtOptionScreen('R54', 'IV Analysis');
-      // IV Charts must be the default tab — IVR-IVP Scan is deliberately never tapped.
+      // IV Charts must be the default tab — checked before IVR-IVP Scan is tapped.
       const ivChartsSelected = await nxtOptionPage.getSelectedState('IV Charts');
       const ivrSelected      = await nxtOptionPage.getSelectedState('IVR');
       console.log(`  ℹ  IV Charts selected: ${ivChartsSelected ?? 'unknown'}  |  IVR-IVP Scan selected: ${ivrSelected ?? 'unknown'}`);
@@ -2067,6 +2068,21 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
         'IV Charts should be selected by default on IV Analysis (not IVR-IVP Scan)');
       // The chart draws directly below the Line / Area radio buttons (confirmed via screenshot).
       await assertNxtOptionHealthy('R54', 'IV Charts', ['IV Charts', 'IVR'], { chartAnchor: /^(line|area)$/i });
+
+      const scanTapped = await nxtOptionPage.tapLabel('IVR');
+      console.log(`  ℹ  IVR-IVP Scan tapped: ${scanTapped}`);
+      await assertOrDump(scanTapped, 'R54: IVR-IVP Scan not found on IV Analysis', 'IVR-IVP Scan should be tappable on the IV Analysis screen');
+      await browser.pause(2000);
+      const scanSelected = await nxtOptionPage.getSelectedState('IVR');
+      console.log(`  ℹ  IVR-IVP Scan selected: ${scanSelected ?? 'unknown'}`);
+      await assertOrDump(scanSelected !== 'false', 'R54: IVR-IVP Scan did not become selected', 'IVR-IVP Scan should be selected after tapping it');
+
+      // A list, not a chart — no pixel check; instead require numeric IVR/IVP values.
+      const scan = await assertNxtOptionHealthy('R54', 'IVR-IVP Scan', ['IV Charts', 'IVR']);
+      const values = scan.content.filter(l => /\d/.test(l));
+      console.log(`  ℹ  IVR-IVP Scan values listed (${values.length}): ${values.slice(0, 15).join(' | ') || 'none'}`);
+      if (values.length === 0) await nxtOptionPage.dumpPageSource('r54-ivr_ivp_scan');
+      await assertOrDump(values.length > 0, 'R54: IVR-IVP Scan — no values listed', 'IVR-IVP Scan should list values');
     } finally {
       await backToWatchlistFromNxtOption('R54', 'IV Analysis');
     }
@@ -2178,8 +2194,8 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     await watchlistPage.goToWatchlist();
   });
 
-  it('R58: Validate Portfolio — Positions fields', async function () {
-    this.timeout(20000);
+  it('R58: Validate Portfolio — Positions fields, Today / Derivatives counts', async function () {
+    this.timeout(45000);
 
     const opened = await portfolioPage.openPortfolio();
     await assertOrDump(opened, 'R58: could not open the Portfolio tab', 'Portfolio bottom-nav tab should be tappable');
@@ -2198,10 +2214,70 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
       console.log(`  ℹ  "You don't have any positions" empty-state message visible: ${noPositions}`);
       await assertOrDump(noPositions, 'R58: empty-state message not found on Positions tab', 'Empty-state message should be visible when there are no positions');
     } else {
-      const positionRows = await portfolioPage.getPositionRows();
-      console.log(`  ℹ  Position rows (${positionRows.length}):`);
-      positionRows.forEach((r, i) => console.log(`     [${i}] ${r}`));
-      await assertOrDump(positionRows.length > 0, 'R58: Positions count > 0 but no rows parsed', 'Position rows should be parseable when the count is above 0');
+      // Today is the default sub-tab — check it before tapping anything.
+      const todayLabel = await portfolioPage.getPositionsSubTabLabel('Today');
+      const derivLabel = await portfolioPage.getPositionsSubTabLabel('Derivatives');
+      console.log(`  ℹ  Sub-tab labels — Today: "${todayLabel}", Derivatives: "${derivLabel}"`);
+      if (!todayLabel || !derivLabel) await portfolioPage.dumpPageSource('r58_positions_subtabs');
+      await assertOrDump(!!todayLabel, 'R58: Today tab not found on Positions', 'Today tab should be visible on the Positions tab');
+      await assertOrDump(!!derivLabel, 'R58: Derivatives tab not found on Positions', 'Derivatives tab should be visible on the Positions tab');
+
+      const todaySelected = await portfolioPage.getPositionsSubTabSelected('Today');
+      console.log(`  ℹ  Today selected by default: ${todaySelected}`);
+      await assertOrDump(todaySelected === 'true', 'R58: Today is not the default Positions sub-tab', 'Today should be selected by default on the Positions tab');
+
+      // Count from the sub-tab's label; if the label has no number, fall back to the
+      // number of position rows the tab lists.
+      const checkSubTab = async (name) => {
+        const rows       = await portfolioPage.getPositionRows();
+        const labelCount = await portfolioPage.getPositionsSubTabCount(name);
+        const count      = labelCount ?? rows.length;
+        console.log(`  ℹ  ${name} count: ${count} (${labelCount !== null ? 'from tab label' : 'from listed rows'}) | rows listed: ${rows.length}`);
+        rows.forEach((r, i) => console.log(`     [${i}] ${r}`));
+        if (count > 0) {
+          await assertOrDump(rows.length > 0, `R58: ${name} count ${count} but no position rows listed`, `${name} tab should list position rows when its count is above 0`);
+        } else {
+          const empty = await portfolioPage.isNoPositionsVisible();
+          console.log(`  ℹ  ${name} empty-state message visible: ${empty}`);
+          await assertOrDump(rows.length === 0, `R58: ${name} count 0 but position rows listed`, `${name} tab should list no position rows when its count is 0`);
+        }
+        return { count, rows };
+      };
+
+      const today = await checkSubTab('Today');
+
+      const derivTapped = await portfolioPage.tapPositionsSubTab('Derivatives');
+      await assertOrDump(derivTapped, 'R58: could not tap the Derivatives tab', 'Derivatives tab should be tappable');
+      await browser.pause(1000);
+      const deriv = await checkSubTab('Derivatives');
+
+      // Today = orders executed today (any segment); Derivatives = every F&O position, both
+      // executed today and carried forward. So a today's F&O position shows on BOTH tabs and
+      // Positions = Derivatives + Today's non-F&O rows, not Today + Derivatives.
+      await assertOrDump(today.count <= positionsCount && deriv.count <= positionsCount, 'R58: sub-tab count above Positions count',
+        `Today (${today.count}) and Derivatives (${deriv.count}) should each be at most the Positions count (${positionsCount})`);
+
+      // Row key = everything before "Quantity:" (symbol, contract, exchange, product), so the
+      // same position matches across tabs even if quantity/price text differs.
+      const rowKey = r => r.split(/\s*Quantity:/)[0].trim();
+      const allListed = today.rows.length === today.count && deriv.rows.length === deriv.count;
+      if (allListed) {
+        const derivKeys = new Set(deriv.rows.map(rowKey));
+        const todayFno  = today.rows.filter(r => derivKeys.has(rowKey(r)));
+        const todayOnly = today.rows.filter(r => !derivKeys.has(rowKey(r)));
+        console.log(`  ℹ  Today rows also on Derivatives (today's F&O): ${todayFno.length} | Today-only (non-F&O): ${todayOnly.length}`);
+        const expected = deriv.count + todayOnly.length;
+        console.log(`  ℹ  Positions ${positionsCount} vs Derivatives ${deriv.count} + Today-only ${todayOnly.length} = ${expected}`);
+        if (expected !== positionsCount) await portfolioPage.dumpPageSource('r58_positions_subtabs');
+        await assertOrDump(expected === positionsCount, 'R58: Derivatives + Today-only count does not match Positions count',
+          `Derivatives (${deriv.count}) + Today's non-F&O (${todayOnly.length}) should equal the Positions count (${positionsCount})`);
+      } else {
+        // Some rows are below the fold, so they can't be matched across tabs - fall back to
+        // the bounds the overlap allows.
+        console.log(`  ℹ  Not every row is on screen (Today ${today.rows.length}/${today.count}, Derivatives ${deriv.rows.length}/${deriv.count}) — checking count bounds only`);
+        await assertOrDump(positionsCount <= today.count + deriv.count, 'R58: Positions count above Today + Derivatives',
+          `Positions (${positionsCount}) should be at most Today (${today.count}) + Derivatives (${deriv.count})`);
+      }
     }
 
     await watchlistPage.goToWatchlist();

@@ -108,67 +108,55 @@ async function run() {
 
         // The sub-tab row only exposes the tabs currently on screen, but tapping a tab scrolls the
         // next one into view - so tapping 1..N in order reaches all of them (N from "Tab 1 of N").
-        let tc = 8;
+        console.log('\nTC 8: Clicking each Market Movers tab...');
         const moversTabs = await marketsPage.getMoversTabs();
         const moversTabCount = moversTabs.length ? moversTabs[0].total : 0;
         if (!moversTabCount) {
-            console.log(`TC ${tc}: Market Movers tabs not found - FAIL`);
-            tc++;
+            console.log('Market Movers tabs not found - FAIL');
         }
         for (let i = 1; i <= moversTabCount; i++) {
-            console.log(`\nTC ${tc}: Clicking Market Movers tab ${i} of ${moversTabCount}...`);
+            console.log(`Clicking Market Movers tab ${i} of ${moversTabCount}...`);
             const tabResult = await marketsPage.clickMoversTab(i, moversTabCount);
             if (tabResult && tabResult.rowCount === 0) {
                 console.log(`No symbols listed under "${tabResult.label}" - FAIL`);
             }
-            tc++;
         }
 
-        console.log(`\nTC ${tc}: Clicking "See all" on Market Movers...`);
+        console.log('\nTC 9: Clicking "See all" on Market Movers...');
         await marketsPage.clickSeeAllMarketMovers();
         await marketsPage.verifyMarketMoversScreenOpened();
-        tc++;
 
-        console.log(`TC ${tc}: Navigating back to Markets from the Market Movers screen...`);
+        console.log('TC 10: Navigating back to Markets from the Market Movers screen...');
         await marketsPage.closeMarketMoversScreen();
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen from Market Movers');
         }
-        tc++;
 
-        console.log(`\nTC ${tc}: Scrolling to News section...`);
+        // News is one TC end to end: open it from Markets, run the per-tab checks, close it.
+        console.log('\nTC 11: News - scroll to News, See all, check every tab, close...');
         const newsVisible = await marketsPage.scrollToNews();
         if (!newsVisible) {
             throw new Error('Could not find "News" section on the Equity screen');
         }
-        tc++;
 
-        console.log(`TC ${tc}: Clicking See all on News...`);
+        console.log('Clicking See all on News...');
         await marketsPage.clickSeeAllNews();
-        tc++;
 
-        console.log(`TC ${tc}: Waiting up to 10s for the News screen to load...`);
+        console.log('Waiting up to 10s for the News screen to load...');
         const loaded = await newsPage.waitForLoaded(10000);
         if (!loaded) {
             throw new Error('News screen did not load within 10 seconds');
         }
-        tc++;
 
         const emptyResult = { raw: null, date: null, latestTime: null, isPastOrNow: null, isWithinLast10Days: null, entryCount: 0, distinctTags: [], mismatches: [] };
 
         // Same per-tab flow as tests/News.test.js: tabs are selected one by one (in fixed
         // left-to-right order) rather than by swiping the tab strip - clicking each tab is what
         // actually scrolls later tabs into view.
-        //
-        // TC numbers increment across iterations instead of being reused (e.g. a fixed "TC N" for
-        // every tab) - getFailedTCs() in utils/logger.js attributes a failure to whichever "TC N:"
-        // was most recently logged, so reusing the same number for every tab would merge failures
-        // from different tabs into one bucket and hide which tab actually failed.
         for (const tabName of newsPage.tabNames) {
-            console.log(`\nTC ${tc}: Selecting "${tabName}" tab...`);
+            console.log(`\nSelecting "${tabName}" tab...`);
             await newsPage.clickTab(tabName);
             await driver.pause(1000);
-            tc++;
 
             if (await newsPage.isNoDataFound()) {
                 console.log(`No Data Found for "${tabName}" - skipping scroll and search`);
@@ -176,208 +164,175 @@ async function run() {
                 continue;
             }
 
-            console.log(`TC ${tc}: Scrolling down 2 times, then up 2 time...`);
+            console.log('Scrolling down 2 times, then up 2 time...');
             await newsPage.scrollDown();
             await newsPage.scrollDown();
             await newsPage.scrollUp();
             await newsPage.scrollUp();
-            tc++;
 
             if (tabName === 'All') {
-                console.log(`TC ${tc}: Opening search bar and searching "News"...`);
+                console.log('Opening search bar and searching "News"...');
                 await newsPage.clickSearchBar();
                 await newsPage.searchNews('News');
                 await driver.pause(3000);
                 await newsPage.verifyNewsSearchResults('News');
                 await newsPage.closeSearch();
                 await driver.pause(1000);
-                tc++;
             }
 
-            console.log(`TC ${tc}: Checking latest news date/time and tag consistency for "${tabName}"...`);
+            console.log(`Checking latest news date/time and tag consistency for "${tabName}"...`);
             const summary = await newsPage.getFeedSummary(tabName);
             results.push({ tab: tabName, ...summary });
-            tc++;
         }
 
         printSummary(results);
 
-        console.log(`\nTC ${tc}: Closing News screen...`);
+        console.log('\nClosing News screen...');
         await newsPage.clickClose();
-        tc++;
 
-        console.log(`\nTC ${tc}: Navigating back to Markets before the Corporate Action checks...`);
+        console.log('\nTC 12: Navigating back to Markets before the Corporate Action checks...');
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen after closing News');
         }
-        tc++;
 
-        console.log(`TC ${tc}: Scrolling to Corporate Action and clicking the first listed corporate action...`);
+        console.log('TC 13: Scrolling to Corporate Action and clicking the first listed corporate action...');
         const firstAction = await marketsPage.tapFirstCorporateAction();
         if (!firstAction) {
             throw new Error('No corporate action listed in the Corporate Action section');
         }
-        tc++;
 
-        console.log(`TC ${tc}: Verifying the Quote screen shows the Event tag...`);
+        console.log('TC 14: Verifying the Quote screen shows the Event tag...');
         const quoteEvent = await quotesPage.readEventTag();
         logEventCheck(quoteEvent, firstAction.type);
-        tc++;
 
-        console.log(`TC ${tc}: Clicking the Event tag...`);
+        console.log('TC 15: Clicking the Event tag...');
         if (quoteEvent && quoteEvent.event) {
             await quotesPage.tapEventTag();
             await corporateActionPage.isSymbolScreenOpen(quoteEvent.symbol);
         } else {
             console.log('Skipping Event tap - no Event tag on the Quote screen: FAIL');
         }
-        tc++;
 
-        console.log(`TC ${tc}: Navigating back to Markets...`);
+        console.log('TC 16: Navigating back to Markets...');
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen from the Corporate Action screen');
         }
-        tc++;
 
-        console.log(`TC ${tc}: Clicking "See all" on Corporate Action...`);
+        console.log('TC 17: Clicking "See all" on Corporate Action...');
         await marketsPage.clickSeeAllCorporateAction();
         if (!(await corporateActionPage.isSeeAllScreenOpen())) {
             throw new Error('Corporate Action "See all" screen did not open');
         }
-        tc++;
 
-        console.log(`TC ${tc}: Selecting "This Week" in the left filter (another period if no data)...`);
+        console.log('TC 18: Selecting "This Week" in the left filter (another period if no data)...');
         const period = await corporateActionPage.selectFilterWithData('left', 'This Week');
         console.log(`Period filter with data: ${period ? `${period} - PASS` : 'none - FAIL (no data for any period)'}`);
-        tc++;
 
-        console.log(`TC ${tc}: Selecting "DIVIDEND" in the right filter (another type if no data)...`);
+        console.log('TC 19: Selecting "DIVIDEND" in the right filter (another type if no data)...');
         const actionType = period ? await corporateActionPage.selectFilterWithData('right', 'DIVIDEND') : null;
         console.log(`Type filter with data: ${actionType ? `${actionType} - PASS` : 'none - FAIL (no data for any type)'}`);
-        tc++;
 
-        console.log(`TC ${tc}: Clicking the first listed corporate action and verifying the Event tag on its Quote...`);
+        console.log('TC 20: Clicking the first listed corporate action and verifying the Event tag on its Quote...');
         const listedAction = actionType ? await corporateActionPage.tapFirstListed() : null;
         if (listedAction) {
             logEventCheck(await quotesPage.readEventTag(), listedAction.type);
         } else {
             console.log('No corporate action to click under the selected filters: FAIL');
         }
-        tc++;
 
-        console.log(`\nTC ${tc}: Navigating back to Markets before the Results checks...`);
+        console.log('\nTC 21: Navigating back to Markets before the Results checks...');
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen after the Corporate Action checks');
         }
-        tc++;
 
-        console.log(`TC ${tc}: Scrolling to Results and clicking the first listed symbol...`);
+        console.log('TC 22: Scrolling to Results and clicking the first listed symbol...');
         const firstResult = await marketsPage.tapFirstResult();
         if (!firstResult) {
             throw new Error('No symbol listed in the Results section');
         }
         await marketsPage.verifyQuoteOpened(firstResult.symbol);
-        tc++;
 
-        console.log(`TC ${tc}: Navigating back to Markets...`);
+        console.log('TC 23: Navigating back to Markets...');
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen from the Results Quote');
         }
-        tc++;
 
-        console.log(`TC ${tc}: Clicking "See all" on Results...`);
+        console.log('TC 24: Clicking "See all" on Results...');
         await marketsPage.clickSeeAllResults();
         if (!(await resultsPage.isOpen())) {
             throw new Error('Market Results screen did not open');
         }
-        tc++;
 
-        console.log(`TC ${tc}: Verifying every listed result date is today or a future date...`);
+        console.log('TC 25: Verifying every listed result date is today or a future date...');
         const allResults = await resultsPage.collectAllResults();
         resultsPage.verifyDatesTodayOrFuture(allResults);
-        tc++;
 
-        console.log(`TC ${tc}: Clicking the first symbol on Market Results...`);
+        console.log('TC 26: Clicking the first symbol on Market Results...');
         const listedResult = await resultsPage.tapFirstResult(allResults[0]);
         if (listedResult) {
             await marketsPage.verifyQuoteOpened(listedResult.symbol);
         } else {
             console.log('No symbol listed on Market Results: FAIL');
         }
-        tc++;
 
-        console.log(`\nTC ${tc}: Navigating back to Markets before the quick-access tile checks...`);
+        console.log('\nTC 27: Navigating back to Markets before the quick-access tile checks...');
         const backOnMarkets = await marketsPage.navigateBackToMarkets();
         if (!backOnMarkets) {
             throw new Error('Could not get back to the Markets (Equity) screen after the Results checks');
         }
-        tc++;
 
-        console.log(`\nTC ${tc}: Clicking "AI Algo" tile...`);
+        console.log('\nTC 28: Clicking "AI Algo" tile...');
         await marketsPage.clickAiAlgoTile();
-        await driver.pause(2000); // give the webview a moment to start loading before checking
-        tc++;
+        await driver.pause(5000); // give the webview a moment to start loading before checking
 
-        console.log(`TC ${tc}: Waiting for the AI Algo webview to load and verifying it opened...`);
+        console.log('TC 29: Waiting for the AI Algo webview to load and verifying it opened...');
         const aiAlgoOpened = await marketsPage.verifyAiAlgoOpened();
         console.log(`AI Algo page opened: ${aiAlgoOpened ? 'PASS' : 'FAIL'}`);
-        tc++;
 
-        console.log(`TC ${tc}: Navigating back to Market...`);
+        console.log('TC 30: Navigating back to Market...');
         await marketsPage.navigateBackToMarkets();
-        tc++;
 
-        console.log(`\nTC ${tc}: Clicking "NxtOption" tile...`);
+        console.log('\nTC 31: Clicking "NxtOption" tile...');
         await marketsPage.clickNxtOptionTile();
-        tc++;
 
-        console.log(`TC ${tc}: Waiting for NxtOption to open...`);
+        console.log('TC 32: Waiting for NxtOption to open...');
+        await driver.pause(3000); // give the webview a moment to start loading before checking
         const nxtOptionOpened = await marketsPage.verifyNxtOptionOpened();
         console.log(`NxtOption opened: ${nxtOptionOpened ? 'PASS' : 'FAIL'}`);
-        tc++;
 
-        console.log(`TC ${tc}: Navigating back to Market...`);
+        console.log('TC 33: Navigating back to Market...');
         await marketsPage.navigateBackToMarkets();
-        tc++;
 
-        console.log(`\nTC ${tc}: Clicking "IPO" tile...`);
+        console.log('\nTC 34: Clicking "IPO" tile...');
         await marketsPage.clickIpoTile();
-        tc++;
 
-        console.log(`TC ${tc}: Waiting for the IPO webview to load and verifying it opened...`);
+        console.log('TC 35: Waiting for the IPO webview to load and verifying it opened...');
         const ipoOpened = await marketsPage.verifyIpoOpened();
         console.log(`IPO page opened: ${ipoOpened ? 'PASS' : 'FAIL'}`);
-        tc++;
 
-        console.log(`TC ${tc}: Navigating back to Market...`);
+        console.log('TC 36: Navigating back to Market...');
         await marketsPage.navigateBackToMarkets();
-        tc++;
 
         // Each click*Tile() scrolls the page and the tile row itself as needed to bring that tile
         // fully on screen (the row keeps its horizontal offset between visits).
-        console.log(`\nTC ${tc}: Clicking "Mutual Funds" tile...`);
+        console.log('\nTC 37: Clicking "Mutual Funds" tile...');
         await marketsPage.clickMutualFundsTile();
-        tc++;
 
-        console.log(`TC ${tc}: Waiting for Mutual Funds to open...`);
+        console.log('TC 38: Waiting for Mutual Funds to open...');
         const mutualFundsOpened = await mutualFundsPage.isOnMutualFundsScreen(8000);
         console.log(`Mutual Funds opened: ${mutualFundsOpened ? 'PASS' : 'FAIL'}`);
-        tc++;
 
-        console.log(`TC ${tc}: Navigating back to Market...`);
+        console.log('TC 39: Navigating back to Market...');
         await marketsPage.navigateBackToMarkets();
-        tc++;
 
-        console.log(`\nTC ${tc}: Clicking "Basket" tile...`);
+        console.log('\nTC 40: Clicking "Basket" tile...');
         await marketsPage.clickBasketTile();
-        tc++;
 
-        console.log(`TC ${tc}: Waiting for Basket to open...`);
+        console.log('TC 41: Waiting for Basket to open...');
         const basketOpened = await marketsPage.verifyBasketOpened();
         console.log(`Basket opened: ${basketOpened ? 'PASS' : 'FAIL'}`);
-        tc++;
 
-        console.log(`TC ${tc}: Navigating back to Market...`);
+        console.log('TC 42: Navigating back to Market...');
         await marketsPage.navigateBackToMarkets();
     } catch (err) {
         console.error('Test failed:', err.message);
