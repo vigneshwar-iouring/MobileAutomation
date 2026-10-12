@@ -12,6 +12,18 @@ const HRA_PERIOD_RE = /^\d+ (Month|Year)s?$/;
 // says "One year return", whichever period is selected, so the period is read from the pill instead.
 const isHraRow = desc => desc.includes('Company profit') && desc.includes('Double tap to view');
 
+// Stock In Range price-range tabs ("Under 100\nTab 1 of 4", ...) in on-screen order, with the
+// last traded price range each one lists (verified live). Bounds are inclusive.
+const SIR_TABS = [
+    { label: 'Under 100', min: 0, max: 100 },
+    { label: '100-500', min: 100, max: 500 },
+    { label: '500-1000', min: 500, max: 1000 },
+    { label: '1000-2000', min: 1000, max: 2000 },
+];
+// Its rows read like the movers rows: " TERAI. TERAI TEA CO. LTD.. Last traded price 140.01. Change
+// 23.33. ..., Double tap to view TERAI details, or swipe right for next category".
+const isSirRow = desc => desc.includes('Last traded price') && desc.includes('Double tap to view');
+
 // Left-to-right order of the "Trading Tools & Products" quick-access row (verified live). The row
 // is a horizontal scroller that keeps its scroll offset between visits, so any one of these can be
 // off-screen at either edge - the order tells revealTile() which way to swipe for a missing tile.
@@ -39,6 +51,10 @@ class MarketsPage extends BasePage {
         this.seeAllNews = 'android=new UiSelector().descriptionStartsWith("See all News")';
         this.seeAllCorporateAction = 'android=new UiSelector().descriptionStartsWith("See all Corporate Action")';
         this.seeAllResults = 'android=new UiSelector().descriptionStartsWith("See all Results")';
+        this.seeAllHighReturnAchievers = 'android=new UiSelector().descriptionStartsWith("See all High Return Achievers")';
+        this.highReturnAchieversTitle = 'android=new UiSelector().description("High Return Achievers")';
+        this.seeAllStockInRange = 'android=new UiSelector().descriptionStartsWith("See all Stock In Range")';
+        this.stockInRangeTitle = 'android=new UiSelector().description("Stock In Range")';
         this.backButton = 'android=new UiSelector().description("Back, Double tap to go back")';
 
         // Each movers row is one content-desc (" SYMBOL. COMPANY. Last traded price ..., Double tap
@@ -46,11 +62,13 @@ class MarketsPage extends BasePage {
         // ("...or swipe right for more options") never says "next category", so this skips it.
         this.moversRow = '//*[contains(@content-desc,"Double tap to view") and contains(@content-desc,"next category")]';
 
-        // The Basket tile opens Orders on its "Basket" tab ("Basket\nTab 2 of 2"). EXECUTE (the
-        // selector BasketPage uses) only shows when baskets exist - an empty one shows "Basket
-        // order is Empty" plus "New Basket" instead (verified live).
+        // The Basket tile opens Orders on its "Basket" tab ("Basket\nTab 2 of 2"), which shows one
+        // of two states: the saved baskets, each "NAME\nCreated on 21st September 2026\n1 items >"
+        // (verified live), or - with none created - the message "Basket order is Empty". The "New
+        // Basket" button shows in both states, so it doesn't count as content.
         this.basketTab = '//*[starts-with(@content-desc,"Basket") and contains(@content-desc,"Tab ")]';
-        this.basketContent = 'android=new UiSelector().descriptionMatches("EXECUTE|New Basket|Basket order is Empty")';
+        this.basketRow = '//*[contains(@content-desc,"Created on") and contains(@content-desc,"items")]';
+        this.noBasketMessage = '//*[contains(@content-desc,"Basket order is Empty") or contains(@text,"Basket order is Empty")]';
     }
 
     async clickMarketNavButton(timeout = 8000) {
@@ -171,15 +189,23 @@ class MarketsPage extends BasePage {
             return null;
         }
         const label = (await el.getAttribute('content-desc')).split('\n')[0];
-        await el.click();
-        await this.pause(1500);
-
-        const selected = (await (await this.driver.$(sel)).getAttribute('selected')) === 'true';
+        // A tap can land while the row is still sliding from the previous tab (seen live on the
+        // 12-tab "See all" row) and select nothing - and then the next tabs never scroll into the
+        // tree. So the tab is re-found and tapped again until it reports selected.
+        let selected = false;
+        for (let attempt = 1; attempt <= 3 && !selected; attempt++) {
+            await (await this.driver.$(sel)).click();
+            await this.pause(1500);
+            selected = (await (await this.driver.$(sel)).getAttribute('selected')) === 'true';
+            if (!selected && attempt < 3) console.log(`Market Movers "${label}" tab not selected after tap ${attempt} - tapping again`);
+        }
         const rows = await this.driver.$$(this.moversRow);
         const firstDesc = rows.length ? await rows[0].getAttribute('content-desc') : '';
         const firstSymbol = (firstDesc.trim().match(/^([^.\s]+)\./) || [])[1] || null;
-        console.log(`Market Movers "${label}" tab - selected: ${selected ? 'PASS' : 'FAIL'} | symbols listed: ${rows.length}${firstSymbol ? ` (first: ${firstSymbol})` : ''}`);
-        return { label, selected, rowCount: rows.length, firstSymbol };
+        // An empty category (e.g. Upper Circuit, All Time Low on "See all") shows "No Data Found!".
+        const noData = !rows.length && await this.isElementVisible('android=new UiSelector().description("No Data Found!")', 500);
+        console.log(`Market Movers "${label}" tab - selected: ${selected ? 'PASS' : 'FAIL'} | symbols listed: ${rows.length}${firstSymbol ? ` (first: ${firstSymbol})` : ''}${noData ? ' - "No Data Found!" shown' : ''}`);
+        return { label, selected, rowCount: rows.length, firstSymbol, noData };
     }
 
     async clickSeeAllMarketMovers(timeout = 8000) {
@@ -318,7 +344,218 @@ class MarketsPage extends BasePage {
         const nodes = await this.getDescribedElements();
         return nodes
             .filter(n => isHraRow(n.desc))
-            .map(n => ({ symbol: (n.desc.trim().match(/^([^.\s]+)\./) || [])[1] || null, desc: n.desc }));
+            .map(n => {
+                const num = re => { const m = n.desc.match(re); return m ? Number(m[1]) : null; };
+                return {
+                    symbol: (n.desc.trim().match(/^([^.\s]+)\./) || [])[1] || null,
+                    ltp: num(/Last traded price (-?\d+(?:\.\d+)?)/),
+                    oneYearReturn: num(/One year return (-?\d+(?:\.\d+)?) percent/),
+                    desc: n.desc,
+                };
+            });
+    }
+
+    // One string per listed row ("MEESHO:10.01|VBL:6.48|...") - compared before/after a period
+    // change to tell whether the list actually reloaded.
+    hraSnapshot(rows) {
+        return rows.map(r => `${r.symbol}:${r.oneYearReturn}`).join('|');
+    }
+
+    async clickSeeAllHighReturnAchievers(timeout = 8000) {
+        if (!(await this.isElementVisible(this.seeAllHighReturnAchievers, 1000))) await this.scrollToHighReturnAchievers();
+        await this.click(this.seeAllHighReturnAchievers, timeout);
+        console.log('Clicked "See all" on High Return Achievers');
+    }
+
+    // The full High Return Achievers screen: X (Back) button + "High Return Achievers" title, the
+    // same Large/Mid/Small Cap tabs and period pill, and a longer list (verified live). The Equity
+    // tab disappearing confirms it isn't still the Markets screen.
+    async verifyHraSeeAllOpened(timeout = 8000) {
+        const backVisible = await this.isElementVisible(this.backButton, timeout);
+        const titleVisible = backVisible && await this.isElementVisible(this.highReturnAchieversTitle, 2000);
+        const leftMarkets = titleVisible && !(await this.isElementVisible(this.equityTab, 500));
+        const rows = leftMarkets ? await this.getHraRows() : [];
+        const opened = leftMarkets && rows.length > 0;
+        console.log(`High Return Achievers "See all" screen opened (${rows.length} symbols listed): ${opened ? 'PASS' : 'FAIL'}`);
+        return opened;
+    }
+
+    // Taps the first symbol listed under High Return Achievers (on Markets or its "See all"
+    // screen) and returns its symbol; the row opens the half-height Quote sheet. On Markets the
+    // section is scrolled into view first if no row is on screen.
+    async tapFirstHraSymbol() {
+        let row = (await this.getDescribedElements()).find(n => isHraRow(n.desc));
+        if (!row) row = await this.scrollToHighReturnAchievers();
+        if (!row) {
+            console.log('No symbol listed under High Return Achievers: FAIL');
+            return null;
+        }
+        const symbol = (row.desc.trim().match(/^([^.\s]+)\./) || [])[1] || null;
+        await this.tapNode(row);
+        console.log(`Tapped first High Return Achievers symbol: ${symbol}`);
+        return symbol;
+    }
+
+    // One back-press from a Quote opened on the "See all" screen lands back on that screen
+    // (verified live) - confirmed by its Back button, title and listed rows.
+    async navigateBackToHraSeeAll() {
+        await this.driver.back();
+        await this.pause(1200);
+        const back = await this.isElementVisible(this.backButton, 3000)
+            && await this.isElementVisible(this.highReturnAchieversTitle, 2000)
+            && (await this.getHraRows()).length > 0;
+        console.log(`Navigated back from Quote to High Return Achievers "See all": ${back ? 'PASS' : 'FAIL'}`);
+        return back;
+    }
+
+    // ── Stock In Range ──────────────────────────────────────────────────────────
+
+    sirTabSelector(label) {
+        const index = SIR_TABS.findIndex(t => t.label === label) + 1;
+        return `//*[starts-with(@content-desc,"${label}") and contains(@content-desc,"Tab ${index} of ${SIR_TABS.length}")]`;
+    }
+
+    async scrollToStockInRange() {
+        return this.scrollToSection('Stock In Range', isSirRow);
+    }
+
+    // Rows listed under the price-range tab row, as { symbol, ltp, node }. On Markets the list
+    // stops at the next section's heading ("Stocks You Viewed Recently", whose rows look the same);
+    // on "See all" there is nothing below it.
+    async getSirRows() {
+        const nodes = await this.getDescribedElements();
+        const tabRow = nodes.find(n => /^Under 100\nTab 1 of \d+$/.test(n.desc));
+        if (!tabRow) return [];
+        const next = nodes.find(n => n.y1 >= tabRow.y2 && !isSirRow(n.desc));
+        return nodes
+            .filter(n => n.y1 >= tabRow.y2 && (!next || n.y1 < next.y1) && isSirRow(n.desc))
+            .map(n => {
+                const ltp = n.desc.match(/Last traded price (-?\d+(?:\.\d+)?)/);
+                return { symbol: (n.desc.trim().match(/^([^.\s]+)\./) || [])[1] || null, ltp: ltp ? Number(ltp[1]) : null, node: n };
+            });
+    }
+
+    // Taps the first symbol listed under Stock In Range (on Markets or its "See all" screen) and
+    // returns its symbol; on Markets the section is scrolled into view first if needed.
+    async tapFirstSirSymbol() {
+        let rows = await this.getSirRows();
+        if (!rows.length) {
+            await this.scrollToStockInRange();
+            rows = await this.getSirRows();
+        }
+        if (!rows.length) {
+            console.log('No symbol listed under Stock In Range: FAIL');
+            return null;
+        }
+        await this.tapNode(rows[0].node);
+        console.log(`Tapped first Stock In Range symbol: ${rows[0].symbol} (LTP ${rows[0].ltp})`);
+        return rows[0].symbol;
+    }
+
+    // Taps price-range tab `label` and checks it carries selected="true", lists symbols, and that
+    // the last traded price of each of the first 5 listed symbols falls inside that range.
+    async clickSirTab(label, timeout = 5000) {
+        const range = SIR_TABS.find(t => t.label === label);
+        const el = await this.driver.$(this.sirTabSelector(label));
+        try {
+            await el.waitForDisplayed({ timeout });
+        } catch (_) {
+            console.log(`Stock In Range "${label}" tab not found: FAIL`);
+            return null;
+        }
+        await el.click();
+        await this.pause(1500);
+
+        const selected = (await (await this.driver.$(this.sirTabSelector(label))).getAttribute('selected')) === 'true';
+        const firstFive = (await this.getSirRows()).slice(0, 5);
+        const outOfRange = firstFive.filter(r => r.ltp === null || r.ltp < range.min || r.ltp > range.max);
+        const inRange = firstFive.length > 0 && outOfRange.length === 0;
+        console.log(`Stock In Range "${label}" tab - selected: ${selected ? 'PASS' : 'FAIL'} | symbols listed: ${firstFive.length ? 'PASS' : 'FAIL (none)'}`);
+        console.log(`  First ${firstFive.length} prices: ${firstFive.map(r => `${r.symbol} ${r.ltp}`).join(', ') || 'none'}`);
+        console.log(`  Prices within ${range.min}-${range.max}: ${inRange ? 'PASS' : `FAIL${outOfRange.length ? ` - out of range: ${outOfRange.map(r => `${r.symbol} ${r.ltp}`).join(', ')}` : ''}`}`);
+        return { label, selected, rowCount: firstFive.length, inRange };
+    }
+
+    async clickSeeAllStockInRange(timeout = 8000) {
+        if (!(await this.isElementVisible(this.seeAllStockInRange, 1000))) await this.scrollToStockInRange();
+        await this.click(this.seeAllStockInRange, timeout);
+        console.log('Clicked "See all" on Stock In Range');
+    }
+
+    // The full Stock In Range screen: X (Back) button + "Stock In Range" title, the same price-range
+    // tabs and a longer list (verified live). The Equity tab disappearing confirms it isn't still
+    // the Markets screen.
+    async verifySirSeeAllOpened(timeout = 8000) {
+        const backVisible = await this.isElementVisible(this.backButton, timeout);
+        const titleVisible = backVisible && await this.isElementVisible(this.stockInRangeTitle, 2000);
+        const leftMarkets = titleVisible && !(await this.isElementVisible(this.equityTab, 500));
+        const rows = leftMarkets ? await this.getSirRows() : [];
+        const opened = leftMarkets && rows.length > 0;
+        console.log(`Stock In Range "See all" screen opened (${rows.length} symbols listed): ${opened ? 'PASS' : 'FAIL'}`);
+        return opened;
+    }
+
+    // One back-press from a Quote opened on the "See all" screen lands back on it (verified live).
+    async navigateBackToSirSeeAll() {
+        await this.driver.back();
+        await this.pause(1200);
+        const back = await this.isElementVisible(this.backButton, 3000)
+            && await this.isElementVisible(this.stockInRangeTitle, 2000)
+            && (await this.getSirRows()).length > 0;
+        console.log(`Navigated back from Quote to Stock In Range "See all": ${back ? 'PASS' : 'FAIL'}`);
+        return back;
+    }
+
+    async closeSirSeeAll(timeout = 5000) {
+        await this.click(this.backButton, timeout);
+        console.log('Clicked Back on the Stock In Range screen');
+    }
+
+    async closeHraSeeAll(timeout = 5000) {
+        await this.click(this.backButton, timeout);
+        console.log('Clicked Back on the High Return Achievers screen');
+    }
+
+    // Every listed symbol must show its "1 Year Return: x%" value (read from the row's
+    // "One year return x percent" content-desc).
+    async verifyHraOneYearReturns() {
+        const rows = await this.getHraRows();
+        const missing = rows.filter(r => r.oneYearReturn === null);
+        rows.forEach(r => console.log(`  ${r.symbol}: LTP ${r.ltp} | 1 Year Return ${r.oneYearReturn === null ? 'not shown' : `${r.oneYearReturn}%`}`));
+        const ok = rows.length > 0 && missing.length === 0;
+        console.log(`Symbols displayed with 1 Year Return (${rows.length - missing.length}/${rows.length}): ${ok ? 'PASS' : `FAIL${rows.length ? ` - missing for ${missing.map(r => r.symbol).join(', ')}` : ' - no symbols listed'}`}`);
+        return ok;
+    }
+
+    async isHraTabSelected(label) {
+        const index = HRA_TABS.indexOf(label) + 1;
+        try {
+            const el = await this.driver.$(`//*[starts-with(@content-desc,"${label}") and contains(@content-desc,"Tab ${index} of ${HRA_TABS.length}")]`);
+            return (await el.getAttribute('selected')) === 'true';
+        } catch (_) {
+            return false;
+        }
+    }
+
+    // Waits for the list to differ from `before` (a hraSnapshot) after a period/tab change, logs
+    // PASS/FAIL with the top 3 rows, and returns the new snapshot for the next comparison.
+    async verifyHraDataUpdated(before, what) {
+        const after = await this.waitForHraRowsChange(before);
+        const rows = await this.getHraRows();
+        const top = rows.slice(0, 3).map(r => `${r.symbol} ${r.oneYearReturn}%`).join(', ');
+        console.log(`Data updated for ${what} (top: ${top || 'none'}): ${after && after !== before ? 'PASS' : 'FAIL - list unchanged from the previous selection'}`);
+        return after;
+    }
+
+    // Polls until the listed rows differ from `before` (a hraSnapshot) - the list reloads a moment
+    // after the dropdown closes.
+    async waitForHraRowsChange(before, timeout = 6000) {
+        let after = before;
+        await this.driver.waitUntil(async () => {
+            after = this.hraSnapshot(await this.getHraRows());
+            return after && after !== before;
+        }, { timeout, interval: 500 }).catch(() => {});
+        return after;
     }
 
     // Taps High Return Achievers sub-tab `label` ("Large Cap\nTab 1 of 3") and checks it carries
@@ -528,10 +765,20 @@ class MarketsPage extends BasePage {
     }
 
     async verifyBasketOpened(timeout = 8000) {
-        const loaded = await this.isElementVisible(this.basketTab, timeout)
-            && await this.isElementVisible(this.basketContent, 3000);
-        console.log(loaded ? 'Basket screen loaded' : `Basket screen did not load within ${timeout}ms`);
-        return loaded;
+        if (!(await this.isElementVisible(this.basketTab, timeout))) {
+            console.log(`Basket tab did not appear within ${timeout}ms`);
+            return false;
+        }
+        // Either state can take a moment to render - poll for whichever shows first.
+        let state = null;
+        await this.driver.waitUntil(async () => {
+            const rows = await this.driver.$$(this.basketRow);
+            if (rows.length) state = `${rows.length} saved basket(s) displayed`;
+            else if (await this.isElementVisible(this.noBasketMessage, 200)) state = 'no baskets created - "Basket order is Empty" shown';
+            return !!state;
+        }, { timeout: 5000, interval: 500 }).catch(() => {});
+        console.log(state ? `Basket screen loaded - ${state}` : 'Basket tab opened, but neither saved baskets nor "Basket order is Empty" is shown');
+        return !!state;
     }
 
     // A single device back-press from the (expanded) Quote screen lands straight back on Markets
@@ -568,4 +815,4 @@ class MarketsPage extends BasePage {
     }
 }
 
-module.exports = { MarketsPage, HRA_TABS, HRA_PERIODS };
+module.exports = { MarketsPage, HRA_TABS, HRA_PERIODS, SIR_TABS };

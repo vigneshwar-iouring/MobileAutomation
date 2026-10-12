@@ -1,5 +1,5 @@
 const DriverManager = require('../../driver/DriverManager');
-const { MarketsPage } = require('../../pages/MarketsPage');
+const { MarketsPage, HRA_TABS, HRA_PERIODS, SIR_TABS } = require('../../pages/MarketsPage');
 const { NewsPage } = require('../../pages/NewsPage');
 const QuotesPage = require('../../pages/QuotesPage');
 const { MutualFundsPage } = require('../../pages/MutualFundsPage');
@@ -118,7 +118,7 @@ async function run() {
             console.log(`Clicking Market Movers tab ${i} of ${moversTabCount}...`);
             const tabResult = await marketsPage.clickMoversTab(i, moversTabCount);
             if (tabResult && tabResult.rowCount === 0) {
-                console.log(`No symbols listed under "${tabResult.label}" - FAIL`);
+                console.log(`No symbols listed under "${tabResult.label}"`);
             }
         }
 
@@ -126,14 +126,30 @@ async function run() {
         await marketsPage.clickSeeAllMarketMovers();
         await marketsPage.verifyMarketMoversScreenOpened();
 
-        console.log('TC 10: Navigating back to Markets from the Market Movers screen...');
+        // The "See all" row has more tabs than Markets' (12 vs 6 when checked live) and is also
+        // click-only, so it is rewound to Tab 1 and walked the same way as TC 8.
+        console.log('TC 10: Clicking each tab on the Market Movers "See all" screen...');
+        await marketsPage.rewindMoversTabs();
+        const seeAllMoversTabs = await marketsPage.getMoversTabs();
+        const seeAllMoversTabCount = seeAllMoversTabs.length ? seeAllMoversTabs[0].total : 0;
+        if (!seeAllMoversTabCount) {
+            console.log('Market Movers "See all" tabs not found - FAIL');
+        }
+        for (let i = 1; i <= seeAllMoversTabCount; i++) {
+            const tabResult = await marketsPage.clickMoversTab(i, seeAllMoversTabCount);
+            if (tabResult && tabResult.rowCount === 0) {
+                console.log(`No symbols listed under "${tabResult.label}"`);
+            }
+        }
+
+        console.log('TC 11: Navigating back to Markets from the Market Movers screen...');
         await marketsPage.closeMarketMoversScreen();
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen from Market Movers');
         }
 
         // News is one TC end to end: open it from Markets, run the per-tab checks, close it.
-        console.log('\nTC 11: News - scroll to News, See all, check every tab, close...');
+        console.log('\nTC 12: News - scroll to News, See all, check every tab, close...');
         const newsVisible = await marketsPage.scrollToNews();
         if (!newsVisible) {
             throw new Error('Could not find "News" section on the Equity screen');
@@ -190,22 +206,22 @@ async function run() {
         console.log('\nClosing News screen...');
         await newsPage.clickClose();
 
-        console.log('\nTC 12: Navigating back to Markets before the Corporate Action checks...');
+        console.log('\nTC 13: Navigating back to Markets before the Corporate Action checks...');
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen after closing News');
         }
 
-        console.log('TC 13: Scrolling to Corporate Action and clicking the first listed corporate action...');
+        console.log('TC 14: Scrolling to Corporate Action and clicking the first listed corporate action...');
         const firstAction = await marketsPage.tapFirstCorporateAction();
         if (!firstAction) {
             throw new Error('No corporate action listed in the Corporate Action section');
         }
 
-        console.log('TC 14: Verifying the Quote screen shows the Event tag...');
+        console.log('TC 15: Verifying the Quote screen shows the Event tag...');
         const quoteEvent = await quotesPage.readEventTag();
         logEventCheck(quoteEvent, firstAction.type);
 
-        console.log('TC 15: Clicking the Event tag...');
+        console.log('TC 16: Clicking the Event tag...');
         if (quoteEvent && quoteEvent.event) {
             await quotesPage.tapEventTag();
             await corporateActionPage.isSymbolScreenOpen(quoteEvent.symbol);
@@ -213,26 +229,26 @@ async function run() {
             console.log('Skipping Event tap - no Event tag on the Quote screen: FAIL');
         }
 
-        console.log('TC 16: Navigating back to Markets...');
+        console.log('TC 17: Navigating back to Markets...');
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen from the Corporate Action screen');
         }
 
-        console.log('TC 17: Clicking "See all" on Corporate Action...');
+        console.log('TC 18: Clicking "See all" on Corporate Action...');
         await marketsPage.clickSeeAllCorporateAction();
         if (!(await corporateActionPage.isSeeAllScreenOpen())) {
             throw new Error('Corporate Action "See all" screen did not open');
         }
 
-        console.log('TC 18: Selecting "This Week" in the left filter (another period if no data)...');
+        console.log('TC 19: Selecting "This Week" in the left filter (another period if no data)...');
         const period = await corporateActionPage.selectFilterWithData('left', 'This Week');
         console.log(`Period filter with data: ${period ? `${period} - PASS` : 'none - FAIL (no data for any period)'}`);
 
-        console.log('TC 19: Selecting "DIVIDEND" in the right filter (another type if no data)...');
+        console.log('TC 20: Selecting "DIVIDEND" in the right filter (another type if no data)...');
         const actionType = period ? await corporateActionPage.selectFilterWithData('right', 'DIVIDEND') : null;
         console.log(`Type filter with data: ${actionType ? `${actionType} - PASS` : 'none - FAIL (no data for any type)'}`);
 
-        console.log('TC 20: Clicking the first listed corporate action and verifying the Event tag on its Quote...');
+        console.log('TC 21: Clicking the first listed corporate action and verifying the Event tag on its Quote...');
         const listedAction = actionType ? await corporateActionPage.tapFirstListed() : null;
         if (listedAction) {
             logEventCheck(await quotesPage.readEventTag(), listedAction.type);
@@ -240,34 +256,34 @@ async function run() {
             console.log('No corporate action to click under the selected filters: FAIL');
         }
 
-        console.log('\nTC 21: Navigating back to Markets before the Results checks...');
+        console.log('\nTC 22: Navigating back to Markets before the Results checks...');
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen after the Corporate Action checks');
         }
 
-        console.log('TC 22: Scrolling to Results and clicking the first listed symbol...');
+        console.log('TC 23: Scrolling to Results and clicking the first listed symbol...');
         const firstResult = await marketsPage.tapFirstResult();
         if (!firstResult) {
             throw new Error('No symbol listed in the Results section');
         }
         await marketsPage.verifyQuoteOpened(firstResult.symbol);
 
-        console.log('TC 23: Navigating back to Markets...');
+        console.log('TC 24: Navigating back to Markets...');
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen from the Results Quote');
         }
 
-        console.log('TC 24: Clicking "See all" on Results...');
+        console.log('TC 25: Clicking "See all" on Results...');
         await marketsPage.clickSeeAllResults();
         if (!(await resultsPage.isOpen())) {
             throw new Error('Market Results screen did not open');
         }
 
-        console.log('TC 25: Verifying every listed result date is today or a future date...');
+        console.log('TC 26: Verifying every listed result date is today or a future date...');
         const allResults = await resultsPage.collectAllResults();
         resultsPage.verifyDatesTodayOrFuture(allResults);
 
-        console.log('TC 26: Clicking the first symbol on Market Results...');
+        console.log('TC 27: Clicking the first symbol on Market Results...');
         const listedResult = await resultsPage.tapFirstResult(allResults[0]);
         if (listedResult) {
             await marketsPage.verifyQuoteOpened(listedResult.symbol);
@@ -275,65 +291,208 @@ async function run() {
             console.log('No symbol listed on Market Results: FAIL');
         }
 
-        console.log('\nTC 27: Navigating back to Markets before the quick-access tile checks...');
+        console.log('\nTC 28: Navigating back to Markets before the quick-access tile checks...');
         const backOnMarkets = await marketsPage.navigateBackToMarkets();
         if (!backOnMarkets) {
             throw new Error('Could not get back to the Markets (Equity) screen after the Results checks');
         }
 
-        console.log('\nTC 28: Clicking "AI Algo" tile...');
+        console.log('\nTC 29: Clicking "AI Algo" tile...');
         await marketsPage.clickAiAlgoTile();
         await driver.pause(5000); // give the webview a moment to start loading before checking
 
-        console.log('TC 29: Waiting for the AI Algo webview to load and verifying it opened...');
+        console.log('TC 30: Waiting for the AI Algo webview to load and verifying it opened...');
         const aiAlgoOpened = await marketsPage.verifyAiAlgoOpened();
         console.log(`AI Algo page opened: ${aiAlgoOpened ? 'PASS' : 'FAIL'}`);
 
-        console.log('TC 30: Navigating back to Market...');
+        console.log('TC 31: Navigating back to Market...');
         await marketsPage.navigateBackToMarkets();
 
-        console.log('\nTC 31: Clicking "NxtOption" tile...');
+        console.log('\nTC 32: Clicking "NxtOption" tile...');
         await marketsPage.clickNxtOptionTile();
 
-        console.log('TC 32: Waiting for NxtOption to open...');
+        console.log('TC 33: Waiting for NxtOption to open...');
         await driver.pause(3000); // give the webview a moment to start loading before checking
         const nxtOptionOpened = await marketsPage.verifyNxtOptionOpened();
         console.log(`NxtOption opened: ${nxtOptionOpened ? 'PASS' : 'FAIL'}`);
 
-        console.log('TC 33: Navigating back to Market...');
+        console.log('TC 34: Navigating back to Market...');
         await marketsPage.navigateBackToMarkets();
 
-        console.log('\nTC 34: Clicking "IPO" tile...');
+        console.log('\nTC 35: Clicking "IPO" tile...');
         await marketsPage.clickIpoTile();
 
-        console.log('TC 35: Waiting for the IPO webview to load and verifying it opened...');
+        console.log('TC 36: Waiting for the IPO webview to load and verifying it opened...');
         const ipoOpened = await marketsPage.verifyIpoOpened();
         console.log(`IPO page opened: ${ipoOpened ? 'PASS' : 'FAIL'}`);
 
-        console.log('TC 36: Navigating back to Market...');
+        console.log('TC 37: Navigating back to Market...');
         await marketsPage.navigateBackToMarkets();
 
         // Each click*Tile() scrolls the page and the tile row itself as needed to bring that tile
         // fully on screen (the row keeps its horizontal offset between visits).
-        console.log('\nTC 37: Clicking "Mutual Funds" tile...');
+        console.log('\nTC 38: Clicking "Mutual Funds" tile...');
         await marketsPage.clickMutualFundsTile();
 
-        console.log('TC 38: Waiting for Mutual Funds to open...');
+        console.log('TC 39: Waiting for Mutual Funds to open...');
         const mutualFundsOpened = await mutualFundsPage.isOnMutualFundsScreen(8000);
         console.log(`Mutual Funds opened: ${mutualFundsOpened ? 'PASS' : 'FAIL'}`);
 
-        console.log('TC 39: Navigating back to Market...');
+        console.log('TC 40: Navigating back to Market...');
         await marketsPage.navigateBackToMarkets();
 
-        console.log('\nTC 40: Clicking "Basket" tile...');
+        console.log('\nTC 41: Clicking "Basket" tile...');
         await marketsPage.clickBasketTile();
 
-        console.log('TC 41: Waiting for Basket to open...');
+        console.log('TC 42: Waiting for Basket to open...');
         const basketOpened = await marketsPage.verifyBasketOpened();
         console.log(`Basket opened: ${basketOpened ? 'PASS' : 'FAIL'}`);
 
-        console.log('TC 42: Navigating back to Market...');
-        await marketsPage.navigateBackToMarkets();
+        console.log('TC 43: Navigating back to Market...');
+        if (!(await marketsPage.navigateBackToMarkets())) {
+            throw new Error('Could not get back to the Markets (Equity) screen from Basket');
+        }
+
+        console.log('\nTC 44: Scrolling to High Return Achievers...');
+        if (!(await marketsPage.scrollToHighReturnAchievers())) {
+            throw new Error('High Return Achievers section not found on the Markets (Equity) screen');
+        }
+
+        console.log('\nTC 45: Clicking the first High Return Achievers symbol and verifying its Quote...');
+        const hraSymbol = await marketsPage.tapFirstHraSymbol();
+        if (hraSymbol) await marketsPage.verifyQuoteOpened(hraSymbol);
+
+        // Back from the Quote returns to Markets with the section still in view (verified live);
+        // scroll it back in only if it isn't.
+        console.log('\nTC 46: Navigating back to Markets from the Quote...');
+        if (!(await marketsPage.navigateBackFromQuote())) {
+            throw new Error('Could not get back to the Markets (Equity) screen from the High Return Achievers Quote');
+        }
+        if (!(await marketsPage.getHraRows()).length) await marketsPage.scrollToHighReturnAchievers();
+
+        console.log('\nTC 47: Clicking each High Return Achievers tab...');
+        for (const tab of HRA_TABS) {
+            await marketsPage.clickHraTab(tab);
+        }
+
+        console.log('\nTC 48: Opening the period dropdown next to the High Return Achievers tabs...');
+        const startPeriod = await marketsPage.getHraPeriod();
+        console.log(`Current period: "${startPeriod}"`);
+        marketsPage.verifyHraPeriodOptions(await marketsPage.openHraPeriodDropdown());
+
+        // The dropdown is still open from TC 48, so the first selection taps straight into it. The
+        // selected period persists across visits, so it is put back to how it was found afterwards.
+        console.log('\nTC 49: Selecting each period in the dropdown...');
+        for (const period of HRA_PERIODS) {
+            await marketsPage.selectHraPeriod(period);
+        }
+        if (startPeriod && startPeriod !== HRA_PERIODS[HRA_PERIODS.length - 1]) {
+            console.log(`Restoring the period dropdown to "${startPeriod}"...`);
+            await marketsPage.selectHraPeriod(startPeriod);
+        }
+
+        console.log('\nTC 50: Clicking "See all" on High Return Achievers...');
+        await marketsPage.clickSeeAllHighReturnAchievers();
+        if (!(await marketsPage.verifyHraSeeAllOpened())) {
+            throw new Error('High Return Achievers "See all" screen did not open');
+        }
+
+        console.log('\nTC 51: Clicking the first symbol on High Return Achievers "See all" and verifying its Quote...');
+        const seeAllSymbol = await marketsPage.tapFirstHraSymbol();
+        if (seeAllSymbol) await marketsPage.verifyQuoteOpened(seeAllSymbol);
+
+        console.log('\nTC 52: Navigating back to High Return Achievers "See all" from the Quote...');
+        if (!(await marketsPage.navigateBackToHraSeeAll())) {
+            throw new Error('Could not get back to the High Return Achievers "See all" screen from the Quote');
+        }
+
+        console.log('\nTC 53: Verifying Large Cap with "1 Month" is selected by default...');
+        const largeCapDefault = await marketsPage.isHraTabSelected('Large Cap');
+        const defaultPeriod = await marketsPage.getHraPeriod();
+        console.log(`Large Cap tab selected: ${largeCapDefault ? 'PASS' : 'FAIL'} | period: "${defaultPeriod}" - ${defaultPeriod === '1 Month' ? 'PASS' : 'FAIL (expected "1 Month")'}`);
+
+        console.log('\nTC 54: Verifying the listed symbols are displayed with their 1 Year Return...');
+        await marketsPage.verifyHraOneYearReturns();
+
+        // Each step changes one thing - the period, then the tab - and the list must differ from
+        // the one shown before that step. The row label reads "1 Year Return" whatever the period,
+        // so the change is seen in the symbols/return values.
+        let before = marketsPage.hraSnapshot(await marketsPage.getHraRows());
+
+        console.log('\nTC 55: Selecting "6 Month" from the dropdown...');
+        if (await marketsPage.selectHraPeriod('6 Month')) before = await marketsPage.verifyHraDataUpdated(before, 'Large Cap / "6 Month"');
+
+        console.log('\nTC 56: Selecting the Mid Cap tab...');
+        if (await marketsPage.clickHraTab('Mid Cap')) before = await marketsPage.verifyHraDataUpdated(before, 'Mid Cap / "6 Month"');
+
+        console.log('\nTC 57: Selecting "1 Year" from the dropdown...');
+        if (await marketsPage.selectHraPeriod('1 Year')) before = await marketsPage.verifyHraDataUpdated(before, 'Mid Cap / "1 Year"');
+
+        console.log('\nTC 58: Selecting the Small Cap tab...');
+        if (await marketsPage.clickHraTab('Small Cap')) before = await marketsPage.verifyHraDataUpdated(before, 'Small Cap / "1 Year"');
+
+        console.log('\nTC 59: Selecting "3 Year" from the dropdown...');
+        if (await marketsPage.selectHraPeriod('3 Year')) before = await marketsPage.verifyHraDataUpdated(before, 'Small Cap / "3 Year"');
+
+        console.log('\nTC 60: Selecting the Large Cap tab...');
+        if (await marketsPage.clickHraTab('Large Cap')) before = await marketsPage.verifyHraDataUpdated(before, 'Large Cap / "3 Year"');
+
+        // The period persists across visits - put it back to "1 Month" so the next run starts from
+        // the default TC 53 expects.
+        console.log('Restoring the period dropdown to "1 Month"...');
+        await marketsPage.selectHraPeriod('1 Month');
+
+        console.log('\nTC 61: Closing High Return Achievers and navigating back to Markets...');
+        await marketsPage.closeHraSeeAll();
+        if (!(await marketsPage.navigateBackToMarkets())) {
+            throw new Error('Could not get back to the Markets (Equity) screen from High Return Achievers');
+        }
+
+        console.log('\nTC 62: Scrolling to Stock In Range...');
+        if (!(await marketsPage.scrollToStockInRange())) {
+            throw new Error('Stock In Range section not found on the Markets (Equity) screen');
+        }
+
+        console.log('\nTC 63: Clicking the first Stock In Range symbol and verifying its Quote...');
+        const sirSymbol = await marketsPage.tapFirstSirSymbol();
+        if (sirSymbol) await marketsPage.verifyQuoteOpened(sirSymbol);
+
+        console.log('\nTC 64: Navigating back to Markets from the Quote...');
+        if (!(await marketsPage.navigateBackFromQuote())) {
+            throw new Error('Could not get back to the Markets (Equity) screen from the Stock In Range Quote');
+        }
+        if (!(await marketsPage.getSirRows()).length) await marketsPage.scrollToStockInRange();
+
+        console.log('\nTC 65: Clicking each Stock In Range tab and checking the first 5 prices fall in its range...');
+        for (const tab of SIR_TABS) {
+            await marketsPage.clickSirTab(tab.label);
+        }
+
+        console.log('\nTC 66: Clicking "See all" on Stock In Range...');
+        await marketsPage.clickSeeAllStockInRange();
+        if (!(await marketsPage.verifySirSeeAllOpened())) {
+            throw new Error('Stock In Range "See all" screen did not open');
+        }
+
+        console.log('\nTC 67: Clicking the first symbol on Stock In Range "See all" and verifying its Quote...');
+        const sirSeeAllSymbol = await marketsPage.tapFirstSirSymbol();
+        if (sirSeeAllSymbol) await marketsPage.verifyQuoteOpened(sirSeeAllSymbol);
+
+        console.log('\nTC 68: Navigating back to Stock In Range "See all" from the Quote...');
+        if (!(await marketsPage.navigateBackToSirSeeAll())) {
+            throw new Error('Could not get back to the Stock In Range "See all" screen from the Quote');
+        }
+
+        console.log('\nTC 69: Clicking each Stock In Range tab on "See all" and checking the first 5 prices fall in its range...');
+        for (const tab of SIR_TABS) {
+            await marketsPage.clickSirTab(tab.label);
+        }
+
+        console.log('\nTC 70: Closing Stock In Range and navigating back to Markets...');
+        await marketsPage.closeSirSeeAll();
+        if (!(await marketsPage.navigateBackToMarkets())) {
+            throw new Error('Could not get back to the Markets (Equity) screen from Stock In Range');
+        }
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);
