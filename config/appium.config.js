@@ -14,7 +14,7 @@ const capabilities = {
     'appium:automationName': 'UiAutomator2',
     'appium:deviceName': device.deviceName,
     'appium:udid': device.udid,
-    'appium:appPackage': 'com.iouring.globecapital',
+    'appium:appPackage': 'com.iouring.globecapital.dev',
     'appium:appActivity': 'com.iouring.globecapital.MainActivity',
     'appium:noReset': device.noReset,
     'appium:newCommandTimeout': 60,

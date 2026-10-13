@@ -56,7 +56,7 @@ class LoginPage extends BasePage {
 
         // "Logout" sits below the fold of the nav drawer, under Profile/Settings.
         this.logoutMenuItem = 'android=new UiSelector().description("Logout")';
-        this.logoutConfirmYes = 'android=new UiSelector().description("Yes")';
+        this.logoutConfirmYes = 'android=new UiSelector().description("Logout")';
 
         // Toast shown right after confirming logout - same short-lived-Toast situation as
         // loginErrorText above, so it's read via BasePage.waitForToast rather than a one-shot
