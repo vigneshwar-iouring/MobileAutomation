@@ -508,9 +508,9 @@ async function run() {
         const searches = [
             { query: 'IDEA', position: 1 },
             { query: 'GTLINFRA', position: 2 },
-            { query: 'HDFC', position: 1 },
-            { query: 'HCLTECH', position: 1 },
-            { query: 'MONOT', position: 1 },
+            { query: 'NIFTY 22750', position: 1 },
+            { query: 'USDINR', position: 1 },
+            { query: 'GOLD 149000', position: 1 },
         ];
         const viewedSymbols = [];
         let tc = 72;

@@ -860,14 +860,17 @@ class MarketsPage extends BasePage {
         return text === query;
     }
 
-    // Backspaces (focused first, as above) until the field reads empty.
+    // Backspaces (focused first, as above) until the field reads empty. Tapping the field drops the
+    // cursor where the tap lands - mid-text for a longer query like "GOLD 149000", which left "00"
+    // behind (verified live) - so the cursor is moved to the end before deleting.
     async clearSearch(timeout = 5000) {
         await this.click(this.searchField, timeout);
         await this.pause(300);
         let text = await this.getSearchText();
         for (let attempt = 0; attempt < 3 && text; attempt++) {
+            await this.driver.pressKeyCode(123); // KEYCODE_MOVE_END
             for (let i = 0; i < text.length; i++) {
-                await this.driver.keys('');
+                await this.driver.pressKeyCode(67); // KEYCODE_DEL
                 await this.pause(40);
             }
             await this.pause(300);
@@ -878,16 +881,18 @@ class MarketsPage extends BasePage {
     }
 
     // Result rows read "SYMBOL\nIDEA, Double tap to open Quote Screen." (or "SYMBOL\nAdd Watchlist,
-    // ..."); the same symbol can be listed once per exchange. Waits for rows starting with `query`
-    // so a stale list from the previous search isn't read.
+    // ..."); the same symbol can be listed once per exchange. A contract search like "NIFTY 22750"
+    // lists "NIFTY 13OCT 22750 CE", ... Waits for a first row containing every word of `query` so a
+    // stale list from the previous search isn't read.
     async getSearchResults(query, timeout = 6000) {
+        const words = query.toUpperCase().split(/\s+/);
         let results = [];
         const deadline = Date.now() + timeout;
         do {
             results = (await this.getDescribedElements())
                 .filter(n => n.desc.includes('Double tap to open Quote Screen'))
                 .map(n => ({ symbol: n.desc.split('\n')[0].trim(), node: n }));
-            if (results.length && results[0].symbol.toUpperCase().startsWith(query.toUpperCase())) break;
+            if (results.length && words.every(w => results[0].symbol.toUpperCase().includes(w))) break;
             await this.pause(500);
         } while (Date.now() < deadline);
         return results;
@@ -928,9 +933,11 @@ class MarketsPage extends BasePage {
         console.log('Clicked Cancel on global search');
     }
 
-    // On Markets each recently viewed card reads " IDEA. Last traded price 12.80. ...\nIDEA \n12.80...".
+    // On Markets each recently viewed card reads " IDEA. Last traded price 12.80. ...\nIDEA \n12.80..."
+    // (or " NIFTY 13OCT 22750 CE. Last traded price ..." for a contract) - unlike the other sections'
+    // rows, with no "Double tap to view".
     async scrollToRecentlyViewed() {
-        return this.scrollToSection('Stocks You Viewed Recently', d => /^\s*\S+\. Last traded price/.test(d));
+        return this.scrollToSection('Stocks You Viewed Recently', d => /^\s*\S.*?\. Last traded price/.test(d) && !d.includes('Double tap to view'));
     }
 
     async clickSeeAllRecentlyViewed(timeout = 8000) {
