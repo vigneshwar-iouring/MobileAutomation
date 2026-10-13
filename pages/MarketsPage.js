@@ -426,13 +426,30 @@ class MarketsPage extends BasePage {
         const nodes = await this.getDescribedElements();
         const tabRow = nodes.find(n => /^Under 100\nTab 1 of \d+$/.test(n.desc));
         if (!tabRow) return [];
-        const next = nodes.find(n => n.y1 >= tabRow.y2 && !isSirRow(n.desc));
+        // "See all" has an "All" filter between the tabs and the list, so the list only ends at a
+        // non-row node below its first row.
+        const first = nodes.find(n => n.y1 >= tabRow.y2 && isSirRow(n.desc));
+        if (!first) return [];
+        const next = nodes.find(n => n.y1 >= first.y2 && !isSirRow(n.desc));
         return nodes
             .filter(n => n.y1 >= tabRow.y2 && (!next || n.y1 < next.y1) && isSirRow(n.desc))
             .map(n => {
                 const ltp = n.desc.match(/Last traded price (-?\d+(?:\.\d+)?)/);
                 return { symbol: (n.desc.trim().match(/^([^.\s]+)\./) || [])[1] || null, ltp: ltp ? Number(ltp[1]) : null, node: n };
             });
+    }
+
+    // The list (re)loads after the screen/tab itself is up, so a single snapshot can catch it empty
+    // or still showing the previous tab's rows - polls until `accept(rows)` holds or time runs out,
+    // and returns the last rows seen either way.
+    async waitForSirRows(timeout = 6000, accept = rows => rows.length > 0) {
+        const deadline = Date.now() + timeout;
+        let rows = await this.getSirRows();
+        while (!accept(rows) && Date.now() < deadline) {
+            await this.pause(700);
+            rows = await this.getSirRows();
+        }
+        return rows;
     }
 
     // Taps the first symbol listed under Stock In Range (on Markets or its "See all" screen) and
@@ -464,11 +481,21 @@ class MarketsPage extends BasePage {
             return null;
         }
         await el.click();
-        await this.pause(1500);
+        await this.pause(800);
 
-        const selected = (await (await this.driver.$(this.sirTabSelector(label))).getAttribute('selected')) === 'true';
-        const firstFive = (await this.getSirRows()).slice(0, 5);
-        const outOfRange = firstFive.filter(r => r.ltp === null || r.ltp < range.min || r.ltp > range.max);
+        // The tab can briefly drop out of the tree while the list recomposes, so wait for it again
+        // rather than letting getAttribute throw.
+        let selected = false;
+        try {
+            const tab = await this.driver.$(this.sirTabSelector(label));
+            await tab.waitForDisplayed({ timeout });
+            selected = (await tab.getAttribute('selected')) === 'true';
+        } catch (_) { /* logged as FAIL below */ }
+        // Right after the tap the list can still hold the previous tab's rows, so wait for this
+        // tab's prices to show up before judging them.
+        const isOutOfRange = r => r.ltp === null || r.ltp < range.min || r.ltp > range.max;
+        const firstFive = (await this.waitForSirRows(timeout, rows => rows.length > 0 && !rows.slice(0, 5).some(isOutOfRange))).slice(0, 5);
+        const outOfRange = firstFive.filter(isOutOfRange);
         const inRange = firstFive.length > 0 && outOfRange.length === 0;
         console.log(`Stock In Range "${label}" tab - selected: ${selected ? 'PASS' : 'FAIL'} | symbols listed: ${firstFive.length ? 'PASS' : 'FAIL (none)'}`);
         console.log(`  First ${firstFive.length} prices: ${firstFive.map(r => `${r.symbol} ${r.ltp}`).join(', ') || 'none'}`);
@@ -488,21 +515,31 @@ class MarketsPage extends BasePage {
     async verifySirSeeAllOpened(timeout = 8000) {
         const backVisible = await this.isElementVisible(this.backButton, timeout);
         const titleVisible = backVisible && await this.isElementVisible(this.stockInRangeTitle, 2000);
-        const leftMarkets = titleVisible && !(await this.isElementVisible(this.equityTab, 500));
-        const rows = leftMarkets ? await this.getSirRows() : [];
+        // Markets can linger in the tree while the screen transition animates, so give it a moment.
+        let leftMarkets = false;
+        const deadline = Date.now() + 3000;
+        while (titleVisible && !leftMarkets) {
+            leftMarkets = !(await this.isElementVisible(this.equityTab, 500));
+            if (leftMarkets || Date.now() >= deadline) break;
+            await this.pause(500);
+        }
+        const rows = leftMarkets ? await this.waitForSirRows(timeout) : [];
         const opened = leftMarkets && rows.length > 0;
-        console.log(`Stock In Range "See all" screen opened (${rows.length} symbols listed): ${opened ? 'PASS' : 'FAIL'}`);
+        const why = !backVisible ? 'no Back button' : !titleVisible ? 'no title' : !leftMarkets ? 'Markets still on screen' : `${rows.length} symbols listed`;
+        console.log(`Stock In Range "See all" screen opened (${why}): ${opened ? 'PASS' : 'FAIL'}`);
         return opened;
     }
 
     // One back-press from a Quote opened on the "See all" screen lands back on it (verified live).
-    async navigateBackToSirSeeAll() {
+    async navigateBackToSirSeeAll(timeout = 6000) {
         await this.driver.back();
         await this.pause(1200);
-        const back = await this.isElementVisible(this.backButton, 3000)
-            && await this.isElementVisible(this.stockInRangeTitle, 2000)
-            && (await this.getSirRows()).length > 0;
-        console.log(`Navigated back from Quote to Stock In Range "See all": ${back ? 'PASS' : 'FAIL'}`);
+        const backVisible = await this.isElementVisible(this.backButton, 3000);
+        const titleVisible = backVisible && await this.isElementVisible(this.stockInRangeTitle, 2000);
+        const rows = titleVisible ? await this.waitForSirRows(timeout) : [];
+        const back = rows.length > 0;
+        const why = !backVisible ? 'no Back button' : !titleVisible ? 'no title' : `${rows.length} symbols listed`;
+        console.log(`Navigated back from Quote to Stock In Range "See all" (${why}): ${back ? 'PASS' : 'FAIL'}`);
         return back;
     }
 

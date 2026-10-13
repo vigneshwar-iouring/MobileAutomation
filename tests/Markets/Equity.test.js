@@ -476,10 +476,13 @@ async function run() {
 
         console.log('\nTC 67: Clicking the first symbol on Stock In Range "See all" and verifying its Quote...');
         const sirSeeAllSymbol = await marketsPage.tapFirstSirSymbol();
-        if (sirSeeAllSymbol) await marketsPage.verifyQuoteOpened(sirSeeAllSymbol);
+        const sirSeeAllQuoteOpened = !!sirSeeAllSymbol && await marketsPage.verifyQuoteOpened(sirSeeAllSymbol);
 
         console.log('\nTC 68: Navigating back to Stock In Range "See all" from the Quote...');
-        if (!(await marketsPage.navigateBackToSirSeeAll())) {
+        // With no Quote open, a back-press would close "See all" itself and derail TC 69/70.
+        if (!sirSeeAllQuoteOpened) {
+            console.log('No Quote open from Stock In Range "See all" - skipping the back-press: FAIL');
+        } else if (!(await marketsPage.navigateBackToSirSeeAll())) {
             throw new Error('Could not get back to the Stock In Range "See all" screen from the Quote');
         }
 
