@@ -4,9 +4,9 @@
  * R1 : Build version             — read the "vX.Y.Z (build)" label on the Login screen
  * R2 : Forgot Password           — tap, verify navigation, back to Login (validated before login)
  * R3 : Login flow                — enter credentials, tap LOGIN
- * R4 : OTP Login                 — verify + submit FIRST OTP
+ * R4 : OTP Login                 — enter FIRST OTP + tap Verify OTP
  * R5 : Enable Now                — Enable Globe Secure screen
- * R6 : Second OTP page           — verify + submit SECOND OTP
+ * R6 : Second OTP page           — enter SECOND OTP + tap Verify OTP
  * R7 : Device PIN Login          — biometric/PIN screen
  * R8 : Risk Disclosure           — some accounts don't show this screen at all; accept if shown, skip if not
  *
@@ -145,10 +145,10 @@ const MARKET_SEL = {
 // this repo's existing gmailOtpHelper/credentials/gmail-config.json, same as tests/loginWithOtp.test.js.
 // One resend-and-retry on rejection, mirroring that file's incorrect-OTP recovery.
 async function submitOtp(label, sinceUid) {
-  // SUBMIT must stay greyed out while no OTP has been entered.
-  const submitEnabled = await otpPage.isSubmitEnabled();
-  await assertOrDump(!submitEnabled, `${label}: SUBMIT enabled with empty OTP`,
-    `${label}: SUBMIT should be disabled when no OTP is entered`);
+  // Verify OTP must stay greyed out while no OTP has been entered.
+  const verifyEnabled = await otpPage.isVerifyEnabled();
+  await assertOrDump(!verifyEnabled, `${label}: Verify OTP enabled with empty OTP`,
+    `${label}: Verify OTP should be disabled when no OTP is entered`);
 
   // The Enable Globe Secure OTP email was observed live to sometimes take longer than the
   // default 60s to arrive (unlike the first login OTP, which always arrived within ~15s) - so a

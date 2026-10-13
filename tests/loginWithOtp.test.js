@@ -20,13 +20,13 @@ const PASSWORD4 = 'May@2026';
 const DEVICE_PASSWORD = '11111'; // device screen-lock PIN, used to confirm biometric enrollment
 // ─────────────────────────────────────────────────────────────────────
 
-// SUBMIT on the OTP screen must stay greyed out until an OTP is entered - logged as FAIL
+// Verify OTP on the OTP screen must stay greyed out until an OTP is entered - logged as FAIL
 // (picked up by getFailedTCs) rather than thrown, so the login itself still proceeds.
-async function verifyOtpSubmitDisabled(loginPage, label) {
-    const enabled = await loginPage.isOtpSubmitEnabled();
+async function verifyOtpVerifyDisabled(loginPage, label) {
+    const enabled = await loginPage.isOtpVerifyEnabled();
     console.log(enabled
-        ? `${label}: SUBMIT is enabled with no OTP entered - FAIL`
-        : `${label}: SUBMIT is greyed out with no OTP entered - PASS`);
+        ? `${label}: Verify OTP is enabled with no OTP entered - FAIL`
+        : `${label}: Verify OTP is greyed out with no OTP entered - PASS`);
 }
 
 async function run() {
@@ -60,8 +60,8 @@ async function run() {
 
         currentStep = 'TC 3: Entering login ID and password...';
         console.log(currentStep);
-        await loginPage.enterLoginId(LOGIN_ID2);
-        await loginPage.enterPassword(PASSWORD2);
+        await loginPage.enterLoginId(LOGIN_ID4);
+        await loginPage.enterPassword(PASSWORD4);
         await loginPage.clickLogin();
 
         // Wrong credentials show a Toast here instead of advancing to OTP - it vanishes from the
@@ -76,10 +76,10 @@ async function run() {
 
         currentStep = 'TC 4: Fetching and entering login OTP...';
         console.log(currentStep);
-        await verifyOtpSubmitDisabled(loginPage, 'Login OTP');
+        await verifyOtpVerifyDisabled(loginPage, 'Login OTP');
         const loginOtp = await fetchLatestOtp(sinceUid, 'One time password');
         await loginPage.enterOtp(loginOtp);
-        await loginPage.clickOtpSubmit();
+        await loginPage.clickOtpVerify();
         await driver.pause(2000);
 
         // If the fetched OTP was somehow already stale/wrong by the time it's submitted, the
@@ -99,7 +99,7 @@ async function run() {
             console.log(currentStep);
             const resentOtp = await fetchLatestOtp(resendUid, 'One time password');
             await loginPage.enterOtp(resentOtp);
-            await loginPage.clickOtpSubmit();
+            await loginPage.clickOtpVerify();
             await driver.pause(2000);
 
             if (await loginPage.isIncorrectOtpShown()) {
@@ -119,10 +119,10 @@ async function run() {
 
             currentStep = 'TC 7: Fetching and entering Enable Globe Secure OTP...';
             console.log(currentStep);
-            await verifyOtpSubmitDisabled(loginPage, 'Enable Globe Secure OTP');
+            await verifyOtpVerifyDisabled(loginPage, 'Enable Globe Secure OTP');
             const secureOtp = await fetchLatestOtp(sinceUid, 'One time password');
             await loginPage.enterOtp(secureOtp);
-            await loginPage.clickOtpSubmit();
+            await loginPage.clickOtpVerify();
             await driver.pause(2000);
 
             if (await loginPage.isDeviceCredentialPromptShown()) {

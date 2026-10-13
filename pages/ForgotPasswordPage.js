@@ -11,10 +11,15 @@ class ForgotPasswordPage extends BasePage {
         this.nextButton = 'android=new UiSelector().descriptionContains("NEXT")';
         this.errorText = 'android=new UiSelector().descriptionContains("Login ID cannot be empty")';
 
-        // Set Password screen
+        // OTP screen - its own step now (after NEXT, before Set Password), with a single OTP
+        // EditText and a "Verify OTP" button that has to be tapped to move on.
         this.otpInput = 'android=new UiSelector().className("android.widget.EditText").instance(0)';
-        this.newPasswordInput = 'android=new UiSelector().className("android.widget.EditText").instance(1)';
-        this.confirmPasswordInput = 'android=new UiSelector().className("android.widget.EditText").instance(2)';
+        this.verifyOtpButton = 'android=new UiSelector().description("Verify OTP")';
+
+        // Set Password screen - reached only after the OTP is verified, so the two password
+        // fields are now the only EditTexts on screen.
+        this.newPasswordInput = 'android=new UiSelector().className("android.widget.EditText").instance(0)';
+        this.confirmPasswordInput = 'android=new UiSelector().className("android.widget.EditText").instance(1)';
         this.submitButton = 'android=new UiSelector().descriptionContains("SUBMIT")';
         this.continueButton = 'android=new UiSelector().descriptionContains("CONTINUE")';
     }
@@ -50,7 +55,7 @@ class ForgotPasswordPage extends BasePage {
     async getAnyError() {
         try {
             const src = await this.driver.getPageSource();
-            const skipPatterns = ['login id', 'enter your login', 'next', 'forgot', 'otp', 'new password', 'confirm', 'set password', 'submit', 'resend', 'back', 'globe capital'];
+            const skipPatterns = ['login id', 'enter your login', 'next', 'forgot', 'otp', 'new password', 'confirm', 'set password', 'submit', 'verify otp', 'resend', 'back', 'globe capital'];
             // Check content-desc attributes
             const descs = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1].trim()).filter(d => {
                 const lower = d.toLowerCase();
@@ -108,7 +113,7 @@ class ForgotPasswordPage extends BasePage {
     }
 
     async enterOtp(otp) {
-        // Try EditText first (first visit to Set Password); fall back to View + driver.keys
+        // Try EditText first (first visit to the OTP screen); fall back to View + driver.keys
         try {
             const el = await this.driver.$(this.otpInput);
             await el.waitForDisplayed({ timeout: 3000 });
@@ -158,7 +163,7 @@ class ForgotPasswordPage extends BasePage {
     async getOtpErrorMessage() {
         try {
             const views = await this.driver.$$('android=new UiSelector().className("android.view.View")');
-            const knownLabels = ['set password', 'otp', 'new password', 'confirm password', 'resend otp'];
+            const knownLabels = ['set password', 'otp', 'verify otp', 'new password', 'confirm password', 'resend otp', 'submit'];
             for (const el of views) {
                 const desc = (await el.getAttribute('content-desc').catch(() => '')) || '';
                 const lower = desc.trim().toLowerCase();
@@ -168,6 +173,20 @@ class ForgotPasswordPage extends BasePage {
             }
         } catch (_) { }
         return null;
+    }
+
+    async clickVerifyOtp() {
+        await this.driver.hideKeyboard().catch(() => { });
+        await this.click(this.verifyOtpButton);
+        console.log('Clicked Verify OTP');
+    }
+
+    // True while still on the OTP screen (e.g. after an invalid OTP was rejected), false once
+    // Verify OTP has moved on to Set Password. Like the login OTP screen, Verify OTP drops out of
+    // the accessibility tree while the keyboard is open, so hide it first.
+    async isOnOtpScreen(timeout = 3000) {
+        await this.driver.hideKeyboard().catch(() => { });
+        return await this.isElementVisible(this.verifyOtpButton, timeout);
     }
 
     async enterNewPassword(password) {

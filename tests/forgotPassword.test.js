@@ -49,17 +49,24 @@ async function run() {
         await forgotPage.enterLoginId('TEMPMF11');
         await forgotPage.clickNext();
         await driver.pause(3000);
-        console.log('Navigated to Set Password page');
+        console.log('Navigated to OTP page');
 
         // TC 5: Fetch OTP from Gmail
         console.log('TC 5: Fetching OTP from Gmail...');
         const otp = await fetchLatestOtp(sinceUid, 'One time password');
         console.log(`OTP fetched: ${otp}`);
 
-        // TC 6: Enter OTP digit by digit
-        console.log('TC 6: Entering OTP...');
+        // TC 6: Enter OTP digit by digit, then Verify OTP to move on to Set Password
+        console.log('TC 6: Entering OTP and clicking Verify OTP...');
         await forgotPage.enterOtp(otp);
-        await driver.pause(2000);
+        await driver.pause(1000);
+        await forgotPage.clickVerifyOtp();
+        await driver.pause(3000);
+        if (await forgotPage.isOnOtpScreen()) {
+            const otpError = await forgotPage.getOtpErrorMessage();
+            throw new Error(`OTP was not accepted by Verify OTP${otpError ? `: "${otpError}"` : ''}`);
+        }
+        console.log('Navigated to Set Password page');
 
         // TC 7: Enter new password — click field first to ensure focus
         console.log('TC 7: Entering new password...');

@@ -8,46 +8,46 @@ const { decodePng, regionCoverage, pixelAt } = require('../../utils/pngPixels');
 // isn't found so the spec can report per-field status without failing the whole run.
 const SEL = {
   // ── Screen readiness ─────────────────────────────────────────────────────────
-  orderTypeLabel:   '//*[contains(@content-desc,"Order Type") or contains(@text,"Order Type")]',
-  productLabel:      '//*[contains(@content-desc,"Product") or contains(@text,"Product")]',
-  quantityLabel:     '//*[contains(@content-desc,"Quantity") or contains(@text,"Quantity") or contains(@content-desc,"Qty") or contains(@text,"Qty")]',
+  orderTypeLabel: '//*[contains(@content-desc,"Order Type") or contains(@text,"Order Type")]',
+  productLabel: '//*[contains(@content-desc,"Product") or contains(@text,"Product")]',
+  quantityLabel: '//*[contains(@content-desc,"Quantity") or contains(@text,"Quantity") or contains(@content-desc,"Qty") or contains(@text,"Qty")]',
 
   // ── Exchange toggle ───────────────────────────────────────────────────────────
-  exchangeNSE:       '//*[@content-desc="NSE" or @text="NSE" or starts-with(@content-desc,"NSE") or starts-with(@text,"NSE")]',
-  exchangeBSE:       '//*[@content-desc="BSE" or @text="BSE" or starts-with(@content-desc,"BSE") or starts-with(@text,"BSE")]',
+  exchangeNSE: '//*[@content-desc="NSE" or @text="NSE" or starts-with(@content-desc,"NSE") or starts-with(@text,"NSE")]',
+  exchangeBSE: '//*[@content-desc="BSE" or @text="BSE" or starts-with(@content-desc,"BSE") or starts-with(@text,"BSE")]',
 
   // ── Order type ────────────────────────────────────────────────────────────────
-  orderTypeRegular:  '//*[@content-desc="Regular" or @text="Regular"]',
+  orderTypeRegular: '//*[@content-desc="Regular" or @text="Regular"]',
 
   // ── Quantity ──────────────────────────────────────────────────────────────────
-  quantityInput:     '//android.widget.EditText[contains(@text,"1") or @resource-id[contains(.,"qty")] or @resource-id[contains(.,"quantity")]] | //android.widget.EditText',
-  qtyIncrement:      '//*[contains(@content-desc,"increment") or contains(@content-desc,"Increase") or contains(@content-desc,"plus") or @content-desc="+"]',
-  qtyDecrement:      '//*[contains(@content-desc,"decrement") or contains(@content-desc,"Decrease") or contains(@content-desc,"minus") or @content-desc="-"]',
+  quantityInput: '//android.widget.EditText[contains(@text,"1") or @resource-id[contains(.,"qty")] or @resource-id[contains(.,"quantity")]] | //android.widget.EditText',
+  qtyIncrement: '//*[contains(@content-desc,"increment") or contains(@content-desc,"Increase") or contains(@content-desc,"plus") or @content-desc="+"]',
+  qtyDecrement: '//*[contains(@content-desc,"decrement") or contains(@content-desc,"Decrease") or contains(@content-desc,"minus") or @content-desc="-"]',
 
   // ── Price ─────────────────────────────────────────────────────────────────────
-  priceLabel:        '//*[contains(@content-desc,"Price") or contains(@text,"Price")]',
+  priceLabel: '//*[contains(@content-desc,"Price") or contains(@text,"Price")]',
   marketLimitToggle: '//*[contains(@content-desc,"Market") or contains(@text,"Market") or contains(@content-desc,"Limit") or contains(@text,"Limit")]',
   // The screen has exactly two EditTexts (confirmed via a real UI dump): quantity first,
   // price second - positional, since neither carries a resource-id or distinguishing
   // content-desc of its own.
-  priceInput:        '(//android.widget.EditText)[2]',
+  priceInput: '(//android.widget.EditText)[2]',
   // Distinct from the quantity row's own "Swap, Double tap to switch between Amount and
   // Quantity." control, which shares the generic word "Swap" but is a different toggle.
   marketLimitSwapBtn: '//*[@content-desc="Swap, Double tap to switch between Market and Limit"]',
 
   // ── Stoploss ──────────────────────────────────────────────────────────────────
-  stoplossToggle:    '//*[contains(@content-desc,"Stoploss") or contains(@text,"Stoploss") or contains(@content-desc,"Stop Loss") or contains(@text,"Stop Loss") or contains(@content-desc,"stoploss")]',
+  stoplossToggle: '//*[contains(@content-desc,"Stoploss") or contains(@text,"Stoploss") or contains(@content-desc,"Stop Loss") or contains(@text,"Stop Loss") or contains(@content-desc,"stoploss")]',
 
   // ── Product ───────────────────────────────────────────────────────────────────
-  productDelivery:   '//*[@content-desc="Delivery" or @text="Delivery"]',
-  productIntraday:   '//*[@content-desc="Intraday" or @text="Intraday"]',
+  productDelivery: '//*[@content-desc="Delivery" or @text="Delivery"]',
+  productIntraday: '//*[@content-desc="Intraday" or @text="Intraday"]',
 
   // ── More options ──────────────────────────────────────────────────────────────
-  moreToggle:        '//*[contains(@content-desc,"More") or contains(@text,"More")]',
+  moreToggle: '//*[contains(@content-desc,"More") or contains(@text,"More")]',
 
   // ── MTF banner ────────────────────────────────────────────────────────────────
-  mtfBanner:         '//*[contains(@content-desc,"MTF") or contains(@text,"MTF")]',
-  mtfDismiss:        '//*[contains(@content-desc,"MTF")]/following-sibling::*[contains(@content-desc,"Close") or contains(@content-desc,"Dismiss") or @content-desc="✕" or @content-desc="close"] | //*[contains(@text,"MTF")]/following-sibling::*[contains(@text,"Close") or @text="✕"]',
+  mtfBanner: '//*[contains(@content-desc,"MTF") or contains(@text,"MTF")]',
+  mtfDismiss: '//*[contains(@content-desc,"MTF")]/following-sibling::*[contains(@content-desc,"Close") or contains(@content-desc,"Dismiss") or @content-desc="✕" or @content-desc="close"] | //*[contains(@text,"MTF")]/following-sibling::*[contains(@text,"Close") or @text="✕"]',
 
   // ── Margin / balance ──────────────────────────────────────────────────────────
   approxMarginLabel: '//*[contains(@content-desc,"Approx") or contains(@text,"Approx") or contains(@content-desc,"Margin") or contains(@text,"Margin")]',
@@ -56,7 +56,7 @@ const SEL = {
   // ── Surveillance warning (shown for some symbols before BUY submit proceeds) ──
   // No confirmed UI dump yet (not triggered by the symbols used so far) - best-effort
   // soft-matching, same defensive style as the rest of this file's not-yet-confirmed SEL.
-  surveillanceWarning:   '//*[contains(@content-desc,"Surveillance") or contains(@text,"Surveillance") or contains(@content-desc,"GSM") or contains(@content-desc,"ASM")]',
+  surveillanceWarning: '//*[contains(@content-desc,"Surveillance") or contains(@text,"Surveillance") or contains(@content-desc,"GSM") or contains(@content-desc,"ASM")]',
   proceedSurveillanceBtn: '//*[contains(@content-desc,"PROCEED") or contains(@text,"PROCEED") or contains(@content-desc,"Proceed") or contains(@text,"Proceed")]',
 
   // ── Buy action ────────────────────────────────────────────────────────────────
@@ -65,22 +65,22 @@ const SEL = {
   // Sell"), which sits earlier in the tree and so was tapped first, silently toggling
   // the pad to Sell mode instead of submitting - the actual button's content-desc is the
   // bare word "BUY" with nothing else.
-  buySubmitBtn:      '//*[@content-desc="BUY" or @text="BUY"]',
+  buySubmitBtn: '//*[@content-desc="BUY" or @text="BUY"]',
 
   // ── Navigation ────────────────────────────────────────────────────────────────
-  backBtn:           '//android.widget.ImageButton[@content-desc="Navigate up" or @content-desc="Back"] | //android.view.View[@content-desc="Back"]',
+  backBtn: '//android.widget.ImageButton[@content-desc="Navigate up" or @content-desc="Back"] | //android.view.View[@content-desc="Back"]',
 
   // ── Confirmation popup (shown after tapping BUY) ─────────────────────────────
   // Confirmed via a real UI dump: "Confirmation Preview" heading, then bare Symbol and
   // Exchange values (no label of their own), then "Label" / ":" / "Value" triples for
   // Order Action, Quantity, Price, Product Type, Order Type, Validity, then the
-  // "CONFIRMATION" button - the one that actually places the order.
+  // "Confirm" button - the one that actually places the order.
   confirmationHeading: '//*[@content-desc="Confirmation Preview"]',
   applicableChargesLink: '//*[@content-desc="Applicable Charges"]',
-  confirmOrderBtn:     '//*[@content-desc="CONFIRMATION"]',
+  confirmOrderBtn: '//*[@content-desc="Confirm"]',
 
   // ── Applicable Charges panel ─────────────────────────────────────────────────
-  chargesHeading:    '//*[@content-desc="Brokerage and Charges"]',
+  chargesHeading: '//*[@content-desc="Brokerage and Charges"]',
   chargesDisclaimer: '//*[starts-with(@content-desc,"Disclaimer")]',
 
   // ── DPR (Daily Price Range / circuit) guard ──────────────────────────────────
@@ -91,15 +91,15 @@ const SEL = {
 // the pattern its label line must fully match (case-insensitive, whitespace-normalised).
 // The app spells some out in full ("Goods And Services Tax - GST").
 const CHARGE_LABELS = [
-  { name: 'Total Brokerage & charges',        re: /^total brokerage & charges$/ },
-  { name: 'Brokerage',                        re: /^brokerage$/ },
+  { name: 'Total Brokerage & charges', re: /^total brokerage & charges$/ },
+  { name: 'Brokerage', re: /^brokerage$/ },
   { name: 'Securities Transaction Tax - STT', re: /^securities transaction tax( - stt)?$/ },
-  { name: 'Transaction Charges',              re: /^transaction charges$/ },
-  { name: 'GST',                              re: /^(goods and services tax - )?gst$/ },
-  { name: 'Stamp Duty',                       re: /^stamp duty$/ },
-  { name: 'SEBI Charges',                     re: /^sebi charges$/ },
-  { name: 'DP Charges',                       re: /^dp charges$/ },
-  { name: 'Clearing Charges',                 re: /^clearing charges$/ },
+  { name: 'Transaction Charges', re: /^transaction charges$/ },
+  { name: 'GST', re: /^(goods and services tax - )?gst$/ },
+  { name: 'Stamp Duty', re: /^stamp duty$/ },
+  { name: 'SEBI Charges', re: /^sebi charges$/ },
+  { name: 'DP Charges', re: /^dp charges$/ },
+  { name: 'Clearing Charges', re: /^clearing charges$/ },
 ];
 // A charge's value is the line right after its label: "0.05", "0", "₹1,234.50", ...
 const CHARGE_VALUE_RE = /^-?₹?\s*\d[\d,]*(\.\d+)?$/;
@@ -129,8 +129,8 @@ class OrderPadPage extends BasePage {
   async goBack() {
     try {
       await this.findAndTap(SEL.backBtn, 3000);
-    } catch {}
-    try { await driver.back(); } catch {}
+    } catch { }
+    try { await driver.back(); } catch { }
     await browser.pause(300);
   }
 
@@ -146,7 +146,7 @@ class OrderPadPage extends BasePage {
   // instruments while still working by accident for plain equities.
   async getSymbolName() {
     try {
-      const src   = await driver.getPageSource();
+      const src = await driver.getPageSource();
       const descs = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]);
       return descs[0] ? descs[0].split(/\n|&#10;/)[0].trim() : null;
     } catch { return null; }
@@ -336,7 +336,7 @@ class OrderPadPage extends BasePage {
         if (!await el.isExisting()) continue;
         const selected = await el.getAttribute('selected');
         if (selected === 'true') return label;
-      } catch {}
+      } catch { }
     }
     return null;
   }
@@ -349,17 +349,17 @@ class OrderPadPage extends BasePage {
   // ── More options ──────────────────────────────────────────────────────────────
 
   async isMoreVisible() { return this.isDisplayed(SEL.moreToggle, 2000); }
-  async tapMore()        { return this.findAndTap(SEL.moreToggle, 3000); }
+  async tapMore() { return this.findAndTap(SEL.moreToggle, 3000); }
 
   // ── MTF banner ────────────────────────────────────────────────────────────────
 
   async isMTFBannerVisible() { return this.isDisplayed(SEL.mtfBanner, 2000); }
-  async dismissMTFBanner()   { return this.findAndTap(SEL.mtfDismiss, 2000); }
+  async dismissMTFBanner() { return this.findAndTap(SEL.mtfDismiss, 2000); }
 
   // ── Margin / balance ──────────────────────────────────────────────────────────
 
-  async isApproxMarginVisible()  { return this.isDisplayed(SEL.approxMarginLabel, 2000); }
-  async isAvailBalanceVisible()  { return this.isDisplayed(SEL.availBalanceLabel, 2000); }
+  async isApproxMarginVisible() { return this.isDisplayed(SEL.approxMarginLabel, 2000); }
+  async isAvailBalanceVisible() { return this.isDisplayed(SEL.availBalanceLabel, 2000); }
 
   // ── Buy action ────────────────────────────────────────────────────────────────
   // tapBuySubmit/tapConfirmOrder DO place a real order on this real trading account -
@@ -412,7 +412,7 @@ class OrderPadPage extends BasePage {
       const descs = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]);
       const startIdx = descs.indexOf('Confirmation Preview');
       if (startIdx === -1) return {};
-      const endIdx = descs.indexOf('CONFIRMATION');
+      const endIdx = descs.indexOf('Confirm');
       const body = descs
         .slice(startIdx + 1, endIdx === -1 ? undefined : endIdx)
         .filter(d => d !== 'Applicable Charges');
@@ -442,13 +442,13 @@ class OrderPadPage extends BasePage {
       const descs = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]);
       const startIdx = descs.indexOf('Confirmation Preview');
       if (startIdx === -1) return [];
-      const endIdx = descs.indexOf('CONFIRMATION');
+      const endIdx = descs.indexOf('Confirm');
       return descs.slice(startIdx, endIdx === -1 ? undefined : endIdx + 1);
     } catch { return []; }
   }
 
   // Dismisses via the hardware back action - confirmed live that this closes the popup
-  // without confirming (lands back on the OrderPad screen), unlike tapping CONFIRMATION.
+  // without confirming (lands back on the OrderPad screen), unlike tapping Confirm.
   async dismissConfirmationPopup() {
     try { await driver.back(); await browser.pause(300); return true; } catch { return false; }
   }
@@ -519,8 +519,10 @@ class OrderPadPage extends BasePage {
       if (missing.length) causes.push(`charges not listed: ${missing.join(', ')}`);
       if (noValue.length) causes.push(`no value displayed for: ${noValue.join(', ')}`);
       if (allZero) causes.push('every charge shows 0');
-      return { breakdown: breakdown.map(decodeXml), charges, missing, noValue, values, allZero, errors,
-        isValid: causes.length === 0, failureCause: causes.join('; ') };
+      return {
+        breakdown: breakdown.map(decodeXml), charges, missing, noValue, values, allZero, errors,
+        isValid: causes.length === 0, failureCause: causes.join('; ')
+      };
     };
 
     let status = await read();
@@ -563,20 +565,20 @@ class OrderPadPage extends BasePage {
 
   async dumpPageSource(label) {
     try {
-      const src   = await driver.getPageSource();
+      const src = await driver.getPageSource();
       const descs = [...src.matchAll(/content-desc="([^"]{1,80})"/g)].map(m => m[1].split(/\n|&#10;/)[0].trim());
       const texts = [...src.matchAll(/\btext="([^"]{1,60})"/g)].map(m => m[1]).filter(t => t.trim());
       console.log(`\n  ── ${label} ──`);
       console.log('  descs :', [...new Set(descs)].slice(0, 30).join(' | '));
       console.log('  texts :', [...new Set(texts)].slice(0, 30).join(' | '));
 
-      const fs   = require('fs'), path = require('path');
+      const fs = require('fs'), path = require('path');
       const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
       const dump = path.join(__dirname, `../../ui_dumps/${slug}.xml`);
       fs.mkdirSync(path.dirname(dump), { recursive: true });
       fs.writeFileSync(dump, src);
       console.log(`  Full XML → ui_dumps/${slug}.xml`);
-    } catch {}
+    } catch { }
   }
 }
 

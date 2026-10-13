@@ -22,11 +22,11 @@ class LoginPage extends BasePage {
         // screen at that point.
         this.otpField = 'android=new UiSelector().className("android.widget.EditText").instance(0)';
 
-        // Both OTP screens need an explicit SUBMIT tap after entry; it stays greyed out
+        // Both OTP screens need an explicit "Verify OTP" tap after entry; it stays greyed out
         // (enabled="false") until an OTP has been entered.
-        this.otpSubmitButton = 'android=new UiSelector().description("SUBMIT")';
+        this.otpVerifyButton = 'android=new UiSelector().description("Verify OTP")';
 
-        // A wrong OTP surfaces this text in place (after SUBMIT), rather than a Toast like the
+        // A wrong OTP surfaces this text in place (after Verify OTP), rather than a Toast like the
         // login-credentials error above.
         this.incorrectOtpText = 'android=new UiSelector().description("Incorrect OTP.")';
 
@@ -100,19 +100,19 @@ class LoginPage extends BasePage {
         console.log(`Entered OTP: ${otp}`);
     }
 
-    // While the keyboard is open SUBMIT is not in the accessibility tree at all, so hide it first.
-    async isOtpSubmitEnabled(timeout = 10000) {
+    // While the keyboard is open Verify OTP is not in the accessibility tree at all, so hide it first.
+    async isOtpVerifyEnabled(timeout = 10000) {
         await this.driver.hideKeyboard().catch(() => { });
         await this.driver.pause(500);
-        const el = await this.driver.$(this.otpSubmitButton);
+        const el = await this.driver.$(this.otpVerifyButton);
         await el.waitForDisplayed({ timeout });
         return (await el.getAttribute('enabled')) === 'true';
     }
 
-    async clickOtpSubmit() {
+    async clickOtpVerify() {
         await this.driver.hideKeyboard().catch(() => { });
-        await this.click(this.otpSubmitButton);
-        console.log('Clicked SUBMIT');
+        await this.click(this.otpVerifyButton);
+        console.log('Clicked Verify OTP');
     }
 
     async isIncorrectOtpShown(timeout = 3000) {

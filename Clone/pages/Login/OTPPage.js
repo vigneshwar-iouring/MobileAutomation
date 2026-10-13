@@ -3,7 +3,7 @@ const BasePage = require('./BasePage');
 const SEL = {
   heading:   '~OTP Verification',
   otpInput:  '//android.widget.EditText[1]',
-  verifyBtn: '//android.view.View[contains(@content-desc,"VERIFY") or contains(@content-desc,"Verify") or contains(@content-desc,"SUBMIT") or contains(@content-desc,"Submit") or contains(@content-desc,"CONFIRM")]',
+  verifyBtn: 'android=new UiSelector().description("Verify OTP")',
   resendBtn: '//android.view.View[starts-with(@content-desc,"Resend OTP")]',
   backBtn:   '//android.widget.ImageView[1]',
 };
@@ -20,6 +20,8 @@ class OTPPage extends BasePage {
     await browser.pause(300);
     await field.setValue(String(code));
     await browser.pause(800);
+    // Verify OTP is not in the accessibility tree while the keyboard is open.
+    await this.hideKeyboard();
     try {
       const btn = await $(SEL.verifyBtn);
       if (await btn.isDisplayed()) await btn.click();

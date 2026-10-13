@@ -3,9 +3,9 @@
  *
  * R1 : Forgot Password           — tap, verify navigation, back to Login (validated before login)
  * R2 : Login flow                — enter credentials, tap LOGIN
- * R3 : OTP Login                 — verify + submit FIRST OTP
+ * R3 : OTP Login                 — enter FIRST OTP + tap Verify OTP
  * R4 : Enable Now                — Enable Globe Secure screen
- * R5 : Second OTP page           — verify + submit SECOND OTP
+ * R5 : Second OTP page           — enter SECOND OTP + tap Verify OTP
  * R6 : Device PIN Login          — biometric/PIN screen
  * R7 : Risk Disclosure           — some accounts don't show this screen at all; accept if shown, skip if not
  *
