@@ -496,6 +496,65 @@ async function run() {
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen from Stock In Range');
         }
+
+        console.log('\nTC 71: Clicking the global search bar at the top of Markets...');
+        await marketsPage.scrollToTop();
+        if (!(await marketsPage.clickGlobalSearchBar())) {
+            throw new Error('Global search screen did not open from the Markets search bar');
+        }
+
+        // Each search opens the chosen result's Quote, comes back to search and clears the text;
+        // the symbols opened must then show up under Stocks You Viewed Recently.
+        const searches = [
+            { query: 'IDEA', position: 1 },
+            { query: 'GTLINFRA', position: 2 },
+            { query: 'HDFC', position: 1 },
+            { query: 'HCLTECH', position: 1 },
+            { query: 'MONOT', position: 1 },
+        ];
+        const viewedSymbols = [];
+        let tc = 72;
+        for (const { query, position } of searches) {
+            console.log(`\nTC ${tc++}: Searching "${query}", opening result #${position}'s Quote and clearing the text...`);
+            await marketsPage.typeInSearch(query);
+            const searchedSymbol = await marketsPage.tapSearchResult(query, position);
+            if (!searchedSymbol) continue;
+            if (await marketsPage.verifyQuoteOpened(searchedSymbol)) {
+                viewedSymbols.push(searchedSymbol);
+                if (!(await marketsPage.navigateBackToSearch())) {
+                    throw new Error(`Could not get back to global search from ${searchedSymbol}'s Quote`);
+                }
+            }
+            await marketsPage.clearSearch();
+        }
+
+        console.log('\nTC 77: Closing global search and scrolling to Stocks You Viewed Recently...');
+        await marketsPage.closeGlobalSearch();
+        if (!(await marketsPage.navigateBackToMarkets())) {
+            throw new Error('Could not get back to the Markets (Equity) screen from global search');
+        }
+        if (!(await marketsPage.scrollToRecentlyViewed())) {
+            throw new Error('Stocks You Viewed Recently section not found on the Markets (Equity) screen');
+        }
+
+        console.log('\nTC 78: Clicking "See all" on Stocks You Viewed Recently...');
+        await marketsPage.clickSeeAllRecentlyViewed();
+        if (!(await marketsPage.verifyRecentlyViewedSeeAllOpened())) {
+            throw new Error('Stocks You Viewed Recently "See all" screen did not open');
+        }
+
+        console.log('\nTC 79: Verifying only the last 5 searched symbols are listed under Stocks You Viewed Recently...');
+        console.log(`Symbols viewed via search: ${viewedSymbols.join(', ') || 'none'}`);
+        if (viewedSymbols.length < searches.length) {
+            console.log(`Only ${viewedSymbols.length} of ${searches.length} searched symbols opened a Quote: FAIL`);
+        }
+        await marketsPage.verifyRecentlyViewedList(viewedSymbols, searches.length);
+
+        console.log('\nTC 80: Closing Stocks You Viewed Recently and navigating back to Markets...');
+        await marketsPage.closeRecentlyViewedSeeAll();
+        if (!(await marketsPage.navigateBackToMarkets())) {
+            throw new Error('Could not get back to the Markets (Equity) screen from Stocks You Viewed Recently');
+        }
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);

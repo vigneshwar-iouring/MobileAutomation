@@ -57,6 +57,16 @@ class MarketsPage extends BasePage {
         this.stockInRangeTitle = 'android=new UiSelector().description("Stock In Range")';
         this.backButton = 'android=new UiSelector().description("Back, Double tap to go back")';
 
+        // Global search bar under the index ticker - a Button with no content-desc, only the hint
+        // "Search Globe" (verified live). It opens the search screen, whose field is that screen's
+        // first Button (hint "Add or search stocks", dropped once text is typed) - same as
+        // BasketPage.searchField - with "Cancel" beside it.
+        this.globalSearchBar = '//android.widget.Button[@hint="Search Globe"]';
+        this.searchField = 'android=new UiSelector().className("android.widget.Button").instance(0)';
+        this.searchCancelButton = 'android=new UiSelector().description("Cancel")';
+        this.seeAllRecentlyViewed = 'android=new UiSelector().descriptionStartsWith("See all Stocks You Viewed Recently")';
+        this.recentlyViewedTitle = 'android=new UiSelector().description("Stocks You Viewed Recently")';
+
         // Each movers row is one content-desc (" SYMBOL. COMPANY. Last traded price ..., Double tap
         // to view SYMBOL details, or swipe right for next category"). The index ticker above
         // ("...or swipe right for more options") never says "next category", so this skips it.
@@ -816,6 +826,175 @@ class MarketsPage extends BasePage {
         }, { timeout: 5000, interval: 500 }).catch(() => {});
         console.log(state ? `Basket screen loaded - ${state}` : 'Basket tab opened, but neither saved baskets nor "Basket order is Empty" is shown');
         return !!state;
+    }
+
+    // ── Global search / Stocks You Viewed Recently ─────────────────────────────
+
+    async clickGlobalSearchBar(timeout = 8000) {
+        await this.click(this.globalSearchBar, timeout);
+        const opened = await this.isElementVisible(this.searchCancelButton, timeout);
+        console.log(`Global search screen opened: ${opened ? 'PASS' : 'FAIL'}`);
+        return opened;
+    }
+
+    async getSearchText() {
+        try {
+            return (await (await this.driver.$(this.searchField)).getAttribute('text')) || '';
+        } catch (_) {
+            return '';
+        }
+    }
+
+    // The field only takes key events while focused - after returning from a Quote it still shows
+    // the query but has lost focus (verified live) - so it is tapped first, then typed into with
+    // real key events, which the Compose field picks up where setValue() may not.
+    async typeInSearch(query, timeout = 5000) {
+        await this.click(this.searchField, timeout);
+        await this.pause(300);
+        for (const ch of query) {
+            await this.driver.keys(ch);
+            await this.pause(60);
+        }
+        const text = await this.getSearchText();
+        console.log(`Entered "${query}" in global search - field reads "${text}": ${text === query ? 'PASS' : 'FAIL'}`);
+        return text === query;
+    }
+
+    // Backspaces (focused first, as above) until the field reads empty.
+    async clearSearch(timeout = 5000) {
+        await this.click(this.searchField, timeout);
+        await this.pause(300);
+        let text = await this.getSearchText();
+        for (let attempt = 0; attempt < 3 && text; attempt++) {
+            for (let i = 0; i < text.length; i++) {
+                await this.driver.keys('');
+                await this.pause(40);
+            }
+            await this.pause(300);
+            text = await this.getSearchText();
+        }
+        console.log(`Cleared the global search text: ${text ? `FAIL (still reads "${text}")` : 'PASS'}`);
+        return !text;
+    }
+
+    // Result rows read "SYMBOL\nIDEA, Double tap to open Quote Screen." (or "SYMBOL\nAdd Watchlist,
+    // ..."); the same symbol can be listed once per exchange. Waits for rows starting with `query`
+    // so a stale list from the previous search isn't read.
+    async getSearchResults(query, timeout = 6000) {
+        let results = [];
+        const deadline = Date.now() + timeout;
+        do {
+            results = (await this.getDescribedElements())
+                .filter(n => n.desc.includes('Double tap to open Quote Screen'))
+                .map(n => ({ symbol: n.desc.split('\n')[0].trim(), node: n }));
+            if (results.length && results[0].symbol.toUpperCase().startsWith(query.toUpperCase())) break;
+            await this.pause(500);
+        } while (Date.now() < deadline);
+        return results;
+    }
+
+    // Taps the `position`-th (1-based) search result and returns its symbol. The multi-line
+    // content-desc can't be matched with a UiSelector description, so the row is tapped by bounds.
+    async tapSearchResult(query, position = 1) {
+        const results = await this.getSearchResults(query);
+        console.log(`Search results for "${query}": ${results.slice(0, 5).map(r => r.symbol).join(', ') || 'none'}${results.length > 5 ? ', ...' : ''}`);
+        const result = results[position - 1];
+        if (!result) {
+            console.log(`No result #${position} listed for "${query}": FAIL`);
+            return null;
+        }
+        const { x1, y1, x2, y2 } = result.node;
+        await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
+            .move({ duration: 0, x: Math.round((x1 + x2) / 2), y: Math.round((y1 + y2) / 2) })
+            .down().pause(80).up()
+            .perform();
+        console.log(`Clicked search result #${position} for "${query}": ${result.symbol}`);
+        return result.symbol;
+    }
+
+    // One back-press from a Quote opened via search lands back on the search screen with the
+    // query still entered (verified live).
+    async navigateBackToSearch(timeout = 5000) {
+        await this.driver.back();
+        await this.pause(1000);
+        const back = await this.isElementVisible(this.searchCancelButton, timeout);
+        console.log(`Navigated back from Quote to global search: ${back ? 'PASS' : 'FAIL'}`);
+        return back;
+    }
+
+    async closeGlobalSearch(timeout = 5000) {
+        await this.click(this.searchCancelButton, timeout);
+        await this.pause(800);
+        console.log('Clicked Cancel on global search');
+    }
+
+    // On Markets each recently viewed card reads " IDEA. Last traded price 12.80. ...\nIDEA \n12.80...".
+    async scrollToRecentlyViewed() {
+        return this.scrollToSection('Stocks You Viewed Recently', d => /^\s*\S+\. Last traded price/.test(d));
+    }
+
+    async clickSeeAllRecentlyViewed(timeout = 8000) {
+        await this.click(this.seeAllRecentlyViewed, timeout);
+        console.log('Clicked "See all" on Stocks You Viewed Recently');
+    }
+
+    async verifyRecentlyViewedSeeAllOpened(timeout = 8000) {
+        const opened = await this.isElementVisible(this.backButton, timeout)
+            && await this.isElementVisible(this.recentlyViewedTitle, 2000);
+        console.log(`Stocks You Viewed Recently "See all" screen opened: ${opened ? 'PASS' : 'FAIL'}`);
+        return opened;
+    }
+
+    // "See all" rows read " IDEA. VODAFONE IDEA LIMITED. Last traded price ..., Double tap to view
+    // IDEA details, ..." with the most recently viewed first - the symbol is taken from "view X details".
+    // The same symbol can be listed once per exchange (" HDFCAMC. HDFC AMC LIMITED." and " HDFCAMC.
+    // HDFC ASSET MANAGEMENT COMPANY ." - verified live), so each entry is keyed by the text before
+    // "Last traded price", which tells those apart.
+    async getVisibleRecentlyViewed() {
+        return (await this.getDescribedElements())
+            .map(n => {
+                const symbol = (n.desc.match(/Double tap to view (.+?) details/) || [])[1];
+                return symbol && { symbol, key: n.desc.split('Last traded price')[0].trim() };
+            })
+            .filter(Boolean);
+    }
+
+    // Every entry on the "See all" screen, in order, scrolling down until a swipe shows nothing new.
+    async getAllRecentlyViewed(maxScrolls = 15) {
+        const entries = new Map();
+        const collect = async () => {
+            let added = 0;
+            for (const e of await this.getVisibleRecentlyViewed()) {
+                if (!entries.has(e.key)) { entries.set(e.key, e); added++; }
+            }
+            return added;
+        };
+        await collect();
+        for (let i = 0; i < maxScrolls; i++) {
+            await this.swipe('down');
+            await this.pause(800);
+            if (!(await collect())) break;
+        }
+        return [...entries.values()];
+    }
+
+    // The "See all" list must hold exactly the symbols just opened via search: no more than
+    // `maxListed` entries in all, and every one of `symbols` among them.
+    async verifyRecentlyViewedList(symbols, maxListed = symbols.length) {
+        const entries = await this.getAllRecentlyViewed();
+        console.log(`Stocks You Viewed Recently lists ${entries.length} symbol(s): ${entries.map(e => e.symbol).join(', ') || 'none'}`);
+        const countOk = entries.length <= maxListed;
+        console.log(`Only the last ${maxListed} searched symbols listed: ${countOk ? 'PASS' : `FAIL (${entries.length} listed, expected at most ${maxListed})`}`);
+        const listed = new Set(entries.map(e => e.symbol));
+        for (const s of symbols) {
+            console.log(`${s} listed under Stocks You Viewed Recently: ${listed.has(s) ? 'PASS' : 'FAIL'}`);
+        }
+        return countOk && symbols.every(s => listed.has(s));
+    }
+
+    async closeRecentlyViewedSeeAll(timeout = 5000) {
+        await this.click(this.backButton, timeout);
+        console.log('Clicked Back on the Stocks You Viewed Recently screen');
     }
 
     // A single device back-press from the (expanded) Quote screen lands straight back on Markets
