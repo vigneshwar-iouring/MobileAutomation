@@ -23,6 +23,10 @@ const SIR_TABS = [
 // Its rows read like the movers rows: " TERAI. TERAI TEA CO. LTD.. Last traded price 140.01. Change
 // 23.33. ..., Double tap to view TERAI details, or swipe right for next category".
 const isSirRow = desc => desc.includes('Last traded price') && desc.includes('Double tap to view');
+// Stocks You Viewed Recently cards on Markets read " IDEA. Last traded price 12.80. ...\nIDEA \n12.80..."
+// (" NIFTY 13OCT 22750 CE. Last traded price ..." for a contract) - unlike the other sections' rows,
+// with no "Double tap to view".
+const isRecentCard = desc => desc.includes('\n') && !desc.includes('Double tap to view') && /^\s*\S.*?\. Last traded price/.test(desc);
 
 // Left-to-right order of the "Trading Tools & Products" quick-access row (verified live). The row
 // is a horizontal scroller that keeps its scroll offset between visits, so any one of these can be
@@ -933,11 +937,90 @@ class MarketsPage extends BasePage {
         console.log('Clicked Cancel on global search');
     }
 
-    // On Markets each recently viewed card reads " IDEA. Last traded price 12.80. ...\nIDEA \n12.80..."
-    // (or " NIFTY 13OCT 22750 CE. Last traded price ..." for a contract) - unlike the other sections'
-    // rows, with no "Double tap to view".
     async scrollToRecentlyViewed() {
-        return this.scrollToSection('Stocks You Viewed Recently', d => /^\s*\S.*?\. Last traded price/.test(d) && !d.includes('Double tap to view'));
+        return this.scrollToSection('Stocks You Viewed Recently', isRecentCard);
+    }
+
+    // Recently viewed cards currently on screen, left to right, as { symbol, node, remove } - `remove`
+    // is the card's own X ("remove this stock from recent search history, ..."), a separate node
+    // sitting inside the card's top-right corner (verified live). The row is a horizontal scroller
+    // showing about two cards, so a card cut off at either edge (or without its X) is left out.
+    async getRecentCards() {
+        const { width } = await this.driver.getWindowSize();
+        const nodes = await this.getDescribedElements();
+        const removes = nodes.filter(n => n.desc.startsWith('remove this stock from recent search history'));
+        return nodes
+            .filter(n => isRecentCard(n.desc))
+            .map(n => ({
+                symbol: n.desc.trim().match(/^(.+?)\. Last traded price/)[1],
+                node: n,
+                remove: removes.find(r => r.x1 >= n.x1 && r.x2 <= n.x2 && r.y1 >= n.y1 && r.y2 <= n.y2),
+            }))
+            .filter(c => c.node.x1 >= 0 && c.node.x2 <= width && c.remove)
+            .sort((a, b) => a.node.x1 - b.node.x1);
+    }
+
+    async tapAt(x, y) {
+        await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
+            .move({ duration: 0, x: Math.round(x), y: Math.round(y) })
+            .down().pause(80).up()
+            .perform();
+    }
+
+    // The row keeps its horizontal offset between visits - swipes it back to the first card.
+    async rewindRecentRow(y, maxSwipes = 4) {
+        for (let i = 0; i < maxSwipes; i++) {
+            const before = (await this.getRecentCards()).map(c => c.symbol).join('|');
+            await this.swipeRowAt(y, 'right');
+            if ((await this.getRecentCards()).map(c => c.symbol).join('|') === before) return;
+        }
+    }
+
+    // Scrolls to Stocks You Viewed Recently and taps the first card under the header (on its left
+    // half, clear of the X) - returns its symbol.
+    async tapFirstRecentlyViewed() {
+        const firstRow = await this.scrollToRecentlyViewed();
+        if (!firstRow) return null;
+        await this.rewindRecentRow(Math.round((firstRow.y1 + firstRow.y2) / 2));
+        const [first] = await this.getRecentCards();
+        if (!first) {
+            console.log('No symbol displayed under Stocks You Viewed Recently: FAIL');
+            return null;
+        }
+        const { x1, x2, y1, y2 } = first.node;
+        await this.tapAt(x1 + (x2 - x1) / 4, (y1 + y2) / 2);
+        console.log(`Clicked the first symbol under Stocks You Viewed Recently: ${first.symbol}`);
+        return first.symbol;
+    }
+
+    // Taps the X on `symbol`'s card (swiping the row left to find it) and checks the card is gone.
+    // With nothing left to show, the whole section disappears, which also counts as removed.
+    async removeRecentlyViewed(symbol, maxSwipes = 6) {
+        const firstRow = (await this.getDescribedElements()).find(n => isRecentCard(n.desc)) || await this.scrollToRecentlyViewed();
+        if (!firstRow) {
+            console.log(`Stocks You Viewed Recently not found while removing ${symbol}: FAIL`);
+            return false;
+        }
+        const rowY = Math.round((firstRow.y1 + firstRow.y2) / 2);
+        await this.rewindRecentRow(rowY);
+        let card = null;
+        for (let i = 0; i <= maxSwipes && !card; i++) {
+            card = (await this.getRecentCards()).find(c => c.symbol === symbol);
+            if (!card && i < maxSwipes) await this.swipeRowAt(rowY, 'left');
+        }
+        if (!card) {
+            console.log(`${symbol} not displayed under Stocks You Viewed Recently - could not remove it: FAIL`);
+            return false;
+        }
+        const before = (await this.getRecentCards()).filter(c => c.symbol === symbol).length;
+        const { x1, x2, y1, y2 } = card.remove;
+        await this.tapAt((x1 + x2) / 2, (y1 + y2) / 2);
+        await this.pause(1200);
+        const sectionGone = !(await this.getDescribedElements()).some(n => n.desc === 'Stocks You Viewed Recently');
+        const after = sectionGone ? 0 : (await this.getRecentCards()).filter(c => c.symbol === symbol).length;
+        const removed = after < before;
+        console.log(`Clicked X on ${symbol} - removed from Stocks You Viewed Recently${sectionGone ? ' (section no longer shown)' : ''}: ${removed ? 'PASS' : 'FAIL'}`);
+        return removed;
     }
 
     async clickSeeAllRecentlyViewed(timeout = 8000) {

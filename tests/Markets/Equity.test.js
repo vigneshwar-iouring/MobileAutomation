@@ -555,6 +555,25 @@ async function run() {
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen from Stocks You Viewed Recently');
         }
+
+        console.log('\nTC 81: Clicking the first symbol under Stocks You Viewed Recently and verifying its Quote...');
+        const recentSymbol = await marketsPage.tapFirstRecentlyViewed();
+        const recentQuoteOpened = !!recentSymbol && await marketsPage.verifyQuoteOpened(recentSymbol);
+
+        console.log('\nTC 82: Closing the Quote and navigating back to Markets...');
+        if (!recentQuoteOpened) {
+            console.log('No Quote open from Stocks You Viewed Recently - skipping the back-press: FAIL');
+        } else if (!(await marketsPage.navigateBackFromQuote())) {
+            throw new Error('Could not get back to the Markets (Equity) screen from the Stocks You Viewed Recently Quote');
+        }
+
+        // Most recently viewed is listed first, so removing in reverse search order takes the first
+        // card each time.
+        tc = 83;
+        for (const s of [...viewedSymbols].reverse()) {
+            console.log(`\nTC ${tc++}: Clicking X on ${s} and verifying it is removed from Stocks You Viewed Recently...`);
+            await marketsPage.removeRecentlyViewed(s);
+        }
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);
