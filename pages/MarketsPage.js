@@ -1,5 +1,6 @@
 const BasePage = require('./BasePage');
 const { isResultRow, parseResultRow } = require('./ResultsPage');
+const { decodePng, pixelAt } = require('../utils/pngPixels');
 
 // High Return Achievers sub-tabs and its return-period dropdown options, in on-screen order
 // (verified live).
@@ -33,6 +34,50 @@ const isRecentCard = desc => desc.includes('\n') && !desc.includes('Double tap t
 // off-screen at either edge - the order tells revealTile() which way to swipe for a missing tile.
 const TILE_ORDER = ['AI Algo', 'NxtOption', 'IPO', 'Mutual Funds', 'Basket'];
 
+// FII/DII (last section on Equity) rows, top to bottom (verified live). Each label and its value
+// ("-1,305.13") are separate nodes on one line; the date ("13th Oct 2026") and the unit "(Rs. Cr.)"
+// sit on the line under the heading. The bar between label and value is custom-drawn - nothing in
+// the tree - so its colour is read from a screenshot: red (206,64,61) left of the grey centre axis
+// for a negative value, green (73,157,101) right of it for a positive one (verified live).
+const FII_DII_ROWS = ['FII Cash', 'DII Cash', 'FII Future', 'FII Option'];
+// FII/DII "See all": period tabs ("Daily\nTab 1 of 3", selected="true" on the current one), and the
+// ALL/STOCK/INDEX sub-tabs with the rows each one lists (verified live). The sub-tabs carry no
+// selected attribute - the selected one is the pill filled blue (40,94,163) instead of grey (33,33,33).
+const FII_DII_PERIODS = ['Daily', 'Monthly', 'Yearly'];
+const FII_DII_SEGMENTS = {
+    ALL: FII_DII_ROWS,
+    STOCK: ['FII Cash', 'DII Cash'],
+    INDEX: ['FII Future', 'FII Option'],
+};
+// Each "See all" entry is one node: "13th Oct 2026\nFII Cash\n-1,305.13\nDII Cash\n2,439.24\n..."
+// - headed by a date on Daily, "Oct 2026" on Monthly, "2026" on Yearly.
+const FII_DII_ENTRY_HEAD = /^(\d{1,2}(?:st|nd|rd|th)? [A-Za-z]{3} \d{4}|[A-Za-z]{3} \d{4}|\d{4})$/;
+const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
+const isRedBar = ([r, g, b]) => r > 150 && r - g > 80 && r - b > 80;
+const isGreenBar = ([r, g, b]) => g > 120 && g - r > 50 && g - b > 30;
+const isAxis = ([r, g, b]) => r > 90 && Math.abs(r - g) < 10 && Math.abs(g - b) < 10;
+
+// "13th Oct 2026" -> Date (local midnight), or null.
+function parseFiiDiiDate(text) {
+    const m = text.trim().match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{4})$/);
+    if (!m) return null;
+    const month = MONTHS[m[2].slice(0, 3).toUpperCase()];
+    return month === undefined ? null : new Date(Number(m[3]), month, Number(m[1]));
+}
+
+// A "See all" entry heading -> the Date it starts on: "13th Oct 2026" (Daily), "Oct 2026"
+// (Monthly -> 1st of the month), "2026" (Yearly -> 1st Jan), or null.
+function parseFiiDiiPeriod(text) {
+    const day = parseFiiDiiDate(text);
+    if (day) return day;
+    const mo = text.trim().match(/^([A-Za-z]{3}) (\d{4})$/);
+    if (mo) {
+        const month = MONTHS[mo[1].toUpperCase()];
+        return month === undefined ? null : new Date(Number(mo[2]), month, 1);
+    }
+    return /^\d{4}$/.test(text.trim()) ? new Date(Number(text.trim()), 0, 1) : null;
+}
+
 class MarketsPage extends BasePage {
     constructor(driver) {
         super(driver);
@@ -60,6 +105,8 @@ class MarketsPage extends BasePage {
         this.seeAllStockInRange = 'android=new UiSelector().descriptionStartsWith("See all Stock In Range")';
         this.stockInRangeTitle = 'android=new UiSelector().description("Stock In Range")';
         this.backButton = 'android=new UiSelector().description("Back, Double tap to go back")';
+        this.seeAllFiiDii = 'android=new UiSelector().descriptionStartsWith("See all FII/DII")';
+        this.fiiDiiTitle = 'android=new UiSelector().description("FII/DII")';
 
         // Global search bar under the index ticker - a Button with no content-desc, only the hint
         // "Search Globe" (verified live). It opens the search screen, whose field is that screen's
@@ -1085,6 +1132,323 @@ class MarketsPage extends BasePage {
     async closeRecentlyViewedSeeAll(timeout = 5000) {
         await this.click(this.backButton, timeout);
         console.log('Clicked Back on the Stocks You Viewed Recently screen');
+    }
+
+    // ── FII/DII ─────────────────────────────────────────────────────────────────
+
+    // FII/DII is the last section on Equity, so scrolling to the bottom brings all four rows on
+    // screen. Returns { date, dateText, unit, rows: [{ label, valueText, value, labelNode, valueNode }] }
+    // for the rows found, or null if the heading isn't on screen.
+    async scrollToFiiDii() {
+        await this.scrollToBoundaryByMovement('down', { maxScrolls: 25 });
+        await this.pause(800);
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === 'FII/DII');
+        if (!heading) {
+            console.log('Could not bring the "FII/DII" section on screen: FAIL');
+            return null;
+        }
+        console.log('"FII/DII" section is now visible');
+        const below = nodes.filter(n => n.y1 >= heading.y2);
+        const dateNode = below.find(n => parseFiiDiiDate(n.desc));
+        const unitNode = below.find(n => /^\(Rs\.? ?Cr\.?\)$/i.test(n.desc.trim()));
+        const rows = FII_DII_ROWS.map(label => {
+            const labelNode = below.find(n => n.desc === label);
+            if (!labelNode) return null;
+            const mid = (labelNode.y1 + labelNode.y2) / 2;
+            const valueNode = below.find(n => n !== labelNode && n.x1 > labelNode.x2 && n.y1 <= mid && n.y2 >= mid
+                && /^-?[\d,]+(\.\d+)?$/.test(n.desc.trim()));
+            const valueText = valueNode ? valueNode.desc.trim() : null;
+            return { label, valueText, value: valueText === null ? null : Number(valueText.replace(/,/g, '')), labelNode, valueNode };
+        }).filter(Boolean);
+        return {
+            dateText: dateNode ? dateNode.desc.trim() : null,
+            date: dateNode ? parseFiiDiiDate(dateNode.desc) : null,
+            unit: unitNode ? unitNode.desc.trim() : null,
+            rows,
+        };
+    }
+
+    // The FII/DII date must be the previous trading day - the last Mon-Fri before today (Monday
+    // expects Friday). Exchange holidays are not known here, so the day after one still expects
+    // the holiday's date (and fails).
+    verifyFiiDiiDate(fii) {
+        if (!fii || !fii.date) {
+            console.log(`FII/DII date displayed: FAIL (${fii && fii.dateText ? `could not parse "${fii.dateText}"` : 'not shown'})`);
+            return false;
+        }
+        const now = new Date();
+        const expected = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        while (expected.getDay() === 0 || expected.getDay() === 6) expected.setDate(expected.getDate() - 1);
+        const ok = fii.date.getTime() === expected.getTime();
+        const expectedText = expected.toDateString().slice(4); // "Oct 13 2026"
+        console.log(`FII/DII date "${fii.dateText}" - previous trading day (${expectedText}): ${ok ? 'PASS' : 'FAIL'}`);
+        return ok;
+    }
+
+    // Exactly FII Cash, DII Cash, FII Future and FII Option, in that order, each with a numeric
+    // value, and the values labelled as crores ("(Rs. Cr.)").
+    verifyFiiDiiRows(fii) {
+        const rows = fii ? fii.rows : [];
+        const labels = rows.map(r => r.label);
+        const orderOk = labels.length === FII_DII_ROWS.length && FII_DII_ROWS.every((l, i) => labels[i] === l);
+        console.log(`FII/DII rows: ${labels.join(', ') || 'none'} - ${orderOk ? 'PASS' : `FAIL (expected ${FII_DII_ROWS.join(', ')})`}`);
+        rows.forEach(r => console.log(`  ${r.label}: ${r.valueText === null ? 'value not shown - FAIL' : `${r.valueText} Cr. - PASS`}`));
+        const valuesOk = rows.length > 0 && rows.every(r => r.value !== null && !Number.isNaN(r.value));
+        const unitOk = !!(fii && fii.unit);
+        console.log(`FII/DII values displayed in Crore (${fii && fii.unit ? `"${fii.unit}"` : 'unit label not shown'}): ${unitOk ? 'PASS' : 'FAIL'}`);
+        return orderOk && valuesOk && unitOk;
+    }
+
+    // Reads each row's bar off a screenshot along the row's midline, between the label and the
+    // value: a negative value must draw a red bar (left of the axis), a positive one a green bar
+    // (right of it). A zero value is expected to draw no bar.
+    async verifyFiiDiiBars(fii) {
+        const rows = fii ? fii.rows.filter(r => r.value !== null && r.valueNode) : [];
+        if (!rows.length) {
+            console.log('FII/DII graph: no rows with values to check - FAIL');
+            return false;
+        }
+        const img = decodePng(Buffer.from(await this.driver.takeScreenshot(), 'base64'));
+        const { width } = await this.driver.getWindowSize();
+        const scale = img.width / width;
+        let allOk = true;
+        for (const r of rows) {
+            const y = ((r.labelNode.y1 + r.labelNode.y2) / 2) * scale;
+            const from = Math.round(r.labelNode.x2 * scale), to = Math.round(r.valueNode.x1 * scale);
+            let red = 0, green = 0, redX = 0, greenX = 0, axisX = null;
+            for (let x = from; x < to; x++) {
+                const p = pixelAt(img, x, y);
+                if (isRedBar(p)) { red++; redX += x; }
+                else if (isGreenBar(p)) { green++; greenX += x; }
+                else if (axisX === null && isAxis(p)) axisX = x;
+            }
+            const colour = red > green ? 'red' : green > 0 ? 'green' : 'none';
+            const expected = r.value < 0 ? 'red' : r.value > 0 ? 'green' : 'none';
+            let side = '';
+            if (axisX !== null && colour !== 'none') {
+                const centre = colour === 'red' ? redX / red : greenX / green;
+                side = centre < axisX ? ' left of the axis' : ' right of the axis';
+            }
+            const ok = colour === expected;
+            allOk = allOk && ok;
+            console.log(`  ${r.label} ${r.valueText}: bar is ${colour}${side} (${Math.max(red, green)}px) - expected ${expected}: ${ok ? 'PASS' : 'FAIL'}`);
+        }
+        console.log(`FII/DII graph bars - red for negative, green for positive values: ${allOk ? 'PASS' : 'FAIL'}`);
+        return allOk;
+    }
+
+    async clickSeeAllFiiDii(timeout = 8000) {
+        if (!(await this.isElementVisible(this.seeAllFiiDii, 1000))) await this.scrollToFiiDii();
+        await this.click(this.seeAllFiiDii, timeout);
+        console.log('Clicked "See all" on FII/DII');
+    }
+
+    // The "See all" screen: X (Back) + "FII/DII" title, the Daily/Monthly/Yearly tabs and the
+    // ALL/STOCK/INDEX sub-tabs. The Equity tab disappearing confirms it isn't still Markets.
+    async verifyFiiDiiSeeAllOpened(timeout = 8000) {
+        const backVisible = await this.isElementVisible(this.backButton, timeout);
+        const titleVisible = backVisible && await this.isElementVisible(this.fiiDiiTitle, 2000);
+        const leftMarkets = titleVisible && !(await this.isElementVisible(this.equityTab, 500));
+        const nodes = leftMarkets ? await this.getDescribedElements() : [];
+        const tabs = FII_DII_PERIODS.filter(p => nodes.some(n => n.desc.startsWith(`${p}\nTab `)));
+        const segments = Object.keys(FII_DII_SEGMENTS).filter(s => nodes.some(n => n.desc === s));
+        const opened = leftMarkets && tabs.length === FII_DII_PERIODS.length && segments.length === Object.keys(FII_DII_SEGMENTS).length;
+        const why = !backVisible ? 'no Back button' : !titleVisible ? 'no title' : !leftMarkets ? 'Markets still on screen' : 'opened';
+        console.log(`FII/DII "See all" screen opened (${why}): ${leftMarkets ? 'PASS' : 'FAIL'}`);
+        console.log(`  Tabs displayed: ${tabs.join(', ') || 'none'} - ${tabs.length === FII_DII_PERIODS.length ? 'PASS' : `FAIL (expected ${FII_DII_PERIODS.join(', ')})`}`);
+        console.log(`  Sub-tabs displayed: ${segments.join(', ') || 'none'} - ${segments.length === Object.keys(FII_DII_SEGMENTS).length ? 'PASS' : `FAIL (expected ${Object.keys(FII_DII_SEGMENTS).join(', ')})`}`);
+        return opened;
+    }
+
+    // Entries listed on "See all", top to bottom, as { period, rows: [{ label, valueText }] }.
+    async getFiiDiiEntries() {
+        return (await this.getDescribedElements())
+            .map(n => n.desc.split('\n').map(s => s.trim()))
+            .filter(parts => parts.length > 2 && FII_DII_ENTRY_HEAD.test(parts[0]))
+            .map(([period, ...rest]) => {
+                const rows = [];
+                for (let i = 0; i + 1 < rest.length; i += 2) rows.push({ label: rest[i], valueText: rest[i + 1] });
+                return { period, rows };
+            });
+    }
+
+    async getSelectedFiiDiiPeriod() {
+        for (const p of FII_DII_PERIODS) {
+            try {
+                const el = await this.driver.$(`//*[starts-with(@content-desc,"${p}") and contains(@content-desc,"Tab ")]`);
+                if ((await el.getAttribute('selected')) === 'true') return p;
+            } catch (_) { /* not on screen */ }
+        }
+        return null;
+    }
+
+    // The sub-tab whose pill is filled blue, read from a screenshot (see FII_DII_SEGMENTS).
+    async getSelectedFiiDiiSegment() {
+        const nodes = await this.getDescribedElements();
+        const img = decodePng(Buffer.from(await this.driver.takeScreenshot(), 'base64'));
+        const { width } = await this.driver.getWindowSize();
+        const scale = img.width / width;
+        for (const seg of Object.keys(FII_DII_SEGMENTS)) {
+            const n = nodes.find(x => x.desc === seg);
+            if (!n) continue;
+            // Sample a horizontal strip just inside the pill's top edge, clear of the label text.
+            let blue = 0, total = 0;
+            for (let x = n.x1 + 10; x < n.x2 - 10; x += 4) {
+                const [r, g, b] = pixelAt(img, x * scale, (n.y1 + 12) * scale);
+                total++;
+                if (b > 120 && b - r > 60) blue++;
+            }
+            if (total && blue / total > 0.5) return seg;
+        }
+        return null;
+    }
+
+    // Logs and checks that every listed entry shows exactly `segment`'s rows, in order.
+    logFiiDiiEntries(entries, segment) {
+        const expected = FII_DII_SEGMENTS[segment];
+        let ok = entries.length > 0;
+        entries.forEach(e => {
+            const labels = e.rows.map(r => r.label);
+            const match = labels.length === expected.length && expected.every((l, i) => labels[i] === l);
+            ok = ok && match;
+            console.log(`  ${e.period}: ${e.rows.map(r => `${r.label} ${r.valueText}`).join(' | ')} - ${match ? 'PASS' : `FAIL (expected ${expected.join(', ')})`}`);
+        });
+        console.log(`${segment} lists only ${expected.join(', ')} (${entries.length} entries): ${ok ? 'PASS' : 'FAIL'}`);
+        return ok;
+    }
+
+    // On opening, Daily + ALL must be selected, and the latest entry must carry the same date the
+    // Markets screen's FII/DII section showed (`marketsDateText`, e.g. "13th Oct 2026").
+    async verifyFiiDiiSeeAllDefault(marketsDateText) {
+        const period = await this.getSelectedFiiDiiPeriod();
+        const segment = await this.getSelectedFiiDiiSegment();
+        console.log(`Default tab "Daily" selected (selected: ${period || 'none'}): ${period === 'Daily' ? 'PASS' : 'FAIL'}`);
+        console.log(`Default sub-tab "ALL" selected (selected: ${segment || 'none'}): ${segment === 'ALL' ? 'PASS' : 'FAIL'}`);
+        const entries = await this.getFiiDiiEntries();
+        const latest = entries.length ? entries[0].period : null;
+        const dateOk = !!marketsDateText && latest === marketsDateText;
+        console.log(`Latest date "${latest || 'none'}" matches the Markets FII/DII date "${marketsDateText || 'none'}": ${dateOk ? 'PASS' : 'FAIL'}`);
+        const rowsOk = this.logFiiDiiEntries(entries, 'ALL');
+        return period === 'Daily' && segment === 'ALL' && dateOk && rowsOk;
+    }
+
+    // Taps sub-tab `segment` (ALL/STOCK/INDEX), then checks its pill is the one selected and every
+    // entry lists only that segment's rows. The list reloads a moment after the tap, so it is
+    // polled until the rows change over.
+    async clickFiiDiiSegment(segment, timeout = 6000) {
+        const node = (await this.getDescribedElements()).find(n => n.desc === segment);
+        if (!node) {
+            console.log(`FII/DII "${segment}" sub-tab not found: FAIL`);
+            return false;
+        }
+        await this.tapNode(node);
+        console.log(`Clicked "${segment}" on FII/DII`);
+        const expected = FII_DII_SEGMENTS[segment];
+        const matches = e => e.rows.length === expected.length && expected.every((l, i) => e.rows[i].label === l);
+        let entries = [];
+        const deadline = Date.now() + timeout;
+        do {
+            await this.pause(600);
+            entries = await this.getFiiDiiEntries();
+        } while (!(entries.length && entries.every(matches)) && Date.now() < deadline);
+        const selected = await this.getSelectedFiiDiiSegment();
+        console.log(`"${segment}" sub-tab selected (selected: ${selected || 'none'}): ${selected === segment ? 'PASS' : 'FAIL'}`);
+        const rowsOk = this.logFiiDiiEntries(entries, segment);
+        return selected === segment && rowsOk;
+    }
+
+    // Taps period tab `period` (Monthly/Yearly/Daily) and checks it carries selected="true" and that
+    // the latest entry is the current period: today's month ("Oct 2026") on Monthly, the current
+    // year ("2026") on Yearly. Polls until the entries' headings switch to the new period's format.
+    async clickFiiDiiPeriod(period, timeout = 6000) {
+        const node = (await this.getDescribedElements()).find(n => n.desc.startsWith(`${period}\nTab `));
+        if (!node) {
+            console.log(`FII/DII "${period}" tab not found: FAIL`);
+            return false;
+        }
+        await this.tapNode(node);
+        console.log(`Clicked "${period}" on FII/DII`);
+        const headFormat = { Daily: /^\d{1,2}(?:st|nd|rd|th)? [A-Za-z]{3} \d{4}$/, Monthly: /^[A-Za-z]{3} \d{4}$/, Yearly: /^\d{4}$/ }[period];
+        let entries = [];
+        const deadline = Date.now() + timeout;
+        do {
+            await this.pause(600);
+            entries = await this.getFiiDiiEntries();
+        } while (!(entries.length && entries.every(e => headFormat.test(e.period))) && Date.now() < deadline);
+        const selected = await this.getSelectedFiiDiiPeriod();
+        console.log(`"${period}" tab selected (selected: ${selected || 'none'}): ${selected === period ? 'PASS' : 'FAIL'}`);
+
+        let currentOk = true;
+        if (period !== 'Daily') {
+            const now = new Date();
+            const expected = period === 'Monthly'
+                ? `${now.toDateString().slice(4, 7)} ${now.getFullYear()}` // "Oct 2026"
+                : String(now.getFullYear());
+            const latest = entries.length ? entries[0].period : null;
+            currentOk = latest === expected;
+            console.log(`Latest ${period} entry "${latest || 'none'}" is the current ${period === 'Monthly' ? 'month' : 'year'} "${expected}": ${currentOk ? 'PASS' : 'FAIL'}`);
+        }
+        return selected === period && currentOk;
+    }
+
+    // Scrolls the current period/sub-tab's list to its end (it is finite - about a month of trading
+    // days on Daily, 13 months on Monthly, 6 years on Yearly, verified live; the tab rows stay
+    // pinned) and checks the past entries: more than one listed, newest first with no repeats,
+    // none in the future, each with only `segment`'s rows; on Daily weekdays only, on Monthly/Yearly
+    // no month/year skipped. Scrolls back to the top afterwards so the next tab starts from the latest.
+    async verifyFiiDiiHistory(period, segment, maxScrolls = 30) {
+        const entries = new Map();
+        const collect = async () => {
+            let added = 0;
+            for (const e of await this.getFiiDiiEntries()) {
+                if (!entries.has(e.period)) { entries.set(e.period, e); added++; }
+            }
+            return added;
+        };
+        await collect();
+        for (let i = 0; i < maxScrolls; i++) {
+            await this.swipe('down');
+            await this.pause(700);
+            if (!(await collect())) break;
+        }
+        const list = [...entries.values()];
+        console.log(`${period} / ${segment} - ${list.length} entries listed after scrolling: ${list.map(e => e.period).join(', ') || 'none'}`);
+
+        const expected = FII_DII_SEGMENTS[segment];
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const problems = [];
+        if (list.length < 2) problems.push('no past entries listed');
+        list.forEach((e, i) => {
+            const date = parseFiiDiiPeriod(e.period);
+            const labels = e.rows.map(r => r.label);
+            if (!date) { problems.push(`"${e.period}" is not a valid ${period} heading`); return; }
+            if (date > today) problems.push(`${e.period} is in the future`);
+            if (labels.length !== expected.length || expected.some((l, j) => labels[j] !== l)) {
+                problems.push(`${e.period} lists ${labels.join(', ') || 'no rows'}`);
+            }
+            if (e.rows.some(r => !/^-?[\d,]+(\.\d+)?$/.test(r.valueText || ''))) problems.push(`${e.period} has a missing/non-numeric value`);
+            if (period === 'Daily' && (date.getDay() === 0 || date.getDay() === 6)) problems.push(`${e.period} is a weekend`);
+            const prev = i > 0 && parseFiiDiiPeriod(list[i - 1].period);
+            if (!prev) return;
+            if (date >= prev) problems.push(`${e.period} is listed after ${list[i - 1].period} (not newest first)`);
+            const gap = period === 'Monthly'
+                ? (prev.getFullYear() - date.getFullYear()) * 12 + prev.getMonth() - date.getMonth()
+                : period === 'Yearly' ? prev.getFullYear() - date.getFullYear() : 1;
+            if (gap > 1) problems.push(`${period === 'Monthly' ? 'month' : 'year'}(s) missing between ${e.period} and ${list[i - 1].period}`);
+        });
+        problems.forEach(p => console.log(`  ${p}: FAIL`));
+        const ok = !problems.length;
+        console.log(`${period} / ${segment} past entries listed newest first with only ${expected.join(', ')}: ${ok ? 'PASS' : 'FAIL'}`);
+
+        await this.scrollToBoundaryByMovement('up', { maxScrolls: maxScrolls });
+        return ok;
+    }
+
+    async closeFiiDiiSeeAll(timeout = 5000) {
+        await this.click(this.backButton, timeout);
+        console.log('Clicked Back on the FII/DII screen');
     }
 
     // A single device back-press from the (expanded) Quote screen lands straight back on Markets

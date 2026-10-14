@@ -2,6 +2,8 @@ const DriverManager = require('../../driver/DriverManager');
 const { MarketsPage, HRA_TABS, HRA_PERIODS, SIR_TABS } = require('../../pages/MarketsPage');
 const { NewsPage } = require('../../pages/NewsPage');
 const QuotesPage = require('../../pages/QuotesPage');
+const OrderPadPage = require('../../pages/OrderPadPage');
+const { PeerComparisonPage, PEER_TABS, PEER_SUB_TABS, PEER_TABS_WITH_SUB_TABS } = require('../../pages/PeerComparisonPage');
 const { MutualFundsPage } = require('../../pages/MutualFundsPage');
 const { CorporateActionPage } = require('../../pages/CorporateActionPage');
 const { ResultsPage } = require('../../pages/ResultsPage');
@@ -58,6 +60,8 @@ async function run() {
         const marketsPage = new MarketsPage(driver);
         const newsPage = new NewsPage(driver);
         const quotesPage = new QuotesPage(driver);
+        const orderPadPage = new OrderPadPage(driver);
+        const peerPage = new PeerComparisonPage(driver);
         const mutualFundsPage = new MutualFundsPage(driver);
         const corporateActionPage = new CorporateActionPage(driver);
         const resultsPage = new ResultsPage(driver);
@@ -99,6 +103,74 @@ async function run() {
             await quotesPage.swipeUpQuoteScreen();
         } else {
             console.log('Skipping Quote expand - Quote screen did not open: FAIL');
+        }
+
+        // Quote checks on the expanded Quote, numbered 6a-6p so the TCs after them keep their numbers.
+        if (quoteOpened) {
+            console.log('\nTC 6a: Verifying the NSE/BSE toggle under the symbol name and switching to the other exchange...');
+            await quotesPage.verifyAndSwitchExchange();
+            const header = await quotesPage.getQuoteHeader();
+            const exchange = header ? header.exchange : null;
+
+            console.log('\nTC 6b: Verifying the 52 week low/high indicator...');
+            await quotesPage.verify52WeekIndicator(exchange);
+
+            // Only ever opens the Order Pads and backs out - the pad's own BUY/SELL is never tapped.
+            console.log('\nTC 6c: Clicking SELL and verifying the Sell Order Pad...');
+            await quotesPage.clickSell();
+            const sellPad = await orderPadPage.verifyOpenedFor('Sell');
+
+            console.log('\nTC 6d: Navigating back to the Quote...');
+            if (sellPad) await orderPadPage.goBackToQuotes();
+            console.log(`Back on the Quote screen: ${(await quotesPage.isDisplayed(5000)) ? 'PASS' : 'FAIL'}`);
+
+            console.log('\nTC 6e: Clicking BUY and verifying the Buy Order Pad...');
+            await quotesPage.clickBuy();
+            const buyPad = await orderPadPage.verifyOpenedFor('Buy');
+
+            console.log('\nTC 6f: Navigating back to the Quote...');
+            if (buyPad) await orderPadPage.goBackToQuotes();
+            console.log(`Back on the Quote screen: ${(await quotesPage.isDisplayed(5000)) ? 'PASS' : 'FAIL'}`);
+
+            console.log('\nTC 6g: Clicking Advanced Options and verifying "Compare with Peer" (equity only)...');
+            const peerListed = await quotesPage.openAdvancedOptionsForPeer(exchange);
+
+            if (peerListed) {
+                console.log('\nTC 6h: Clicking "Compare with Peer" and verifying the Ratios, Key Parameters, Performance tabs...');
+                await quotesPage.clickCompareWithPeer();
+                await peerPage.verifyOpened(header && header.symbol);
+                if (!(await peerPage.isDisplayed(1000))) {
+                    throw new Error('Peer Comparison screen did not open from Compare with Peer');
+                }
+
+                // Taps the first listed peer (FAIL if none), checks its Quote and comes back.
+                const openFirstPeer = async context => {
+                    const peer = await peerPage.tapFirstSymbol(context);
+                    if (peer && await marketsPage.verifyQuoteOpened(peer)) await peerPage.navigateBackFromQuote();
+                };
+
+                let step = 'i'.charCodeAt(0);
+                for (const tab of PEER_TABS) {
+                    const hasSubTabs = PEER_TABS_WITH_SUB_TABS.includes(tab);
+                    console.log(`\nTC 6${String.fromCharCode(step++)}: Clicking ${tab} and verifying its ${hasSubTabs ? 'Standalone/Consolidated sub-tabs' : 'symbols (no sub-tabs)'}...`);
+                    await peerPage.clickTab(tab);
+                    if (!hasSubTabs) {
+                        await openFirstPeer(tab);
+                        continue;
+                    }
+                    for (const sub of PEER_SUB_TABS) {
+                        console.log(`\nTC 6${String.fromCharCode(step++)}: ${tab} - clicking ${sub} and opening the first symbol's Quote...`);
+                        await peerPage.clickSubTab(sub);
+                        await openFirstPeer(`${tab} / ${sub}`);
+                    }
+                }
+
+                console.log(`\nTC 6${String.fromCharCode(step++)}: Closing Peer Comparison and returning to the Quote...`);
+                await peerPage.close(quotesPage.stockSummary);
+            } else if (await quotesPage.isElementVisible('android=new UiSelector().description("Scrim")', 1000)) {
+                await driver.back(); // close the Advanced Options sheet
+                await quotesPage.pause(800);
+            }
         }
 
         console.log('TC 7: Navigating back to Markets...');
@@ -567,13 +639,66 @@ async function run() {
             throw new Error('Could not get back to the Markets (Equity) screen from the Stocks You Viewed Recently Quote');
         }
 
-        // Most recently viewed is listed first, so removing in reverse search order takes the first
-        // card each time.
-        tc = 83;
-        for (const s of [...viewedSymbols].reverse()) {
-            console.log(`\nTC ${tc++}: Clicking X on ${s} and verifying it is removed from Stocks You Viewed Recently...`);
-            await marketsPage.removeRecentlyViewed(s);
+        // Most recently viewed is listed first - that's the symbol TC 81 opened, or failing that the
+        // last one searched.
+        const firstRecent = recentSymbol || viewedSymbols[viewedSymbols.length - 1];
+        console.log(`\nTC 83: Clicking X on the first symbol (${firstRecent || 'none'}) and verifying it is removed from Stocks You Viewed Recently...`);
+        if (!firstRecent) {
+            console.log('No symbol listed under Stocks You Viewed Recently to remove: FAIL');
+        } else {
+            await marketsPage.removeRecentlyViewed(firstRecent);
         }
+
+        console.log('\nTC 84: Scrolling to FII/DII and verifying it shows the previous trading day\'s date...');
+        const fii = await marketsPage.scrollToFiiDii();
+        if (!fii) throw new Error('FII/DII section not found on the Markets (Equity) screen');
+        marketsPage.verifyFiiDiiDate(fii);
+
+        console.log('\nTC 85: Verifying the FII Cash, DII Cash, FII Future and FII Option rows with values in Crore...');
+        marketsPage.verifyFiiDiiRows(fii);
+
+        console.log('\nTC 86: Verifying the FII/DII graph bars - red for negative, green for positive values...');
+        await marketsPage.verifyFiiDiiBars(fii);
+
+        console.log('\nTC 87: Clicking "See all" on FII/DII and verifying the Daily, Monthly, Yearly tabs and ALL, STOCK, INDEX sub-tabs...');
+        await marketsPage.clickSeeAllFiiDii();
+        if (!(await marketsPage.verifyFiiDiiSeeAllOpened())) {
+            throw new Error('FII/DII "See all" screen did not open with its tabs and sub-tabs');
+        }
+
+        console.log('\nTC 88: Verifying Daily and ALL are selected by default with the same date shown on Markets...');
+        await marketsPage.verifyFiiDiiSeeAllDefault(fii.dateText);
+
+        console.log('\nTC 89: Daily - scrolling down ALL and verifying the past dates listed...');
+        await marketsPage.verifyFiiDiiHistory('Daily', 'ALL');
+
+        console.log('\nTC 90: Clicking STOCK and verifying only FII Cash and DII Cash are displayed...');
+        await marketsPage.clickFiiDiiSegment('STOCK');
+
+        console.log('\nTC 91: Daily - scrolling down STOCK and verifying the past dates listed...');
+        await marketsPage.verifyFiiDiiHistory('Daily', 'STOCK');
+
+        console.log('\nTC 92: Clicking INDEX and verifying only FII Future and FII Option are displayed...');
+        await marketsPage.clickFiiDiiSegment('INDEX');
+
+        console.log('\nTC 93: Daily - scrolling down INDEX and verifying the past dates listed...');
+        await marketsPage.verifyFiiDiiHistory('Daily', 'INDEX');
+
+        // Monthly, then Yearly: the latest entry must be the current month/year, then each sub-tab
+        // in turn must list only its own rows, down through all its past months/years.
+        tc = 94;
+        for (const period of ['Monthly', 'Yearly']) {
+            const unit = period === 'Monthly' ? 'month' : 'year';
+            console.log(`\nTC ${tc++}: Clicking ${period} and verifying the current ${unit} is displayed...`);
+            await marketsPage.clickFiiDiiPeriod(period);
+            for (const segment of ['ALL', 'STOCK', 'INDEX']) {
+                console.log(`\nTC ${tc++}: ${period} - clicking ${segment} and verifying its rows...`);
+                await marketsPage.clickFiiDiiSegment(segment);
+                console.log(`\nTC ${tc++}: ${period} - scrolling down ${segment} and verifying the past ${unit}s listed...`);
+                await marketsPage.verifyFiiDiiHistory(period, segment);
+            }
+        }
+        driver.navigateBackToMarkets();
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);

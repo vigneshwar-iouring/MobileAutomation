@@ -77,7 +77,7 @@ const SEL = {
   // "Confirm" button - the one that actually places the order.
   confirmationHeading: '//*[@content-desc="Confirmation Preview"]',
   applicableChargesLink: '//*[@content-desc="Applicable Charges"]',
-  confirmOrderBtn: '//*[@content-desc="Confirm"]',
+  confirmOrderBtn: '//*[@content-desc="CONFIRM"]',
 
   // ── Applicable Charges panel ─────────────────────────────────────────────────
   chargesHeading: '//*[@content-desc="Brokerage and Charges"]',

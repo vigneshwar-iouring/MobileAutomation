@@ -29,6 +29,16 @@ class OrderPadPage extends BasePage {
         return null;
     }
 
+    // Checks the Order Pad opened from a Quote's SELL/BUY shows that same action on its bottom
+    // button (`expected` is 'Buy' or 'Sell'). Only reads the screen - never taps the button.
+    async verifyOpenedFor(expected, timeout = 8000) {
+        const displayed = await this.isDisplayed(timeout);
+        const type = displayed ? await this.getTransactionType() : null;
+        const ok = displayed && type === expected;
+        console.log(`${expected} Order Pad displayed (${displayed ? `${type ? type.toUpperCase() : 'no BUY/SELL'} button shown` : 'Order Pad not shown'}): ${ok ? 'PASS' : 'FAIL'}`);
+        return ok;
+    }
+
     async getApproxMargin() {
         return (await this.readMargins()).approxText;
     }
