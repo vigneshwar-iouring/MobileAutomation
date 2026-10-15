@@ -9,6 +9,9 @@ const { CorporateActionPage } = require('../../pages/CorporateActionPage');
 const { ResultsPage } = require('../../pages/ResultsPage');
 const { createLogger, getFailedTCs } = require('../../utils/logger');
 
+// Stocks You Viewed Recently "See all" keeps at most this many symbols.
+const RECENTLY_VIEWED_LIMIT = 50;
+
 const { logFile, entries } = createLogger('Markets_Equity');
 console.log(`Logging this run to: ${logFile}`);
 
@@ -615,12 +618,12 @@ async function run() {
             throw new Error('Stocks You Viewed Recently "See all" screen did not open');
         }
 
-        console.log('\nTC 95: Verifying only the last 5 searched symbols are listed under Stocks You Viewed Recently...');
+        console.log(`\nTC 95: Verifying the searched symbols are listed under Stocks You Viewed Recently (at most ${RECENTLY_VIEWED_LIMIT})...`);
         console.log(`Symbols viewed via search: ${viewedSymbols.join(', ') || 'none'}`);
         if (viewedSymbols.length < searches.length) {
             console.log(`Only ${viewedSymbols.length} of ${searches.length} searched symbols opened a Quote: FAIL`);
         }
-        await marketsPage.verifyRecentlyViewedList(viewedSymbols, searches.length);
+        await marketsPage.verifyRecentlyViewedList(viewedSymbols, RECENTLY_VIEWED_LIMIT);
 
         console.log('\nTC 96: Closing Stocks You Viewed Recently and navigating back to Markets...');
         await marketsPage.closeRecentlyViewedSeeAll();

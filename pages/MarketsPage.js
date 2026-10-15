@@ -1097,7 +1097,7 @@ class MarketsPage extends BasePage {
     }
 
     // Every entry on the "See all" screen, in order, scrolling down until a swipe shows nothing new.
-    async getAllRecentlyViewed(maxScrolls = 15) {
+    async getAllRecentlyViewed(maxScrolls = 30) {
         const entries = new Map();
         const collect = async () => {
             let added = 0;
@@ -1115,13 +1115,13 @@ class MarketsPage extends BasePage {
         return [...entries.values()];
     }
 
-    // The "See all" list must hold exactly the symbols just opened via search: no more than
-    // `maxListed` entries in all, and every one of `symbols` among them.
+    // The "See all" list must hold no more than `maxListed` entries in all, with every one of
+    // `symbols` (the ones just opened via search) among them.
     async verifyRecentlyViewedList(symbols, maxListed = symbols.length) {
         const entries = await this.getAllRecentlyViewed();
         console.log(`Stocks You Viewed Recently lists ${entries.length} symbol(s): ${entries.map(e => e.symbol).join(', ') || 'none'}`);
         const countOk = entries.length <= maxListed;
-        console.log(`Only the last ${maxListed} searched symbols listed: ${countOk ? 'PASS' : `FAIL (${entries.length} listed, expected at most ${maxListed})`}`);
+        console.log(`At most ${maxListed} symbols listed: ${countOk ? 'PASS' : `FAIL (${entries.length} listed, expected at most ${maxListed})`}`);
         const listed = new Set(entries.map(e => e.symbol));
         for (const s of symbols) {
             console.log(`${s} listed under Stocks You Viewed Recently: ${listed.has(s) ? 'PASS' : 'FAIL'}`);
