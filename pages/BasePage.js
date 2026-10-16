@@ -82,6 +82,26 @@ class BasePage {
 
     async swipe(direction) {
         const { width, height } = await this.driver.getWindowSize();
+
+        // 'left'/'right' scroll a horizontal row (e.g. the Markets screen's AI Algo/NxtOption/IPO/
+        // Mutual Funds/Basket quick-access tiles) - 'left' drags content leftward (finger moves
+        // right-to-left) to reveal whatever sits further to the right, mirroring how 'up' already
+        // drags vertical content upward to reveal what's below.
+        if (direction === 'left' || direction === 'right') {
+            const y = Math.floor(height / 2);
+            const [fromX, toX] = direction === 'left'
+                ? [Math.floor(width * 0.8), Math.floor(width * 0.2)]
+                : [Math.floor(width * 0.2), Math.floor(width * 0.8)];
+
+            await this.driver.action('pointer')
+                .move({ duration: 0, x: fromX, y })
+                .down()
+                .move({ duration: 800, x: toX, y })
+                .up()
+                .perform();
+            return;
+        }
+
         const x = Math.floor(width / 2);
         const [fromY, toY] = direction === 'up'
             ? [Math.floor(height * 0.3), Math.floor(height * 0.7)]
@@ -97,6 +117,82 @@ class BasePage {
 
     async scrollDown() {
         await this.swipe('down');
+    }
+
+    // Tapping a symbol/index opens its Quote screen as a half-height bottom sheet; swiping it up
+    // expands it to full screen. Confirmed via before/after page sources (IDEA, NSE, 1080x2340):
+    // collapsed, the "Stock IDEA, NSE. Last traded price..." summary card sits at y≈789-992 with
+    // no tab strip; expanded, it moves to y≈150 and the "Overview / Futures / ..." tab strip
+    // appears - so the Overview tab is the expanded-state signal (an index's Quote screen has it
+    // too: Overview / Futures / Technicals / Constituents).
+    async isQuoteExpanded(timeout = 0) {
+        const check = async () => {
+            try {
+                const src = await this.driver.getPageSource();
+                return /content-desc="Overview(?:&#10;|\n)Tab 1 of \d+"/.test(src);
+            } catch { return false; }
+        };
+        if (!timeout) return check();
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+            if (await check()) return true;
+            await this.driver.pause(400);
+        }
+        return false;
+    }
+
+    // Real upward swipe on the Quote sheet - starts on the "Swipe up for Stock Details" handle
+    // (or the summary card, or ~40% height if neither is exposed) and drags to near the top,
+    // verifying the expanded state after each of two attempts. Tapping the handle is only a
+    // last-resort fallback, logged as such so a swipe that stops working is visible rather than
+    // silently papered over. Logs PASS/FAIL for getFailedTCs; returns true once expanded.
+    async swipeUpToExpandQuote() {
+        if (await this.isQuoteExpanded()) {
+            console.log('Quote screen already expanded');
+            return true;
+        }
+        const handle = 'android=new UiSelector().description("Swipe up for Stock Details")';
+        const summary = 'android=new UiSelector().descriptionMatches("(?s)(Stock .*|.*Swipe up to explore quote details.*)")';
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            const { width, height } = await this.driver.getWindowSize();
+            let x = Math.floor(width / 2);
+            let startY = Math.floor(height * 0.40);
+            for (const sel of [handle, summary]) {
+                try {
+                    const el = await this.driver.$(sel);
+                    if (!(await el.isExisting())) continue;
+                    const loc = await el.getLocation();
+                    const size = await el.getSize();
+                    x = Math.round(loc.x + size.width / 2);
+                    startY = Math.round(loc.y + size.height / 2);
+                    break;
+                } catch { }
+            }
+            await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
+                .move({ duration: 0, x, y: startY })
+                .down()
+                .pause(150)
+                .move({ duration: 600, x, y: Math.floor(height * 0.08) })
+                .up()
+                .perform();
+            await this.driver.pause(800);
+            if (await this.isQuoteExpanded(2500)) {
+                console.log(`Swiped up on the Quote screen - expanded to full screen: PASS (attempt ${attempt}, from y=${startY})`);
+                return true;
+            }
+        }
+        console.log('Swipe-up did not expand the Quote screen - falling back to tapping "Swipe up for Stock Details"');
+        try {
+            if (await this.isElementVisible(handle, 2000)) {
+                await (await this.driver.$(handle)).click();
+                if (await this.isQuoteExpanded(2500)) {
+                    console.log('Quote screen expanded via handle tap (swipe-up did not work): FAIL');
+                    return true;
+                }
+            }
+        } catch { }
+        console.log('Quote screen expanded after swipe-up: FAIL');
+        return false;
     }
 
     // Entry cards embed live market data in their content-desc (e.g. "...Returns % : \n8.73 %\n
@@ -144,15 +240,32 @@ class BasePage {
         return ids.join('|');
     }
 
+    // A single WebDriver/UiAutomator2 round trip occasionally never returns (device hiccup, a
+    // stale element reference mid-recomposition, an Appium-server-side stall) - observed live as
+    // scrollToBoundary hanging indefinitely on one swipe/signature call while a brand new session
+    // against the same device worked instantly. Racing against a timeout turns that into a clear,
+    // fast failure instead of an unbounded hang.
+    async withTimeout(promise, ms, label) {
+        let timer;
+        const timeout = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms waiting for: ${label}`)), ms);
+        });
+        try {
+            return await Promise.race([promise, timeout]);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
     // Reusable boundary-aware scroller shared by every tab/direction: swipes `direction` on
     // `selector`'s list until the visible signature stops changing, then stops immediately -
     // no extra confirmation pass beyond the one swipe needed to prove the boundary was reached.
-    async scrollToBoundary(selector, direction, { maxScrolls = 20, settleMs = 300, seen } = {}) {
-        let previousSignature = await this.captureVisibleSignature(selector, seen);
+    async scrollToBoundary(selector, direction, { maxScrolls = 20, settleMs = 300, seen, stepTimeoutMs = 15000 } = {}) {
+        let previousSignature = await this.withTimeout(this.captureVisibleSignature(selector, seen), stepTimeoutMs, 'captureVisibleSignature');
         for (let i = 0; i < maxScrolls; i++) {
-            await this.swipe(direction);
+            await this.withTimeout(this.swipe(direction), stepTimeoutMs, 'swipe');
             await this.driver.pause(settleMs);
-            const signature = await this.captureVisibleSignature(selector, seen);
+            const signature = await this.withTimeout(this.captureVisibleSignature(selector, seen), stepTimeoutMs, 'captureVisibleSignature');
             if (signature === previousSignature) break;
             previousSignature = signature;
         }
@@ -162,8 +275,93 @@ class BasePage {
         await this.scrollToBoundary(selector, 'up', { maxScrolls });
     }
 
+    // Same signature-comparison idea as captureVisibleSignature, but built on ONE getPageSource()
+    // fetch (like getDescribedElements) instead of a driver.$$(selector) query followed by one
+    // getAttribute() round trip per matched element. That per-element pattern was observed live to
+    // hang indefinitely against a real screen (Option Chain's OI tab) even though a plain
+    // getPageSource() against that exact same screen returned instantly - so this is the more
+    // reliable choice for any scroll where the caller can express the match as a content-desc regex.
+    async captureVisibleSignatureByDescRegex(regex, seen) {
+        const nodes = await this.getDescribedElements();
+        const ids = [];
+        for (const node of nodes) {
+            if (!regex.test(node.desc)) continue;
+            const id = this.stableEntryId(node.desc);
+            ids.push(id);
+            if (seen && id) seen.add(id);
+        }
+        return ids.join('|');
+    }
+
+    // Regex-driven counterpart to scrollToBoundary, using captureVisibleSignatureByDescRegex above
+    // for its signature capture instead of the per-element query captureVisibleSignature relies on.
+    async scrollToBoundaryByDescRegex(regex, direction, { maxScrolls = 20, settleMs = 300, seen, stepTimeoutMs = 15000 } = {}) {
+        let previousSignature = await this.withTimeout(this.captureVisibleSignatureByDescRegex(regex, seen), stepTimeoutMs, 'captureVisibleSignatureByDescRegex');
+        for (let i = 0; i < maxScrolls; i++) {
+            await this.withTimeout(this.swipe(direction), stepTimeoutMs, 'swipe');
+            await this.driver.pause(settleMs);
+            const signature = await this.withTimeout(this.captureVisibleSignatureByDescRegex(regex, seen), stepTimeoutMs, 'captureVisibleSignatureByDescRegex');
+            if (signature === previousSignature) break;
+            previousSignature = signature;
+        }
+    }
+
+    // Boundary scroll for screens whose text never settles - e.g. a derivative Quote, where LTP,
+    // OI, bid/ask, market depth and other live parts keep rewriting content-desc text, so a
+    // text-signature comparison (above) never repeats and swipes on long past the real end.
+    // Instead this checks whether the page physically moved: the same element (matched by its
+    // text with digits blanked out) sits at the same y after a swipe only if nothing scrolled.
+    // Sticky header/footer elements never move either way, so "moved" means ANY matched element
+    // changed y - only when none did is the boundary reached.
+    async scrollToBoundaryByMovement(direction, { maxScrolls = 20, settleMs = 500, stepTimeoutMs = 15000 } = {}) {
+        const positions = async () => {
+            const nodes = await this.withTimeout(this.getDescribedElements(), stepTimeoutMs, 'getDescribedElements');
+            const map = new Map();
+            for (const n of nodes) {
+                const key = this.stableEntryId(n.desc).replace(/\d/g, '#');
+                if (!map.has(key)) map.set(key, []);
+                map.get(key).push(n.y1);
+            }
+            return map;
+        };
+        let previous = await positions();
+        for (let i = 0; i < maxScrolls; i++) {
+            await this.withTimeout(this.swipe(direction), stepTimeoutMs, 'swipe');
+            await this.driver.pause(settleMs);
+            const current = await positions();
+            let compared = 0;
+            let moved = false;
+            for (const [key, ys] of current) {
+                const prevYs = previous.get(key);
+                if (!prevYs || prevYs.length !== ys.length) continue;
+                compared++;
+                if (ys.some((y, idx) => y !== prevYs[idx])) { moved = true; break; }
+            }
+            // compared === 0: nothing recognisable carried over, i.e. the page jumped a full screen.
+            if (!moved && compared > 0) return i + 1;
+            previous = current;
+        }
+        return maxScrolls;
+    }
+
     async pause(ms) {
         await this.driver.pause(ms);
+    }
+
+    // A generic "did a webview load" check for screens rendered via an embedded
+    // android.webkit.WebView (e.g. AI Algo, IPO) - content-desc scraping doesn't reach into web
+    // content, but the native WebView container itself always shows up as this exact class in the
+    // page source the moment it's mounted, regardless of what page it's actually displaying.
+    async waitForWebViewLoaded(timeout = 10000) {
+        try {
+            await this.driver.waitUntil(async () => {
+                const src = await this.driver.getPageSource();
+                return /android\.webkit\.WebView/.test(src);
+            }, { timeout, interval: 300 });
+            return true;
+        } catch (_) {
+            return false;
+        }
     }
 
     // Parses the raw page source into {desc, x1,y1,x2,y2, clickable} for every element with a
@@ -187,6 +385,34 @@ class BasePage {
                 .replace(/&amp;/g, '&');
             nodes.push({
                 desc,
+                x1: Number(boundsMatch[1]), y1: Number(boundsMatch[2]),
+                x2: Number(boundsMatch[3]), y2: Number(boundsMatch[4]),
+                clickable: /clickable="true"/.test(tag),
+            });
+        }
+        return nodes;
+    }
+
+    // Same as getDescribedElements above, but keyed on the "text" attribute instead of
+    // "content-desc" - some widgets (date pickers, native calendar fields) render their value as
+    // plain text with an empty content-desc, so they're invisible to a content-desc-only scan.
+    async getTextElements() {
+        const src = await this.driver.getPageSource();
+        const tags = src.match(/<[\w.]+[^>]*>/g) || [];
+        const nodes = [];
+        for (const tag of tags) {
+            const textMatch = tag.match(/\stext="([^"]*)"/);
+            const boundsMatch = tag.match(/bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"/);
+            if (!textMatch || !textMatch[1] || !boundsMatch) continue;
+            const text = textMatch[1]
+                .replace(/&#10;/g, '\n')
+                .replace(/&quot;/g, '"')
+                .replace(/&apos;/g, "'")
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&amp;/g, '&');
+            nodes.push({
+                text,
                 x1: Number(boundsMatch[1]), y1: Number(boundsMatch[2]),
                 x2: Number(boundsMatch[3]), y2: Number(boundsMatch[4]),
                 clickable: /clickable="true"/.test(tag),

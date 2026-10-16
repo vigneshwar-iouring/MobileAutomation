@@ -6,9 +6,10 @@ class BasketPage extends BasePage {
         this.basketTab = 'android=new UiSelector().descriptionContains("Basket").descriptionContains("Tab")';
         // "Basket Orders" in the hamburger drawer navigates to the same Basket tab as
         // Orders -> Basket - just a different entry point into the identical screen.
-        this.basketOrdersMenuItem = 'android=new UiSelector().descriptionContains("Basket Orders")';
+        this.basketOrdersMenuItem = 'android=new UiSelector().description("Basket Orders, Double tap to open Basket Orders")';
         this.emptyBasketMessage = 'android=new UiSelector().description("Basket order is Empty")';
-        this.newBasketButton = '~New Basket';
+        // content-desc is "New Basket\nNew Basket" (verified live), so an exact '~New Basket' never matches.
+        this.newBasketButton = 'android=new UiSelector().descriptionStartsWith("New Basket")';
 
         this.basketNameField = 'android=new UiSelector().className("android.widget.EditText")';
         this.createBasketButton = 'android=new UiSelector().description("Create Basket")';
@@ -44,15 +45,21 @@ class BasketPage extends BasePage {
         return await el.getAttribute('content-desc');
     }
 
-    // NOTE: this specific floating action button has been observed to reject every form of
-    // synthetic tap (raw pointer, adb input, double-tap, Appium's mobile:clickGesture, and this
-    // standard element click) while responding normally to a real finger tap - most likely
-    // deliberate anti-automation protection on basket creation. This is still the correct call to
-    // make; verifyNewBasketDialogOpened() below detects whether it actually landed so the caller
-    // can react (e.g. surface a clear message) instead of failing confusingly on a later step.
-    async clickNewBasket() {
-        await this.click(this.newBasketButton);
-        console.log('Clicked New Basket');
+    // The floating "+ New Basket" button reports the whole list area as its bounds
+    // ([0,483][1080,2208] on the Pixel 4a), so a plain element click() taps empty space in the
+    // middle of the list. The visible pill sits in the bottom-right corner of those bounds, just
+    // above the bottom nav (~[647,1886][1035,2008], verified live), so it is tapped there instead.
+    // verifyNewBasketDialogOpened() below confirms whether the tap landed.
+    async clickNewBasket(timeout = 5000) {
+        const el = await this.driver.$(this.newBasketButton);
+        await el.waitForDisplayed({ timeout });
+        const { x, y } = await el.getLocation();
+        const { width, height } = await el.getSize();
+        const navTop = ((await this.getDescribedElements()).find(n => n.desc === 'Orders') || { y1: y + height }).y1;
+        const tapX = x + width - 240;
+        const tapY = Math.min(y + height, navTop) - 100;
+        await this.driver.action('pointer').move({ duration: 0, x: tapX, y: tapY }).down().up().perform();
+        console.log(`Clicked New Basket (tapped at ${tapX},${tapY})`);
     }
 
     async verifyNewBasketDialogOpened(timeout = 3000) {

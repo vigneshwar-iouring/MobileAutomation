@@ -1,7 +1,40 @@
 {
   "version": "0.2.0",
   "configurations": [
-    /*{
+    {
+      // Runs through the real wdio CLI (not plain node) - New_Regression.spec.js needs
+      // Mocha's describe/it and WebdriverIO's browser/driver/$ globals, both only
+      // injected by an actual `wdio run` session, so it can't launch like the plain
+      // node tests/*.test.js entries below. autoAttachChildProcesses is required
+      // because wdio's local runner executes the spec in a spawned worker process -
+      // breakpoints in the spec file or its page objects live in that child, not in
+      // this launched process itself.
+      //
+      // PLACE_REAL_ORDERS=1 is set here so a full run of this suite's R34-R39
+      // (NSE/BSE/NFO/BFO/CDS/MCX) actually submits a real order at each segment's lower
+      // circuit price instead of just entering it and stopping short of BUY - this is a
+      // live trading account, so every F5 run of this config places up to 6 real trades.
+      "type": "node",
+      "request": "launch",
+      "name": "Regression Spec — Real Device",
+      "program": "${workspaceFolder}/node_modules/@wdio/cli/bin/wdio.js",
+      "args": [
+        "run",
+        "${workspaceFolder}/config/wdio.android.conf.js",
+        "--spec",
+        "${workspaceFolder}/Regression/New_Regression.spec.js"
+      ],
+      "console": "integratedTerminal",
+      "autoAttachChildProcesses": true,
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "env": {
+        "DEVICE_TYPE": "real",
+        "PLACE_REAL_ORDERS": "1"
+      }
+    }
+    /*,{
       "type": "node",
       "request": "launch",
       "name": "Forgot Password — Real Device",
@@ -56,8 +89,47 @@
     /*{
       "type": "node",
       "request": "launch",
-      "name": "Research Calls — Real Device",
-      "program": "${workspaceFolder}/tests/ResearchCalls.js",
+      "name": "Mutual Funds — All (Real Device)",
+      "program": "${workspaceFolder}/tests/MutualFunds/RunAll.test.js",
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "env": {
+        "DEVICE_TYPE": "real"
+      }
+    },*/
+    /*{
+      "type": "node",
+      "request": "launch",
+      "name": "Research Calls — All (Real Device)",
+      "program": "${workspaceFolder}/tests/ResearchCalls/RunAll.test.js",
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "env": {
+        "DEVICE_TYPE": "real"
+      }
+    },*/
+    /*{
+      "type": "node",
+      "request": "launch",
+      "name": "Research-Commodity-Strategies — Real Device",
+      "program": "${workspaceFolder}/tests/ResearchCalls/Commodity/Strategies.test.js",
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "env": {
+        "DEVICE_TYPE": "real"
+      }
+    },*/
+    /*{
+      "type": "node",
+      "request": "launch",
+      "name": "Derivative-Technicals — Real Device",
+      "program": "${workspaceFolder}/tests/ResearchCalls/Derivative/Technical.test.js",
       "console": "integratedTerminal",
       "skipFiles": [
         "<node_internals>/**"
@@ -70,7 +142,7 @@
       "type": "node",
       "request": "launch",
       "name": "Funds/Margin — Real Device",
-      "program": "${workspaceFolder}/tests/Funds.js",
+      "program": "${workspaceFolder}/tests/Funds.test.js",
       "console": "integratedTerminal",
       "skipFiles": [
         "<node_internals>/**"
@@ -83,7 +155,7 @@
       "type": "node",
       "request": "launch",
       "name": "News — Real Device",
-      "program": "${workspaceFolder}/tests/News.js",
+      "program": "${workspaceFolder}/tests/News.test.js",
       "console": "integratedTerminal",
       "skipFiles": [
         "<node_internals>/**"
@@ -117,12 +189,12 @@
       "env": {
         "DEVICE_TYPE": "real"
       }
-    },*/
-    {
+    }*/
+    /*{
       "type": "node",
       "request": "launch",
-      "name": "Derivative-Technicals — Real Device",
-      "program": "${workspaceFolder}/tests/ResearchCalls/Derivative/Technical.test.js",
+      "name": "MutualFunds Portfolio — Real Device",
+      "program": "${workspaceFolder}/tests/MutualFunds/Portfolio.test.js",
       "console": "integratedTerminal",
       "skipFiles": [
         "<node_internals>/**"
@@ -130,6 +202,6 @@
       "env": {
         "DEVICE_TYPE": "real"
       }
-    }
+    }*/
   ]
 }

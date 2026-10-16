@@ -9,10 +9,31 @@ class LoginPage extends BasePage {
         this.passwordField = 'android=new UiSelector().className("android.widget.EditText").instance(1)';
         this.loginButton = 'android=new UiSelector().description("LOGIN")';
 
+        // Shown in place of the OTP screen when the credentials themselves are wrong - checking for
+        // this right after LOGIN avoids misreporting the failure downstream (e.g. as "OTP not
+        // fetched", since no OTP email is ever sent for a rejected login). It's a Toast, which
+        // vanishes from the accessibility tree well under a second after appearing - a single
+        // isElementVisible() check (or one taken after an up-front pause) reliably misses it, so
+        // isLoginErrorShown() below polls the raw page source via BasePage.waitForToast instead.
+        this.loginErrorText = 'Incorrect User ID or Password';
+
         // OTP Verification screen (shown after LOGIN, and again after ENABLE NOW below) - a
         // single EditText, same as the login/password fields' pattern of being the only input on
         // screen at that point.
         this.otpField = 'android=new UiSelector().className("android.widget.EditText").instance(0)';
+
+        // Both OTP screens need an explicit "Verify OTP" tap after entry; it stays greyed out
+        // (enabled="false") until an OTP has been entered.
+        this.otpVerifyButton = 'android=new UiSelector().description("Verify OTP")';
+
+        // A wrong OTP surfaces this text in place (after Verify OTP), rather than a Toast like the
+        // login-credentials error above.
+        this.incorrectOtpText = 'android=new UiSelector().description("Incorrect OTP.")';
+
+        // Reads "Resend OTP 27" (clickable=false) while the cooldown counts down, then "Resend OTP "
+        // (trailing space, clickable=true) once it expires - matched by shape since the countdown
+        // value changes every second.
+        this.resendOtpButton = 'android=new UiSelector().descriptionMatches("^Resend OTP\\s*$")';
 
         // "Enable Globe Secure" biometric-lock prompt - shown once after the first login OTP and,
         // per the app, mandatory (no skip option was found; pressing back just returns to the
@@ -24,11 +45,23 @@ class LoginPage extends BasePage {
         // biometric-enrollment fallback - not part of the app under test.
         this.deviceCredentialInput = 'android=new UiSelector().resourceId("com.android.systemui:id/auth_credential_input")';
 
+        // "Risk Disclosure on Derivatives" prompt - shown only on an account's very first login,
+        // never again afterwards. Guarded the same way as Enable Globe Secure above. Rendered
+        // as plain Views with the label in content-desc (text is empty), not a native TextView,
+        // so this has to match on description rather than text.
+        this.riskDisclosureHeading = 'android=new UiSelector().descriptionContains("RISK DISCLOSURE")';
+        this.iUnderstandButton = 'android=new UiSelector().descriptionContains("I Understand")';
+
         this.homeHamburgerMenu = 'android=new UiSelector().description("Hamburger menu, Double tap to open the hamburger menu")';
 
         // "Logout" sits below the fold of the nav drawer, under Profile/Settings.
         this.logoutMenuItem = 'android=new UiSelector().description("Logout")';
-        this.logoutConfirmYes = 'android=new UiSelector().description("Yes")';
+        this.logoutConfirmYes = 'android=new UiSelector().description("Logout")';
+
+        // Toast shown right after confirming logout - same short-lived-Toast situation as
+        // loginErrorText above, so it's read via BasePage.waitForToast rather than a one-shot
+        // isElementVisible() check.
+        this.logoutSuccessToastText = 'Logged out successfully';
     }
 
     async clickForgotPassword() {
@@ -43,13 +76,17 @@ class LoginPage extends BasePage {
 
     async enterPassword(password) {
         await this.enterText(this.passwordField, password);
-        console.log('Entered password');
+        console.log(`Entered password: ${password}`);
     }
 
     async clickLogin() {
-        await this.driver.hideKeyboard().catch(() => {});
+        await this.driver.hideKeyboard().catch(() => { });
         await this.click(this.loginButton);
         console.log('Clicked LOGIN');
+    }
+
+    async isLoginErrorShown(timeout = 4000) {
+        return await this.waitForToast(this.loginErrorText, { timeout, interval: 150 });
     }
 
     // Shared by both OTP screens (login, and Enable Globe Secure) - clears first since a stale
@@ -58,9 +95,44 @@ class LoginPage extends BasePage {
         const el = await this.driver.$(this.otpField);
         await el.waitForDisplayed({ timeout: 10000 });
         await el.click();
-        await el.clearValue().catch(() => {});
+        await el.clearValue().catch(() => { });
         await el.setValue(otp.toString());
         console.log(`Entered OTP: ${otp}`);
+    }
+
+    // While the keyboard is open Verify OTP is not in the accessibility tree at all, so hide it first.
+    async isOtpVerifyEnabled(timeout = 10000) {
+        await this.driver.hideKeyboard().catch(() => { });
+        await this.driver.pause(500);
+        const el = await this.driver.$(this.otpVerifyButton);
+        await el.waitForDisplayed({ timeout });
+        return (await el.getAttribute('enabled')) === 'true';
+    }
+
+    async clickOtpVerify() {
+        await this.driver.hideKeyboard().catch(() => { });
+        await this.click(this.otpVerifyButton);
+        console.log('Clicked Verify OTP');
+    }
+
+    async isIncorrectOtpShown(timeout = 3000) {
+        return await this.isElementVisible(this.incorrectOtpText, timeout);
+    }
+
+    // Polls for the countdown to expire rather than sleeping a fixed duration upfront - the
+    // cooldown length isn't guaranteed constant, so this waits for the real enabled state instead.
+    async waitForResendOtpEnabled(timeout = 40000, interval = 2000) {
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+            if (await this.isElementVisible(this.resendOtpButton, 500)) return true;
+            await this.driver.pause(interval);
+        }
+        return false;
+    }
+
+    async clickResendOtp() {
+        await this.click(this.resendOtpButton, 5000);
+        console.log('Clicked Resend OTP');
     }
 
     async isEnableGlobeSecureShown(timeout = 3000) {
@@ -74,6 +146,15 @@ class LoginPage extends BasePage {
 
     async isDeviceCredentialPromptShown(timeout = 5000) {
         return await this.isElementVisible(this.deviceCredentialInput, timeout);
+    }
+
+    async isRiskDisclosureShown(timeout = 3000) {
+        return await this.isElementVisible(this.riskDisclosureHeading, timeout);
+    }
+
+    async acknowledgeRiskDisclosure() {
+        await this.click(this.iUnderstandButton);
+        console.log('Clicked "I Understand" on Risk Disclosure on Derivatives popup');
     }
 
     // The system credential field rejects setValue() outright ("Cannot set the element...") -
@@ -117,6 +198,10 @@ class LoginPage extends BasePage {
     async confirmLogout() {
         await this.click(this.logoutConfirmYes);
         console.log('Confirmed logout');
+    }
+
+    async isLogoutSuccessToastShown(timeout = 3000) {
+        return this.waitForToast(this.logoutSuccessToastText, { timeout });
     }
 
     async logout() {

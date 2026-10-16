@@ -1,8 +1,8 @@
 const DriverManager = require('../driver/DriverManager');
 const LoginPage = require('../pages/LoginPage');
-const { createLogger } = require('../utils/logger');
+const { createLogger, getFailedTCs } = require('../utils/logger');
 
-const { logFile } = createLogger('logout');
+const { logFile, entries } = createLogger('logout');
 console.log(`Logging this run to: ${logFile}`);
 
 async function run() {
@@ -11,14 +11,23 @@ async function run() {
     try {
         const loginPage = new LoginPage(driver);
 
-        console.log('Step 1: Checking logged-in state...');
+        console.log('TC 1: Checking logged-in state...');
         if (!(await loginPage.isLoggedIn())) {
             console.log('Not currently logged in - nothing to do');
             return;
+        } else {
+            console.log('Logged in state - proceeding to logout...');
         }
 
-        console.log('Step 2: Logging out...');
+        console.log('TC 2: Logging out...');
         await loginPage.logout();
+
+        console.log('TC 3: Verifying "Logged out successfully" toast...');
+        // Checked immediately, before any other wait - the toast is short-lived and a pause here
+        // first would risk eating into its own lifetime before this ever polls for it.
+        const logoutToastShown = await loginPage.isLogoutSuccessToastShown();
+        console.log(`"Logged out successfully" toast shown: ${logoutToastShown ? 'PASS' : 'FAIL'}`);
+
         await driver.pause(2000);
 
         const stillLoggedIn = await loginPage.isLoggedIn(3000);
@@ -29,6 +38,17 @@ async function run() {
         console.error(err.stack);
     } finally {
         await DriverManager.closeDriver();
+
+        const failedTCs = getFailedTCs(entries);
+        if (failedTCs.length) {
+            console.log('\n=== Failed Test Cases ===');
+            failedTCs.forEach(f => {
+                console.log(`${f.tc}:`);
+                f.messages.forEach(m => console.log(`  - ${m}`));
+            });
+        } else {
+            console.log('\nAll test cases passed.');
+        }
     }
 }
 

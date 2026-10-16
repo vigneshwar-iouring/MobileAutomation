@@ -5,30 +5,35 @@ const LoginPage = require('../pages/LoginPage');
 const ForgotPasswordPage = require('../pages/ForgotPasswordPage');
 const permissionHandler = require('../utils/permissionHandler');
 const { getLatestUid, fetchLatestOtp } = require('../utils/gmailOtpHelper');
-const { createLogger } = require('../utils/logger');
+const { createLogger, getFailedTCs } = require('../utils/logger');
 
-const { logFile } = createLogger('NCforgotpassword');
+const { logFile, entries } = createLogger('NCforgotpassword');
 console.log(`Logging this run to: ${logFile}`);
 
-const NEW_PASSWORD = 'Globe@123';
-const CONFIRM_PASSWORD = 'Globe@123';
+const NEW_PASSWORD = 'Globe@54321';
+const CONFIRM_PASSWORD = 'Globe@54321';
 
 //Scenario 1 - Validation of Forgot password with empty Login ID
 async function scenario1_EmptyLoginId(driver, splashPage, loginPage, forgotPage) {
-    // Step 1: Launch app
-    console.log('Step 1: Launching app...');
+    // TC 1: Launch app
+    console.log('TC 1: Launching app...');
+    await splashPage.launch();
     await splashPage.pause(8000);
     await permissionHandler.dismissAllPermissions(driver);
     await driver.pause(2000);
     console.log('App ready on login page');
 
-    // Step 2: Tap Forgot Password
-    console.log('Step 2: Tapping Forgot Password...');
+    console.log('TC 1b: Reading build version...');
+    const buildVersion = await splashPage.getBuildVersion().catch(() => null);
+    console.log(buildVersion ? `Build version: ${buildVersion}` : 'Build version label not found - FAIL');
+
+    // TC 2: Tap Forgot Password
+    console.log('TC 2: Tapping Forgot Password...');
     await loginPage.clickForgotPassword();
     await driver.pause(2000);
 
-    // Step 3: Click Next with empty login ID → print error
-    console.log('Step 3: Clicking Next with empty login ID...');
+    // TC 3: Click Next with empty login ID → print error
+    console.log('TC 3: Clicking Next with empty login ID...');
     await forgotPage.clickNext();
     await driver.pause(1500);
     const emptyError = await forgotPage.getErrorMessage();
@@ -38,8 +43,8 @@ async function scenario1_EmptyLoginId(driver, splashPage, loginPage, forgotPage)
         console.log('✘ Expected error not displayed for empty login ID');
     }
 
-    // Step 4: Tap back navigation button
-    console.log('Step 4: Tapping back navigation button...');
+    // TC 4: Tap back navigation button
+    console.log('TC 4: Tapping back navigation button...');
     await driver.pressKeyCode(4);
     await driver.pause(2000);
     console.log('Navigated back to login page');
@@ -47,20 +52,20 @@ async function scenario1_EmptyLoginId(driver, splashPage, loginPage, forgotPage)
 
 //Scenario 2 - Validation of Forgot password with invalid Login ID
 async function scenario2_InvalidLoginId(driver, loginPage, forgotPage) {
-    // Step 5: Tap Forgot Password again
-    console.log('Step 5: Tapping Forgot Password again...');
+    // TC 5: Tap Forgot Password again
+    console.log('TC 5: Tapping Forgot Password again...');
     await loginPage.clickForgotPassword();
     await driver.pause(2000);
 
-    // Step 6: Enter ABCD@1234 → Next → error → print → back → Forgot Password again
-    console.log('Step 6: Entering invalid username ABCD@1234...');
+    // TC 6: Enter ABCD@1234 → Next → error → print → back → Forgot Password again
+    console.log('TC 6: Entering invalid username ABCD@1234...');
     await forgotPage.clickLoginIdField();
     await forgotPage.enterLoginId('ABCD@1234');
     await forgotPage.clickNext();
     await driver.pause(4000);
     const abcdError = await forgotPage.getAnyError();
     if (abcdError) {
-        console.log(`✔ Step 6 error: "${abcdError}"`);
+        console.log(`✔ TC 6 error: "${abcdError}"`);
     } else {
         console.log('✘ No error found for ABCD@123');
     }
@@ -70,136 +75,125 @@ async function scenario2_InvalidLoginId(driver, loginPage, forgotPage) {
     await driver.pause(2000);
 }
 
-//Scenario 3 - Validation of Forgot password with mismatch of password
-async function scenario3_MismatchedPasswords(driver, loginPage, forgotPage) {
-    // Try Forgot Password; if not on login page yet, press back one more time
-    try {
-        await loginPage.clickForgotPassword();
-    } catch (_) {
+// The forgot-password flow is now up to three screens deep (Login ID -> OTP -> Set Password),
+// so press back until the login page's Forgot Password link is visible rather than assuming a
+// fixed number of presses.
+async function backToLogin(driver, loginPage, maxBackPresses = 4) {
+    for (let i = 0; i < maxBackPresses; i++) {
+        if (await loginPage.isElementVisible(loginPage.forgotPasswordLink, 1500)) return;
         await driver.pressKeyCode(4);
-        await driver.pause(2000);
-        await loginPage.clickForgotPassword();
+        await driver.pause(1500);
     }
-    await driver.pause(2000);
+}
 
-    // Enter TEMPMF11 to reach Set Password page
-    console.log('Entering TEMPMF11 to reach Set Password page...');
+// Login ID -> NEXT, landing on the OTP screen.
+async function openOtpScreen(driver, loginPage, forgotPage, loginId) {
+    await backToLogin(driver, loginPage);
+    await loginPage.clickForgotPassword();
+    await driver.pause(2000);
     await forgotPage.clickLoginIdField();
-    await forgotPage.enterLoginId('TEMPMF11');
+    await forgotPage.enterLoginId(loginId);
     await forgotPage.clickNext();
     await driver.pause(3000);
-    const src = await driver.getPageSource();
-    console.log('On Set Password page (TEMPMF11)');
+    console.log(`On OTP page (${loginId})`);
+}
 
-    // Step 7: Enter OTP '123456'
-    console.log('Step 7: Entering OTP 123456...');
-    await forgotPage.enterOtp('123456');
-    await driver.pause(500);
+// Fetches the real OTP from Gmail and verifies it, landing on the Set Password screen. Throws
+// if Verify OTP doesn't move on, since nothing after it can run from the OTP screen.
+async function verifyRealOtp(driver, forgotPage, sinceUid) {
+    console.log('Fetching OTP from Gmail...');
+    const otp = await fetchLatestOtp(sinceUid, 'One time password');
+    console.log(`OTP fetched: ${otp}`);
+    await forgotPage.enterOtp(otp);
+    await driver.pause(1000);
+    await forgotPage.clickVerifyOtp();
+    await driver.pause(3000);
+    if (await forgotPage.isOnOtpScreen()) {
+        const otpError = await forgotPage.getOtpErrorMessage();
+        throw new Error(`OTP was not accepted by Verify OTP${otpError ? `: "${otpError}"` : ''}`);
+    }
+    console.log('On Set Password page');
+}
 
-    // Step 8: Enter new password 'qwert'
-    console.log('Step 8: Entering new password qwert...');
+//Scenario 3 - Validation of Forgot password with mismatch of password
+async function scenario3_MismatchedPasswords(driver, loginPage, forgotPage) {
+    // The OTP is now verified on its own screen before Set Password is shown, so this needs the
+    // real OTP to get as far as the password fields.
+    const sinceUid = await getLatestUid();
+    await openOtpScreen(driver, loginPage, forgotPage, 'TEMPMF11');
+
+    // TC 7: Enter the real OTP -> Verify OTP
+    console.log('TC 7: Entering OTP and clicking Verify OTP...');
+    await verifyRealOtp(driver, forgotPage, sinceUid);
+
+    // TC 8: Enter new password 'qwert'
+    console.log('TC 8: Entering new password qwert...');
     await forgotPage.enterNewPassword('qwerty');
     await driver.pause(500);
 
-    // Step 9: Enter confirm password 'qwert'
-    console.log('Step 9: Entering confirm password qwert...');
+    // TC 9: Enter confirm password 'qwert'
+    console.log('TC 9: Entering confirm password qwert...');
     await forgotPage.enterConfirmPassword('qwert');
     await driver.pause(500);
 
-    // Step 10: Click Submit → print error
-    console.log('Step 10: Clicking Submit...');
+    // TC 10: Click Submit → print error
+    console.log('TC 10: Clicking Submit...');
     await forgotPage.clickSubmit();
     await driver.pause(4000);
     const submitError1 = await forgotPage.getOtpErrorMessage();
     if (submitError1) {
-        console.log(`✔ Step 10 error: "${submitError1}"`);
+        console.log(`✔ TC 10 error: "${submitError1}"`);
     } else {
         console.log('✘ No error message found after submit (step 10)');
     }
 
-    // Navigate back to login page → Forgot Password again
+    // Navigate back to login page
     console.log('Navigating back to login page...');
-    await driver.pressKeyCode(4);
-    await driver.pressKeyCode(4);
-    await driver.pause(2000);
+    await backToLogin(driver, loginPage);
 }
 
 //Scenario 4 - Validation of Forgot password with valid Login ID and invalid OTP
 async function scenario4_InvalidOtp(driver, loginPage, forgotPage) {
-    try {
-        await loginPage.clickForgotPassword();
-    } catch (_) {
-        await driver.pressKeyCode(4);
-        await driver.pause(2000);
-        await loginPage.clickForgotPassword();
-    }
-    await driver.pause(2000);
+    // TC 11: Enter valid login ID 'TEMPMF11' → click Next
+    console.log('TC 11: Entering valid login ID TEMPMF11...');
+    await openOtpScreen(driver, loginPage, forgotPage, 'TEMPMF11');
 
-    // Step 11: Enter valid login ID 'TEMPMF11' → click Next
-    console.log('Step 11: Entering valid login ID TEMPMF11...');
-    await forgotPage.clickLoginIdField();
-    await forgotPage.enterLoginId('TEMPMF11');
-    await forgotPage.clickNext();
-    await driver.pause(3000);
-    console.log('On Set Password page (TEMPMF11)');
-
-    // Step 12: Enter invalid OTP '123456'
-    console.log('Step 12: Entering invalid OTP 123456...');
+    // TC 12: Enter invalid OTP '123456'
+    console.log('TC 12: Entering invalid OTP 123456...');
     await forgotPage.enterOtp('123456');
     await driver.pause(500);
 
-    // Step 13: Enter new password 'Globe@123456'
-    console.log('Step 13: Entering new password Globe@123456...');
-    await forgotPage.enterNewPassword('Globe@123456');
-    await driver.pause(500);
-
-    // Step 14: Enter confirm password 'Globe@123456'
-    console.log('Step 14: Entering confirm password Globe@123456...');
-    await forgotPage.enterConfirmPassword('Globe@123456');
-    await driver.pause(500);
-
-    // Step 15: Click Submit → print error
-    console.log('Step 15: Clicking Submit...');
-    await forgotPage.clickSubmit();
+    // TC 13: Click Verify OTP → print error. An invalid OTP is now rejected on the OTP screen
+    // itself, so Set Password (and its password fields) is never reached.
+    console.log('TC 13: Clicking Verify OTP...');
+    await forgotPage.clickVerifyOtp();
     await driver.pause(4000);
-    const submitError2 = await forgotPage.getOtpErrorMessage();
-    if (submitError2) {
-        console.log(`✔ Step 15 error: "${submitError2}"`);
+    const otpError = await forgotPage.getOtpErrorMessage();
+    if (otpError) {
+        console.log(`✔ TC 13 error: "${otpError}"`);
     } else {
-        console.log('✘ No error message found after submit (step 15)');
+        console.log('✘ No error message found after Verify OTP (step 13)');
+    }
+
+    // TC 14: Invalid OTP must not advance to Set Password
+    console.log('TC 14: Checking the OTP screen is still shown...');
+    if (await forgotPage.isOnOtpScreen()) {
+        console.log('✔ TC 14: still on OTP screen after invalid OTP');
+    } else {
+        console.log('✘ TC 14: invalid OTP moved past the OTP screen');
     }
 }
 
 //Sceanario 5 - Validation of Forgot password with valid Login ID and valid OTP
 async function scenario5_HappyPath(driver, loginPage, forgotPage) {
-    // Step 16: Normal forgot password flow (happy path)
-    console.log('Step 16: Starting normal forgot password flow...');
-    await driver.pressKeyCode(4);
-    await driver.pressKeyCode(4);
-    await driver.pause(2000);
-    try {
-        await loginPage.clickForgotPassword();
-    } catch (_) {
-        await driver.pressKeyCode(4);
-        await driver.pause(2000);
-        await loginPage.clickForgotPassword();
-    }
-    await driver.pause(2000);
+    // TC 16: Normal forgot password flow (happy path)
+    console.log('TC 16: Starting normal forgot password flow...');
 
     // Snapshot inbox before triggering OTP send
     const sinceUid = await getLatestUid();
+    await openOtpScreen(driver, loginPage, forgotPage, 'TEMPMF11');
 
-    await forgotPage.clickLoginIdField();
-    await forgotPage.enterLoginId('TEMPMF11');
-    await forgotPage.clickNext();
-    await driver.pause(3000);
-
-    console.log('Fetching OTP from Gmail...');
-    const otp = await fetchLatestOtp(sinceUid, 'One time password');
-    console.log(`OTP fetched: ${otp}`);
-
-    await forgotPage.enterOtp(otp);
-    await driver.pause(1000);
+    await verifyRealOtp(driver, forgotPage, sinceUid);
 
     await forgotPage.enterNewPassword(NEW_PASSWORD);
     await driver.pause(1000);
@@ -233,6 +227,17 @@ async function run() {
         console.error(err.stack);
     } finally {
         await DriverManager.closeDriver();
+
+        const failedTCs = getFailedTCs(entries);
+        if (failedTCs.length) {
+            console.log('\n=== Failed Test Cases ===');
+            failedTCs.forEach(f => {
+                console.log(`${f.tc}:`);
+                f.messages.forEach(m => console.log(`  - ${m}`));
+            });
+        } else {
+            console.log('\nAll test cases passed.');
+        }
     }
 }
 

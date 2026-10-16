@@ -7,7 +7,7 @@ function logSection(title) {
 }
 
 async function countTab(researchCalls, label, { skipScrollUp = false } = {}) {
-    console.log(`Step 4: Counting symbols under ${label}...`);
+    console.log(`TC 4: Counting symbols under ${label}...`);
     await researchCalls.waitForContent();
     if (!skipScrollUp) {
         await researchCalls.scrollUpUnlessNoData();
@@ -38,7 +38,7 @@ async function verifyOrderPad(driver, expectedSymbol, expectedType, label, { mat
 // list. Self-guards on tabs with no data, so the same function covers every tab - present and
 // future - without per-tab special-casing.
 async function runSymbolQuoteFlow(driver, researchCalls, label) {
-    console.log(`Step 5: Opening Quotes screen for the first ${label} symbol...`);
+    console.log(`TC 5: Opening Quotes screen for the first ${label} symbol...`);
     const firstCard = await researchCalls.getFirstSymbolCard();
     if (!firstCard) {
         console.log(`No symbol available in ${label} - skipping Quotes flow`);
@@ -52,44 +52,45 @@ async function runSymbolQuoteFlow(driver, researchCalls, label) {
     await driver.pause(1000);
 
     const quotesPage = new QuotesPage(driver);
-    console.log('Step 5: Reading call details and validating End Date...');
+    console.log('TC 5: Reading call details and validating End Date...');
     const callDetails = await quotesPage.readCallDetails(firstCard.rawDesc);
     await quotesPage.validateEndDate(callDetails);
 
     // Tapping the symbol opens a call-detail dialog (BUY/QUOTE/WATCHLIST) before the Quotes screen
-    // even exists - Step 7's BUY click belongs to that dialog, not the Quotes screen's own BUY.
-    console.log('Step 7: Clicking BUY on the call-detail dialog...');
+    // even exists - TC 7's BUY click belongs to that dialog, not the Quotes screen's own BUY.
+    console.log('TC 7: Clicking BUY on the call-detail dialog...');
     await quotesPage.clickDialogBuy();
     await verifyOrderPad(driver, symbol, 'Buy', 'BUY #1', { matchContains });
 
     await quotesPage.openQuote();
     const onQuotes = await quotesPage.isDisplayed();
     console.log(`Quotes screen displayed: ${onQuotes}`);
+    // Opens as a half-height sheet - swipe up to expand it to full screen first.
+    await quotesPage.swipeUpQuoteScreen();
 
-    console.log('Step 6: Reading quote details...');
+    console.log('TC 6: Reading quote details...');
     await quotesPage.readQuoteDetails();
 
-    console.log('Step 8: Expanding Quotes screen and scrolling to bottom...');
-    await quotesPage.clickSwipeUpIfAvailable();
+    console.log('TC 8: Scrolling the expanded Quotes screen to bottom...');
     await quotesPage.scrollToBottom();
 
-    console.log('Step 9: Clicking SELL...');
+    console.log('TC 9: Clicking SELL...');
     await quotesPage.clickSell();
     await verifyOrderPad(driver, symbol, 'Sell', 'SELL', { matchContains });
 
-    console.log('Step 10: Clicking BUY again from the bottom section...');
+    console.log('TC 10: Clicking BUY again from the bottom section...');
     await quotesPage.clickBuy();
     await verifyOrderPad(driver, symbol, 'Buy', 'BUY #2', { matchContains });
 
-    console.log('Step 11: Adding to basket (2nd basket)...');
+    console.log('TC 11: Adding to basket (2nd basket)...');
     await quotesPage.openAdvancedOptions();
     await quotesPage.addToBasket(2);
 
-    console.log('Step 12: Adding to watchlist (1st watchlist)...');
+    console.log('TC 12: Adding to watchlist (1st watchlist)...');
     await quotesPage.openWatchlistPicker();
     await quotesPage.selectWatchlist(1);
 
-    console.log('Step 13: Returning to Research Calls list...');
+    console.log('TC 13: Returning to Research Calls list...');
     await quotesPage.returnToResearchCallsList();
 }
 

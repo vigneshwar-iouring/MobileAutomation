@@ -10,13 +10,13 @@ if (!device) {
 console.log(`Running on: ${deviceType} → ${device.deviceName} (${device.udid})`);
 
 const capabilities = {
-    platformName:               'Android',
-    'appium:automationName':    'UiAutomator2',
-    'appium:deviceName':        device.deviceName,
-    'appium:udid':              device.udid,
-    'appium:appPackage':        'com.iouring.globecapital.dev',
-    'appium:appActivity':       'com.iouring.globecapital.MainActivity',
-    'appium:noReset':           device.noReset,
+    platformName: 'Android',
+    'appium:automationName': 'UiAutomator2',
+    'appium:deviceName': device.deviceName,
+    'appium:udid': device.udid,
+    'appium:appPackage': 'com.iouring.globecapital',
+    'appium:appActivity': 'com.iouring.globecapital.MainActivity',
+    'appium:noReset': device.noReset,
     'appium:newCommandTimeout': 60,
     'appium:waitForIdleTimeout': 1000,
 };
@@ -29,10 +29,12 @@ if (device.avdName) {
 const AppiumConfig = {
     protocol: 'http',
     hostname: '127.0.0.1',
-    port:     4723,
-    path:     '/',
+    port: 4723,
+    path: '/',
     logLevel: 'silent',
     capabilities,
 };
+
+AppiumConfig.APP_PACKAGE = capabilities['appium:appPackage'];
 
 module.exports = AppiumConfig;

@@ -1,0 +1,143 @@
+const BasePage = require('./BasePage');
+const { handlePermissionDialog } = require('../../utils/helpers');
+
+const SEL = {
+  loginIdInput:     '//android.widget.EditText[1]',
+  passwordInput:    '//android.widget.EditText[2]',
+  loginBtn:         '~LOGIN',
+  signUpBtn:        '~SIGN UP',
+  forgotPasswordBtn:'~FORGOT PASSWORD',
+  termsBtn:         '~Terms and Conditions',
+  termsText:        '~By logging in, I accept the ',
+  // Same hamburger-menu match every other menu-driven page object in this stack uses
+  // (Funds/News/Alerts) - no dedicated resource-id exposed for it.
+  hamburgerBtn:     '//*[contains(@content-desc,"Hamburger") or contains(@content-desc,"hamburger")]',
+  // "Logout" sits below the fold of the nav drawer, under Profile/Settings.
+  logoutMenuItem:   '//*[@content-desc="Logout"]',
+  // Dialog's confirm button is labelled "Logout" (older builds: "Yes") - scoped to the
+  // dialog prompt so it can't match the drawer's own "Logout" menu item.
+  logoutConfirmYes: '(//*[@content-desc="Do you want to logout?"]/following::*[@content-desc="Logout" or @content-desc="Yes"] | //*[@content-desc="Yes"])[1]',
+};
+
+class LoginPage extends BasePage {
+
+  // ── Screen readiness ─────────────────────────────────────────────────────────
+
+  async waitForLoginScreen(timeout = 20000) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      await handlePermissionDialog();
+
+      try {
+        const relaunch = await $('~Relaunch App');
+        if (await relaunch.isDisplayed()) {
+          await relaunch.click();
+          await browser.pause(1200);
+          continue;
+        }
+      } catch {}
+
+      try {
+        const login = await $(SEL.loginBtn);
+        if (await login.isDisplayed() && await (await $(SEL.loginIdInput)).isDisplayed())
+          return true;
+      } catch {}
+
+      await browser.pause(500);
+    }
+
+    try {
+      const src   = await driver.getPageSource();
+      const pkg   = (src.match(/package="([^"]+)"/) || [])[1] || '?';
+      const descs = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]).slice(0, 20);
+      const texts = [...src.matchAll(/\btext="([^"]+)"/g)].map(m => m[1]).filter(t => t.trim()).slice(0, 30);
+      console.log(`\n  ── waitForLoginScreen TIMEOUT (${timeout}ms) — foreground package: ${pkg}`);
+      console.log('  texts :', texts.join(' | '));
+      console.log('  descs :', descs.join(' | '));
+      await this.takeScreenshot('loginscreen-timeout');
+    } catch {}
+    return false;
+  }
+
+  async isLoaded() {
+    return this.waitForLoginScreen(15000);
+  }
+
+  // ── Private helpers ──────────────────────────────────────────────────────────
+
+  // Tap → brief pause → setValue; shared by enterLoginId and enterPassword.
+  async _fillField(selector, value) {
+    const el = await this.waitForElement(selector);
+    await this._tap(el);
+    await browser.pause(100);
+    await el.setValue(String(value));
+    await browser.pause(150);
+  }
+
+  // ── Input actions ────────────────────────────────────────────────────────────
+
+  async enterLoginId(id) {
+    await handlePermissionDialog();
+    await this._fillField(SEL.loginIdInput, id);
+  }
+
+  async enterPassword(password) {
+    await this._fillField(SEL.passwordInput, password);
+  }
+
+  async tapLogin() {
+    await this.hideKeyboard();
+    await browser.pause(200);
+    await this._tap(await $(SEL.loginBtn));
+    await browser.pause(200);
+  }
+
+  async login(id, password) {
+    await this.enterLoginId(id);
+    await this.enterPassword(password);
+    await this.tapLogin();
+  }
+
+  // ── Navigation taps ──────────────────────────────────────────────────────────
+
+  async tapSignUp()             { await this.click(SEL.signUpBtn); }
+  async tapForgotPassword()     { await this.click(SEL.forgotPasswordBtn); }
+  async tapTermsAndConditions() { await this.click(SEL.termsBtn); }
+
+  // ── Queries ──────────────────────────────────────────────────────────────────
+
+  async getLoginIdFieldValue()      { return this.getText(SEL.loginIdInput); }
+  async isSignUpButtonDisplayed()   { return this.isDisplayed(SEL.signUpBtn); }
+  async isForgotPasswordDisplayed() { return this.isDisplayed(SEL.forgotPasswordBtn); }
+  async isTermsTextDisplayed()      { return this.isDisplayed(SEL.termsText); }
+
+  // ── Logout ───────────────────────────────────────────────────────────────────
+
+  async openHamburgerMenu(timeout = 5000) { return this.findAndTap(SEL.hamburgerBtn, timeout); }
+
+  // Scrolls the nav drawer until "Logout" is visible instead of assuming a fixed swipe
+  // count - the menu item list above it can grow without breaking this.
+  async clickLogout(maxScrolls = 5) {
+    let visible = await this.isDisplayed(SEL.logoutMenuItem, 1500);
+    for (let i = 0; i < maxScrolls && !visible; i++) {
+      await this.swipeUp();
+      await browser.pause(400);
+      visible = await this.isDisplayed(SEL.logoutMenuItem, 1500);
+    }
+    if (!visible) return false;
+    return this.findAndTap(SEL.logoutMenuItem, 2000);
+  }
+
+  async confirmLogout(timeout = 5000) { return this.findAndTap(SEL.logoutConfirmYes, timeout); }
+
+  async logout() {
+    const menuOpened = await this.openHamburgerMenu();
+    await browser.pause(500);
+    const logoutClicked = menuOpened && await this.clickLogout();
+    await browser.pause(500);
+    const confirmed = logoutClicked && await this.confirmLogout();
+    return !!confirmed;
+  }
+}
+
+module.exports = new LoginPage();
