@@ -701,7 +701,7 @@ async function run() {
                 await marketsPage.verifyFiiDiiHistory(period, segment);
             }
         }
-        driver.navigateBackToMarkets();
+        await marketsPage.navigateBackToMarkets();
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);
