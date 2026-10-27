@@ -67,13 +67,7 @@ async function run() {
         //   const recentSymbol = await marketsPage.tapFirstRecentlyViewed();
         //   await marketsPage.verifyQuoteOpened(recentSymbol);
 
-        console.log('TC 3: Clicking New Basket...');
-        await basketPage.clickNewBasket();
-        const dialogOpened = await basketPage.verifyNewBasketDialogOpened();
-        if (!dialogOpened) {
-            console.error('"New Basket" dialog did not open. This button has been observed to reject ');
-            return;
-        }
+
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);

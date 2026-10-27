@@ -29,6 +29,35 @@ const isSirRow = desc => desc.includes('Last traded price') && desc.includes('Do
 // with no "Double tap to view".
 const isRecentCard = desc => desc.includes('\n') && !desc.includes('Double tap to view') && /^\s*\S.*?\. Last traded price/.test(desc);
 
+// Symbol of a movers row. Equity rows read " RELIANCE. RELIANCE INDUSTRIES. Last traded ...", but
+// F&O Market Insights rows name a contract with spaces (" KAYNES 23NOV FUT. NFOLast traded ...,
+// Double tap to view KAYNES 23NOV FUT details, ..."), so the "Double tap to view X details" hint
+// is read first.
+const moverSymbol = desc => (desc.match(/Double tap to view (.+?) details/) || desc.trim().match(/^([^.\s]+)\./) || [])[1] || null;
+
+// F&O Market Insights rows put the exchange straight after the contract, with no separator before
+// "Last traded price" (verified live): " KEI 27OCT FUT. NFOLast traded price 3881.70. ...".
+const FNO_EXCHANGES = ['NFO', 'BFO'];
+// Expiry a contract name carries as DDMON ("KAYNES 27OCT FUT" -> { day: 27, month: 9, text:
+// "27OCT" }), or null.
+const contractExpiry = symbol => {
+    const m = (symbol || '').match(/\b(\d{1,2})([A-Z]{3})\b/);
+    return m && MONTHS[m[2]] !== undefined ? { day: Number(m[1]), month: MONTHS[m[2]], text: m[0] } : null;
+};
+const parseFnoInsightRow = desc => {
+    const m = desc.match(/^\s*(.+?)\.\s*([A-Z]+)Last traded price/);
+    return { symbol: m ? m[1] : moverSymbol(desc), exchange: m ? m[2] : null, desc };
+};
+
+// The NxtOption banner on F&O opens a popup with these three tools. Each tool's screen has no title
+// of its own, so it is recognised by labels only it shows (verified live) - matched on the first
+// line of the content-desc, since its tabs read "IV Charts\nTab 1 of 2".
+const NXT_OPTION_TOOLS = {
+    'Strategy Builder': ['Predefined', 'Custom'],
+    'IV Analysis': ['IV Charts', 'IVR-IVP Scan'],
+    'OI Analysis': ['OI', 'OI Change', 'PCR Chart'],
+};
+
 // Left-to-right order of the "Trading Tools & Products" quick-access row (verified live). The row
 // is a horizontal scroller that keeps its scroll offset between visits, so any one of these can be
 // off-screen at either edge - the order tells revealTile() which way to swipe for a missing tile.
@@ -55,6 +84,14 @@ const FII_DII_ENTRY_HEAD = /^(\d{1,2}(?:st|nd|rd|th)? [A-Za-z]{3} \d{4}|[A-Za-z]
 const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
 const isRedBar = ([r, g, b]) => r > 150 && r - g > 80 && r - b > 80;
 const isGreenBar = ([r, g, b]) => g > 120 && g - r > 50 && g - b > 30;
+// Future Index Contracts badges ("Current Expiry" green, "Next Expiry" grey, "Far Expiry" red) are
+// drawn only - absent from the accessibility tree - so each is told apart by its colour in the
+// left-bottom half of its row. Sampled live (every 2nd px): ~510 green / ~640 grey / ~400 red px
+// for the badge, against ~150 grey px of plain "NFO" text and no green/red elsewhere there.
+const isGreyBadge = ([r, g, b]) => r > 90 && Math.abs(r - g) < 15 && Math.abs(g - b) < 15;
+const BADGE_MIN_PX = 100;
+const NEXT_BADGE_MIN_GREY_PX = 350;
+const EXPIRY_CATEGORIES = ['Current Expiry', 'Next Expiry', 'Far Expiry'];
 const isAxis = ([r, g, b]) => r > 90 && Math.abs(r - g) < 10 && Math.abs(g - b) < 10;
 
 // "13th Oct 2026" -> Date (local midnight), or null.
@@ -90,6 +127,20 @@ class MarketsPage extends BasePage {
         // tab ("Tab 4 of 8") and movers/news rows can mention the word too.
         this.equityTab = '//*[starts-with(@content-desc,"Equity") and contains(@content-desc,"Tab 1 of")]';
         this.equityTabLoaded = this.equityTab;
+        // "F&O\nTab 2 of 4" - the "F&O Market Insights" heading and its "See all" never say "Tab ".
+        this.fnoTab = '//*[starts-with(@content-desc,"F&O") and contains(@content-desc,"Tab 2 of")]';
+        this.seeAllFnoInsights = 'android=new UiSelector().descriptionStartsWith("See all F&O Market Insights")';
+        this.fnoInsightsTitle = 'android=new UiSelector().description("F&O Market Insights")';
+        // The two dropdowns above the "See all" list read "Expiry filter. Selected All Expiry., Double
+        // tap to change expiry." and "Instrument filter. Selected Stock Future., ..." (verified live).
+        this.expiryFilter = 'android=new UiSelector().descriptionStartsWith("Expiry filter")';
+        this.instrumentFilter = 'android=new UiSelector().descriptionStartsWith("Instrument filter")';
+        // Banner below F&O Market Insights ("Explore the Smart Option Trading\nwith our new strategy
+        // builder NxtOption"). Tapping it opens a popup over a full-screen "Dismiss" scrim.
+        this.nxtOptionBanner = 'android=new UiSelector().descriptionStartsWith("Explore the Smart Option Trading")';
+        // Trending Options on F&O: "Most Traded\nTab 1 of 2" / "Highest OI\nTab 2 of 2", with real
+        // selected="true" on the current tab (verified live).
+        this.trendingTab = label => `//*[starts-with(@content-desc,"${label}") and contains(@content-desc," of 2")]`;
 
         // First section under the segment tabs on Equity. Its heading also appears as the title of
         // the "See all" Market Movers screen, which is told apart by that screen's Back button.
@@ -156,6 +207,441 @@ class MarketsPage extends BasePage {
             console.log('Equity tab selected by default: FAIL (Equity tab not found)');
             return false;
         }
+    }
+
+    // Taps the F&O segment tab and checks it reports selected="true" (same real attribute as Equity).
+    async clickFnoTab(timeout = 8000) {
+        await this.click(this.fnoTab, timeout);
+        console.log('Clicked F&O tab');
+        await this.pause(2000);
+        const selected = (await (await this.driver.$(this.fnoTab)).getAttribute('selected').catch(() => null)) === 'true';
+        console.log(`F&O tab selected: ${selected ? 'PASS' : 'FAIL'}`);
+        return selected;
+    }
+
+    // F&O Market Insights rows currently on screen, as { symbol, exchange, desc, node }. Same row shape as
+    // Equity's Market Movers ("..., or swipe right for next category"), so moversRow's test is reused.
+    async getFnoInsightRows() {
+        const nodes = await this.getDescribedElements();
+        return nodes
+            .filter(n => n.desc.includes('Double tap to view') && n.desc.includes('next category'))
+            .map(n => ({ ...parseFnoInsightRow(n.desc), node: n }));
+    }
+
+    // Logs whether `label` lists any symbols, and whether every one is an F&O (NFO/BFO) contract.
+    logFnoInsightRows(label, rows) {
+        if (!rows.length) {
+            console.log(`F&O Market Insights "${label}" - symbols listed: 0 - FAIL`);
+            return false;
+        }
+        console.log(`F&O Market Insights "${label}" - symbols listed: ${rows.length} - PASS`);
+        rows.forEach(r => console.log(`  ${r.symbol} (${r.exchange || '?'})`));
+        const nonFno = rows.filter(r => !FNO_EXCHANGES.includes(r.exchange));
+        console.log(`All "${label}" symbols are F&O (${FNO_EXCHANGES.join('/')}) contracts: ${nonFno.length ? `FAIL - ${nonFno.map(r => `${r.symbol} (${r.exchange || '?'})`).join(', ')}` : 'PASS'}`);
+        return nonFno.length === 0;
+    }
+
+    // On landing on F&O, Tab 1 of the F&O Market Insights row must be "Top Gainers", selected, and
+    // listing F&O symbols. Checked as found - before any rewind - so a stale selection shows as FAIL.
+    async verifyFnoInsightsDefault() {
+        const tabs = await this.getMoversTabs();
+        const total = tabs.length ? tabs[0].total : 0;
+        const first = tabs.find(t => t.index === 1);
+        let selected = false;
+        if (first) {
+            const el = await this.driver.$(`(//*[contains(@content-desc,"Tab 1 of ${total}")])[last()]`);
+            selected = (await el.getAttribute('selected').catch(() => null)) === 'true';
+        }
+        const isTopGainers = !!first && first.label === 'Top Gainers';
+        console.log(`F&O Market Insights tab 1: "${first ? first.label : 'not found'}" - ${isTopGainers ? 'PASS' : 'FAIL (expected "Top Gainers")'}`);
+        console.log(`Top Gainers selected by default: ${isTopGainers && selected ? 'PASS' : 'FAIL'}`);
+        const rows = await this.getFnoInsightRows();
+        const allFno = this.logFnoInsightRows('Top Gainers', rows);
+        return isTopGainers && selected && allFno;
+    }
+
+    // Taps F&O Market Insights sub-tab `index` of `total` and checks it lists F&O symbols.
+    async clickFnoInsightsTab(index, total) {
+        const result = await this.clickMoversTab(index, total, 5000, 'F&O Market Insights');
+        if (!result) return null;
+        const rows = await this.getFnoInsightRows();
+        this.logFnoInsightRows(result.label, rows);
+        return { ...result, rows };
+    }
+
+    async clickSeeAllFnoInsights(timeout = 8000) {
+        await this.click(this.seeAllFnoInsights, timeout);
+        console.log('Clicked "See all" on F&O Market Insights');
+    }
+
+    // The full F&O Market Insights screen: title + Back button, both filter dropdowns and a symbol
+    // list. The segment tabs disappearing confirms it isn't still the Markets screen.
+    async verifyFnoInsightsSeeAllOpened(timeout = 8000) {
+        const backVisible = await this.isElementVisible(this.backButton, timeout);
+        const titleVisible = backVisible && await this.isElementVisible(this.fnoInsightsTitle, 2000);
+        const filtersVisible = titleVisible && await this.isElementVisible(this.expiryFilter, 2000) && await this.isElementVisible(this.instrumentFilter, 500);
+        const leftMarkets = filtersVisible && !(await this.isElementVisible(this.fnoTab, 500));
+        const rows = leftMarkets ? await this.getFnoInsightRows() : [];
+        const opened = leftMarkets && rows.length > 0;
+        console.log(`F&O Market Insights "See all" screen opened (${rows.length} symbols listed): ${opened ? 'PASS' : 'FAIL'}`);
+        return opened;
+    }
+
+    // Current value of a filter dropdown ("Expiry filter. Selected 27 October 2026., ..." ->
+    // "27 October 2026"), or null if the dropdown isn't on screen.
+    async getFnoFilterSelection(selector) {
+        try {
+            const desc = await (await this.driver.$(selector)).getAttribute('content-desc');
+            return (desc.match(/Selected (.+?)\.,/) || [])[1] || null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    async verifyFnoFilterDefault(name, selector, expected) {
+        const value = await this.getFnoFilterSelection(selector);
+        const pass = value === expected;
+        console.log(`${name} dropdown default: "${value}" - ${pass ? 'PASS' : `FAIL (expected "${expected}")`}`);
+        return pass;
+    }
+
+    // Opens the Expiry dropdown and returns its options in listed order as { label, selected }. Each
+    // option is "27 October 2026, Double tap to select 27 October 2026." - with ", selected" after
+    // the label on the current one.
+    async openExpiryFilter(timeout = 5000) {
+        await this.click(this.expiryFilter, timeout);
+        console.log('Clicked the Expiry dropdown');
+        await this.pause(1200);
+        const nodes = await this.getDescribedElements();
+        const options = nodes
+            .map(n => n.desc.match(/^(.+?), (selected, )?Double tap to select /))
+            .filter(Boolean)
+            .map(m => ({ label: m[1], selected: !!m[2] }));
+        console.log(`Expiry options: ${options.map(o => o.label + (o.selected ? ' (selected)' : '')).join(', ') || 'none - FAIL'}`);
+        return options;
+    }
+
+    // Taps `label` in the open Expiry sheet (which closes it), then checks the dropdown shows it and
+    // the list holds only that expiry's contracts.
+    async selectExpiryOption(label, timeout = 5000) {
+        await this.click(`android=new UiSelector().descriptionStartsWith("${label},")`, timeout);
+        console.log(`Selected expiry "${label}"`);
+        await this.pause(2500);
+        const shown = await this.getFnoFilterSelection(this.expiryFilter);
+        console.log(`Expiry dropdown now shows "${shown}": ${shown === label ? 'PASS' : `FAIL (expected "${label}")`}`);
+        const rows = await this.getFnoInsightRows();
+        return { shown, rows, matches: this.verifyRowsMatchExpiry(label, rows) };
+    }
+
+    // Contract names carry their expiry as DDMON ("KAYNES 27OCT FUT"). "All Expiry" only needs some
+    // symbols listed; a dated expiry ("27 October 2026") needs every listed contract to be on it.
+    verifyRowsMatchExpiry(label, rows) {
+        if (!rows.length) {
+            console.log(`Symbols listed for "${label}": 0 - FAIL`);
+            return false;
+        }
+        const expiryOf = r => contractExpiry(r.symbol);
+        const seen = [...new Set(rows.map(r => (expiryOf(r) || { text: '?' }).text))];
+        console.log(`Symbols listed for "${label}": ${rows.length} - PASS (expiries: ${seen.join(', ')})`);
+        rows.forEach(r => console.log(`  ${r.symbol} (${r.exchange || '?'})`));
+        const wanted = parseFiiDiiDate(label);
+        if (!wanted) {
+            if (label !== 'All Expiry') console.log(`Could not parse expiry "${label}" - skipping the per-symbol expiry check`);
+            return true;
+        }
+        const mismatched = rows.filter(r => {
+            const e = expiryOf(r);
+            return !e || e.day !== wanted.getDate() || e.month !== wanted.getMonth();
+        });
+        console.log(`All symbols expire on ${label}: ${mismatched.length ? `FAIL - ${mismatched.map(r => r.symbol).join(', ')}` : 'PASS'}`);
+        return mismatched.length === 0;
+    }
+
+    async closeFnoInsightsSeeAll(timeout = 5000) {
+        await this.click(this.backButton, timeout);
+        console.log('Clicked Back on the F&O Market Insights screen');
+    }
+
+    // Scrolls F&O from the top until the NxtOption banner sits fully above the floating bottom nav
+    // (right below F&O Market Insights it can be partly behind it), then returns its node.
+    async scrollToNxtOptionBanner(maxScrolls = 5) {
+        await this.scrollToTop();
+        const { height } = await this.driver.getWindowSize();
+        for (let i = 0; i <= maxScrolls; i++) {
+            const nodes = await this.getDescribedElements();
+            const navTop = (nodes.find(n => n.desc === 'Watchlist') || { y1: Math.floor(height * 0.87) }).y1;
+            const banner = nodes.find(n => n.desc.startsWith('Explore the Smart Option Trading'));
+            if (banner && banner.y2 <= navTop) return banner;
+            if (i < maxScrolls) await this.nudgeDown();
+        }
+        console.log(`NxtOption banner not found on F&O after ${maxScrolls} scrolls: FAIL`);
+        return null;
+    }
+
+    // Taps the NxtOption banner and checks its popup lists Strategy Builder, IV Analysis and OI
+    // Analysis.
+    async clickNxtOptionBanner() {
+        const banner = await this.scrollToNxtOptionBanner();
+        if (!banner) return false;
+        await this.tapNode(banner);
+        console.log('Clicked the NxtOption banner');
+        await this.pause(1500);
+        let missing = [];
+        for (const tool of Object.keys(NXT_OPTION_TOOLS)) {
+            if (!(await this.isElementVisible(`android=new UiSelector().description("${tool}")`, 3000))) missing.push(tool);
+        }
+        console.log(`NxtOption popup shows ${Object.keys(NXT_OPTION_TOOLS).join(', ')}: ${missing.length ? `FAIL - missing ${missing.join(', ')}` : 'PASS'}`);
+        return missing.length === 0;
+    }
+
+    // Taps `tool` in the NxtOption popup and waits (its data loads first) for that screen's own
+    // labels, with the Markets segment tabs gone.
+    async openNxtOptionTool(tool, timeout = 15000) {
+        await this.click(`android=new UiSelector().description("${tool}")`, 5000);
+        console.log(`Clicked ${tool}`);
+        const markers = NXT_OPTION_TOOLS[tool];
+        let found = [];
+        await this.driver.waitUntil(async () => {
+            const labels = new Set((await this.getDescribedElements()).map(n => n.desc.split('\n')[0]));
+            found = markers.filter(m => labels.has(m));
+            return found.length === markers.length && !labels.has('F&O');
+        }, { timeout, interval: 1000 }).catch(() => {});
+        const opened = found.length === markers.length && !(await this.isElementVisible(this.fnoTab, 500));
+        console.log(`App navigated to ${tool} (${markers.join(', ')} shown): ${opened ? 'PASS' : `FAIL - found only ${found.join(', ') || 'none'}`}`);
+        return opened;
+    }
+
+    // Scrolls F&O from the top until section `title`'s heading and tab row are on screen with the
+    // next section's heading below them - i.e. its whole list is visible.
+    async scrollToFnoSection(title, maxScrolls = 8) {
+        await this.scrollToTop();
+        for (let i = 0; i <= maxScrolls; i++) {
+            const nodes = await this.getDescribedElements();
+            const tabsBottom = (nodes.find(n => /^Equity\nTab 1 of \d+$/.test(n.desc)) || { y2: 0 }).y2;
+            const heading = nodes.find(n => n.desc === title);
+            if (heading && heading.y1 < tabsBottom) await this.swipe('up');
+            else if (heading && this.getSectionEnd(nodes, heading) !== null) {
+                console.log(`"${title}" section is now visible`);
+                return true;
+            } else if (i < maxScrolls) await this.nudgeDown();
+        }
+        console.log(`Could not bring the "${title}" section on screen after ${maxScrolls} scrolls: FAIL`);
+        return false;
+    }
+
+    // Trending Options ends at the "Future Index Contracts" heading.
+    async scrollToTrendingOptions() {
+        return this.scrollToFnoSection('Trending Options');
+    }
+
+    // Future Index Contracts ends at the "OI Analysis" heading.
+    async scrollToFutureIndexContracts() {
+        return this.scrollToFnoSection('Future Index Contracts');
+    }
+
+    // y where a section's list ends: the first plain heading below its tab row (not a tab, not a
+    // row, not the floating bottom nav), or null if that isn't on screen yet.
+    getSectionEnd(nodes, heading) {
+        const nav = ['Watchlist', 'Market', 'Orders', 'Portfolio', 'Mutual Funds'];
+        const next = nodes
+            .filter(n => n.y1 > heading.y2 && !nav.includes(n.desc) && !/\nTab \d+ of \d+$/.test(n.desc) && !n.desc.includes('Double tap to view'))
+            .sort((a, b) => a.y1 - b.y1)[0];
+        return next ? next.y1 : null;
+    }
+
+    // Trending Options rows on screen (between its tab row and the next section), parsed like the
+    // F&O Market Insights rows - the two sections share one row shape.
+    async getTrendingOptionRows() {
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === 'Trending Options');
+        if (!heading) return [];
+        const end = this.getSectionEnd(nodes, heading) ?? Infinity;
+        return nodes
+            .filter(n => n.y1 > heading.y2 && n.y2 <= end && n.desc.includes('Double tap to view') && n.desc.includes('next category'))
+            .map(n => ({ ...parseFnoInsightRow(n.desc), node: n }));
+    }
+
+    // Future Index Contracts rows on screen, top to bottom: "Index NIFTY 27OCT FUT. Exchange NFO.
+    // Expiry 2026-10-27. Last traded price ..., Double tap to view NIFTY 27OCT FUT details."
+    async getFutureIndexRows() {
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === 'Future Index Contracts');
+        if (!heading) return [];
+        const end = this.getSectionEnd(nodes, heading) ?? Infinity;
+        return nodes
+            .filter(n => n.y1 > heading.y2 && n.y2 <= end && /^Index .+\. Exchange \w+\. Expiry \d{4}-\d{2}-\d{2}\./.test(n.desc))
+            .sort((a, b) => a.y1 - b.y1)
+            .map(n => ({
+                symbol: moverSymbol(n.desc),
+                exchange: (n.desc.match(/Exchange (\w+)\./) || [])[1] || null,
+                expiry: n.desc.match(/Expiry (\d{4}-\d{2}-\d{2})\./)[1],
+                node: n,
+            }));
+    }
+
+    // Future Index Contracts tabs on screen ("Nifty 50\nTab 1 of 5", ...) - those between its heading
+    // and its first row, so the other sections' "of 5" tabs never count.
+    async getFutureIndexTabs() {
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === 'Future Index Contracts');
+        if (!heading) return [];
+        const end = this.getSectionEnd(nodes, heading) ?? Infinity;
+        return nodes
+            .filter(n => n.y1 >= heading.y2 && n.y2 <= end)
+            .map(n => n.desc.match(/^(.+)\nTab (\d+) of (\d+)$/))
+            .filter(Boolean)
+            .map(m => ({ label: m[1], index: Number(m[2]), total: Number(m[3]) }));
+    }
+
+    async getSelectedFutureIndexTab() {
+        for (const t of await this.getFutureIndexTabs()) {
+            const el = await this.driver.$(`(//*[contains(@content-desc,"Tab ${t.index} of ${t.total}")])[last()]`);
+            if ((await el.getAttribute('selected').catch(() => null)) === 'true') return t.label;
+        }
+        return null;
+    }
+
+    // Same click-only tab row as the others: it keeps its scroll offset (seen left on BANKEX, with
+    // Nifty 50 out of the tree), so it is rewound by tapping the left-most visible tab until Tab 1.
+    async rewindFutureIndexTabs(maxTaps = 6) {
+        for (let i = 0; i < maxTaps; i++) {
+            const tabs = await this.getFutureIndexTabs();
+            if (!tabs.length) break;
+            const first = tabs.reduce((a, b) => (b.index < a.index ? b : a));
+            await (await this.driver.$(`(//*[contains(@content-desc,"Tab ${first.index} of ${first.total}")])[last()]`)).click();
+            await this.pause(800);
+            if (first.index === 1) return true;
+        }
+        console.log('Could not rewind the Future Index Contracts tab row to Tab 1');
+        return false;
+    }
+
+    // Taps Future Index Contracts tab `label` and checks it reports selected. Tabs further right only
+    // enter the tree once their left neighbour is tapped, so tap them in order.
+    async clickFutureIndexTab(label, timeout = 5000) {
+        const tab = (await this.getFutureIndexTabs()).find(t => t.label === label);
+        if (!tab) {
+            console.log(`Future Index Contracts "${label}" tab not found: FAIL`);
+            return false;
+        }
+        const sel = `(//*[contains(@content-desc,"Tab ${tab.index} of ${tab.total}")])[last()]`;
+        await this.click(sel, timeout);
+        await this.pause(2000);
+        const selected = (await (await this.driver.$(sel)).getAttribute('selected').catch(() => null)) === 'true';
+        console.log(`Clicked Future Index Contracts "${label}" tab - selected: ${selected ? 'PASS' : 'FAIL'}`);
+        return selected;
+    }
+
+    // Which badge a row shows, read from the screenshot's colours (see isGreyBadge above).
+    classifyExpiryBadge(img, scale, node) {
+        let red = 0, green = 0, grey = 0;
+        const x1 = Math.round(node.x1 * scale), x2 = Math.round((node.x1 + (node.x2 - node.x1) * 0.45) * scale);
+        const y1 = Math.round(((node.y1 + node.y2) / 2) * scale), y2 = Math.round(node.y2 * scale);
+        for (let y = y1; y < y2; y += 2) {
+            for (let x = x1; x < x2; x += 2) {
+                const p = pixelAt(img, x, y);
+                if (isRedBar(p)) red++;
+                else if (isGreenBar(p)) green++;
+                else if (isGreyBadge(p)) grey++;
+            }
+        }
+        if (green >= BADGE_MIN_PX && green > red) return 'Current Expiry';
+        if (red >= BADGE_MIN_PX) return 'Far Expiry';
+        if (grey >= NEXT_BADGE_MIN_GREY_PX) return 'Next Expiry';
+        return null;
+    }
+
+    // `tab` must list exactly 3 contracts - Current, Next and Far Expiry, in that order - each an F&O
+    // contract whose expiry is later than the one above it.
+    async verifyFutureIndexCategories(tab) {
+        const rows = await this.getFutureIndexRows();
+        console.log(`Future Index Contracts "${tab}" - contracts listed: ${rows.length} - ${rows.length === EXPIRY_CATEGORIES.length ? 'PASS' : `FAIL (expected ${EXPIRY_CATEGORIES.length})`}`);
+        if (!rows.length) return false;
+        const img = decodePng(Buffer.from(await this.driver.takeScreenshot(), 'base64'));
+        const { width } = await this.driver.getWindowSize();
+        const scale = img.width / width;
+        let allOk = rows.length === EXPIRY_CATEGORIES.length;
+        rows.forEach((r, i) => {
+            const badge = this.classifyExpiryBadge(img, scale, r.node);
+            const expected = EXPIRY_CATEGORIES[i] || null;
+            const isFno = FNO_EXCHANGES.includes(r.exchange);
+            const later = i === 0 || r.expiry > rows[i - 1].expiry;
+            const ok = badge === expected && isFno && later;
+            allOk = allOk && ok;
+            console.log(`  ${r.symbol} (${r.exchange}, expiry ${r.expiry}): ${badge || 'no badge'}${expected ? ` - expected ${expected}` : ''}${isFno ? '' : ' - not an F&O contract'}${later ? '' : ' - expiry not later than the row above'}: ${ok ? 'PASS' : 'FAIL'}`);
+        });
+        console.log(`"${tab}" shows ${EXPIRY_CATEGORIES.join(', ')}: ${allOk ? 'PASS' : 'FAIL'}`);
+        return allOk;
+    }
+
+    async isTrendingTabSelected(label) {
+        const selected = (await (await this.driver.$(this.trendingTab(label))).getAttribute('selected').catch(() => null)) === 'true';
+        console.log(`Trending Options "${label}" selected: ${selected ? 'PASS' : 'FAIL'}`);
+        return selected;
+    }
+
+    async clickTrendingTab(label, timeout = 5000) {
+        await this.click(this.trendingTab(label), timeout);
+        console.log(`Clicked Trending Options "${label}" tab`);
+        await this.pause(2000);
+    }
+
+    // `label`'s list must hold F&O (NFO/BFO) contracts, each named with its expiry (DDMON).
+    async verifyTrendingOptionRows(label) {
+        const rows = await this.getTrendingOptionRows();
+        if (!rows.length) {
+            console.log(`Trending Options "${label}" - symbols listed: 0 - FAIL`);
+            return false;
+        }
+        console.log(`Trending Options "${label}" - symbols listed: ${rows.length} - PASS`);
+        rows.forEach(r => console.log(`  ${r.symbol} (${r.exchange || '?'})`));
+        const nonFno = rows.filter(r => !FNO_EXCHANGES.includes(r.exchange));
+        console.log(`All "${label}" symbols are F&O (${FNO_EXCHANGES.join('/')}) contracts: ${nonFno.length ? `FAIL - ${nonFno.map(r => `${r.symbol} (${r.exchange || '?'})`).join(', ')}` : 'PASS'}`);
+        const noExpiry = rows.filter(r => !contractExpiry(r.symbol));
+        console.log(`All "${label}" symbols show an expiry: ${noExpiry.length ? `FAIL - ${noExpiry.map(r => r.symbol).join(', ')}` : 'PASS'}`);
+        return !nonFno.length && !noExpiry.length;
+    }
+
+    // Taps the top-most of `rows` (from getFnoInsightRows/getTrendingOptionRows) and checks its
+    // Quote opens - headed "Stock KAYNES 23NOV FUT, NFO. ..." for a contract too (verified live).
+    async openFirstFnoSymbol(section, rows) {
+        if (!rows.length) {
+            console.log(`No symbol listed under ${section} to click: FAIL`);
+            return null;
+        }
+        const first = rows.reduce((a, b) => (b.node.y1 < a.node.y1 ? b : a));
+        await this.tapNode(first.node);
+        console.log(`Clicked first ${section} symbol: ${first.symbol}`);
+        const opened = await this.verifyQuoteOpened(first.symbol);
+        return { symbol: first.symbol, opened };
+    }
+
+    // Device back from an NxtOption tool or a Quote opened from F&O lands straight on Markets, still
+    // on F&O (verified live).
+    async navigateBackToFnoTab(from, maxBackPresses = 3) {
+        for (let i = 0; i < maxBackPresses; i++) {
+            await this.driver.back();
+            await this.pause(1500);
+            const selected = (await (await this.driver.$(this.fnoTab)).getAttribute('selected').catch(() => null)) === 'true';
+            if (selected) {
+                console.log(`Back on Markets (F&O) from ${from}: PASS`);
+                return true;
+            }
+        }
+        console.log(`Could not get back to Markets (F&O) from ${from}: FAIL`);
+        return false;
+    }
+
+    // Device back from a Quote opened on F&O Market Insights "See all" returns to that screen
+    // (verified live), with its title and filters.
+    async navigateBackToFnoInsightsSeeAll(from) {
+        await this.driver.back();
+        await this.pause(1500);
+        const back = await this.isElementVisible(this.backButton, 3000)
+            && await this.isElementVisible(this.fnoInsightsTitle, 1000)
+            && await this.isElementVisible(this.expiryFilter, 1000);
+        console.log(`Back on F&O Market Insights "See all" from ${from}: ${back ? 'PASS' : 'FAIL'}`);
+        return back;
     }
 
     // The Equity page keeps its vertical scroll offset between visits, so "the first field" is
@@ -240,13 +726,13 @@ class MarketsPage extends BasePage {
     // Taps sub-tab `index` of `total`. The tab row is click-only (swiping it does nothing), but
     // tapping a tab scrolls its neighbour into the tree - so tapping 1..N in order reaches every
     // tab. [last()] skips the segment tabs, which come earlier in the tree, should both share N.
-    async clickMoversTab(index, total, timeout = 5000) {
+    async clickMoversTab(index, total, timeout = 5000, section = 'Market Movers') {
         const sel = `(//*[contains(@content-desc,"Tab ${index} of ${total}")])[last()]`;
         const el = await this.driver.$(sel);
         try {
             await el.waitForDisplayed({ timeout });
         } catch (_) {
-            console.log(`Market Movers tab ${index} of ${total} not found: FAIL`);
+            console.log(`${section} tab ${index} of ${total} not found: FAIL`);
             return null;
         }
         const label = (await el.getAttribute('content-desc')).split('\n')[0];
@@ -258,14 +744,14 @@ class MarketsPage extends BasePage {
             await (await this.driver.$(sel)).click();
             await this.pause(1500);
             selected = (await (await this.driver.$(sel)).getAttribute('selected')) === 'true';
-            if (!selected && attempt < 3) console.log(`Market Movers "${label}" tab not selected after tap ${attempt} - tapping again`);
+            if (!selected && attempt < 3) console.log(`${section} "${label}" tab not selected after tap ${attempt} - tapping again`);
         }
         const rows = await this.driver.$$(this.moversRow);
         const firstDesc = rows.length ? await rows[0].getAttribute('content-desc') : '';
-        const firstSymbol = (firstDesc.trim().match(/^([^.\s]+)\./) || [])[1] || null;
+        const firstSymbol = firstDesc ? moverSymbol(firstDesc) : null;
         // An empty category (e.g. Upper Circuit, All Time Low on "See all") shows "No Data Found!".
         const noData = !rows.length && await this.isElementVisible('android=new UiSelector().description("No Data Found!")', 500);
-        console.log(`Market Movers "${label}" tab - selected: ${selected ? 'PASS' : 'FAIL'} | symbols listed: ${rows.length}${firstSymbol ? ` (first: ${firstSymbol})` : ''}${noData ? ' - "No Data Found!" shown' : ''}`);
+        console.log(`${section} "${label}" tab - selected: ${selected ? 'PASS' : 'FAIL'} | symbols listed: ${rows.length}${firstSymbol ? ` (first: ${firstSymbol})` : ''}${noData ? ' - "No Data Found!" shown' : ''}`);
         return { label, selected, rowCount: rows.length, firstSymbol, noData };
     }
 
@@ -1485,4 +1971,4 @@ class MarketsPage extends BasePage {
     }
 }
 
-module.exports = { MarketsPage, HRA_TABS, HRA_PERIODS, SIR_TABS };
+module.exports = { MarketsPage, HRA_TABS, HRA_PERIODS, SIR_TABS, NXT_OPTION_TOOLS };
