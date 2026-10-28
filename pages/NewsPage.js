@@ -1,16 +1,18 @@
 const BasePage = require('./BasePage');
 
-// News date headers read like "7th Aug" / "31st Jul" - day + ordinal suffix + month abbreviation,
-// no year. MONTHS lets that be turned into a real Date so it can be compared against today.
+// News date headers read like "28 Oct 2026" (current app) or the older "7th Aug" / "31st Jul" - day +
+// optional ordinal suffix + month abbreviation + optional year. MONTHS lets that be turned into a real
+// Date so it can be compared against today.
 const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
 
 function parseNewsDateHeader(text) {
-    const m = text.trim().match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)/);
+    const m = text.trim().match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)(?:\s+(\d{4}))?/);
     if (!m) return null;
     const month = MONTHS[m[2].slice(0, 3).toUpperCase()];
     if (month === undefined) return null;
 
     const day = Number(m[1]);
+    if (m[3]) return new Date(Number(m[3]), month, day);
     const now = new Date();
     let date = new Date(now.getFullYear(), month, day);
     // The header carries no year - if reading it against the current year lands more than a
@@ -42,7 +44,7 @@ const NEWS_TAGS = ['Result', 'Block Deals', 'Equity', 'Commentary', 'Global', 'F
 // blob - it isn't any more (see ui_dumps/news_*.xml), so entries are read node by node in
 // on-screen order.
 const ENTRY_PATTERN = /(?:^|\n)(\d{1,2}:\d{2}:\d{2}\s*(?:AM|PM))\n([^\n]+)$/i;
-const DATE_HEADER_PATTERN = /^\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+$/;
+const DATE_HEADER_PATTERN = /^\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:\s+\d{4})?$/;
 
 class NewsPage extends BasePage {
     constructor(driver) {
@@ -66,7 +68,7 @@ class NewsPage extends BasePage {
         // of the scrollable feed's own content-desc - its content-desc is just the date text, so
         // matching the whole description against this pattern (rather than .contains) is what keeps
         // it from also matching the feed's own much longer content-desc blob.
-        this.stickyDateHeader = 'android=new UiSelector().className("android.view.View").descriptionMatches("^[0-9]{1,2}(st|nd|rd|th)? [A-Za-z]+$")';
+        this.stickyDateHeader = 'android=new UiSelector().className("android.view.View").descriptionMatches("^[0-9]{1,2}(st|nd|rd|th)? [A-Za-z]+( [0-9]{4})?$")';
 
         // Search bar affordance - a full-width Button (bounds confirmed via live inspection) that
         // becomes the editable, focused search field itself once clicked; the app exposes no
@@ -220,7 +222,7 @@ class NewsPage extends BasePage {
         const empty = { raw: null, date: null, latestTime: null, isPastOrNow: null, isWithinLast10Days: null, entryCount: 0, distinctTags: [], mismatches: [] };
         if (await this.isNoDataFound()) {
             console.log('No Data Found for this tab');
-            return empty;
+            return { ...empty, noData: true };
         }
 
         const { stickyDate, entries } = await this.getFeedEntries();
@@ -229,7 +231,7 @@ class NewsPage extends BasePage {
         const headerLine = (entries[0] && entries[0].date) || stickyDate || (await this.getStickyDateHeaderText());
         const date = headerLine ? parseNewsDateHeader(headerLine) : null;
         if (!date) {
-            console.log(`Could not parse a date header from feed (got: "${headerLine}")`);
+            console.log(`FAIL: could not parse a date header from feed (got: "${headerLine}") - the header format may have changed`);
             return { ...empty, raw: headerLine };
         }
 

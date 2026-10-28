@@ -1,4 +1,14 @@
 const BasePage = require('./BasePage');
+const { decodePng, pixelAt } = require('../utils/pngPixels');
+
+// The NSE/BSE toggle under the symbol name is drawn inside the header's merged node - nothing of
+// its own in the tree - so it is read off a screenshot. Offsets are from the header node's top-left
+// (verified live on 1080x2340, header [42,150][1038,362] on the expanded Quote): the label row sits
+// 111px down, the NSE label spans x+100..x+180 and the BSE label x+215..x+295. Labels are white,
+// and the selected one is blue (112,176,224) on a dark-blue pill.
+const TOGGLE_ROW_DY = 111;
+const TOGGLE_SLOTS = [{ name: 'NSE', from: 100, to: 180 }, { name: 'BSE', from: 215, to: 295 }];
+const EQUITY_EXCHANGES = ['NSE', 'BSE'];
 
 // Quote fields come from the app as accessibility strings in one of two shapes:
 //   "<Label>. <Value>., Displays the <Label> value."       (Open/High/Low/Pr. Close/Total Buy Qty/...)
@@ -75,6 +85,7 @@ class QuotesPage extends BasePage {
         this.swipeUpForDetails = 'android=new UiSelector().description("Swipe up for Stock Details")';
         this.advancedOptionsIcon = 'android=new UiSelector().description("Advanced Options")';
         this.addToBasketOption = 'android=new UiSelector().description("Add To Basket")';
+        this.compareWithPeerOption = 'android=new UiSelector().description("Compare with Peer")';
         this.stockSummary = 'android=new UiSelector().descriptionContains("Swipe up to explore quote details")';
         this.anyDescribedElement = 'android=new UiSelector().descriptionMatches(".+")';
     }
@@ -276,6 +287,136 @@ class QuotesPage extends BasePage {
             exchange: head ? head[2].trim() : null,
             event: event ? event[1].trim() : null,
         };
+    }
+
+    // { node, symbol, exchange } for the Quote header ("Stock SEJALLTD, NSE. Last traded ..."),
+    // or null when no Quote is on screen.
+    async getQuoteHeader() {
+        const node = (await this.getDescribedElements()).find(n => n.desc.startsWith('Stock ') && n.desc.includes('Swipe up to explore quote details'));
+        const m = node && node.desc.match(/^Stock\s+(.+?),\s*([A-Za-z]+)\./);
+        return m ? { node, symbol: m[1].trim(), exchange: m[2].trim() } : null;
+    }
+
+    isEquity(exchange) {
+        return EQUITY_EXCHANGES.includes(exchange);
+    }
+
+    // Reads the NSE/BSE toggle (see TOGGLE_SLOTS): which labels are drawn - both for a dual-listed
+    // stock, one or none otherwise - and which one is highlighted.
+    async readExchangeToggle() {
+        const header = await this.getQuoteHeader();
+        if (!header) return null;
+        const img = decodePng(Buffer.from(await this.driver.takeScreenshot(), 'base64'));
+        const { width } = await this.driver.getWindowSize();
+        const scale = img.width / width;
+        const y = (header.node.y1 + TOGGLE_ROW_DY) * scale;
+        const slots = TOGGLE_SLOTS.map(s => {
+            let text = 0, blue = 0;
+            for (let x = header.node.x1 + s.from; x < header.node.x1 + s.to; x++) {
+                const [r, g, b] = pixelAt(img, x * scale, y);
+                if (Math.max(r, g, b) > 150) text++;
+                if (b > 150 && b - r > 60) blue++;
+            }
+            return { ...s, shown: text > 3, blue, x: header.node.x1 + (s.from + s.to) / 2, y: header.node.y1 + TOGGLE_ROW_DY };
+        });
+        const shown = slots.filter(s => s.shown);
+        const highlighted = shown.length ? shown.reduce((a, b) => (b.blue > a.blue ? b : a)) : null;
+        return { ...header, slots: shown, selected: highlighted && highlighted.blue > 3 ? highlighted.name : null };
+    }
+
+    // Checks the highlighted toggle matches the header's exchange, then switches to the other one
+    // (NSE -> BSE or BSE -> NSE) and checks both the header and the highlight follow. With only one
+    // segment shown (or no toggle at all) nothing is tapped.
+    async verifyAndSwitchExchange(timeout = 6000) {
+        const before = await this.readExchangeToggle();
+        if (!before) {
+            console.log('Quote header not found - cannot check the NSE/BSE toggle: FAIL');
+            return false;
+        }
+        if (before.slots.length < 2) {
+            console.log(`Only one segment displayed for ${before.symbol} (${before.exchange}) - toggle not performed`);
+            return true;
+        }
+        const selectedOk = before.selected === before.exchange;
+        console.log(`Toggle selected under ${before.symbol}: ${before.selected || 'none'} (header exchange ${before.exchange}): ${selectedOk ? 'PASS' : 'FAIL'}`);
+
+        const target = before.slots.find(s => s.name !== before.exchange);
+        await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
+            .move({ duration: 0, x: Math.round(target.x), y: Math.round(target.y) })
+            .down().pause(80).up()
+            .perform();
+        console.log(`Clicked ${target.name} on the toggle`);
+
+        let after = null;
+        const deadline = Date.now() + timeout;
+        do {
+            await this.pause(600);
+            after = await this.readExchangeToggle();
+        } while (!(after && after.exchange === target.name && after.selected === target.name) && Date.now() < deadline);
+        const switched = !!after && after.exchange === target.name && after.selected === target.name;
+        console.log(`Switched ${before.exchange} -> ${target.name} (header now ${after ? `${after.symbol}, ${after.exchange}` : 'not found'}, toggle selected ${after ? after.selected || 'none' : 'none'}): ${switched ? 'PASS' : 'FAIL'}`);
+        return selectedOk && switched;
+    }
+
+    // The 52 week section ("52 week range. Year low 381.00. Year high 1036.70., ...") with its
+    // red-to-green range bar and marker drawn just below the labels. Only equity Quotes have it, so
+    // anything else is skipped. The bar is confirmed from the screenshot as saturated pixels in the
+    // node's lower part (the labels themselves are white).
+    async verify52WeekIndicator(exchange, maxSwipes = 2) {
+        if (!this.isEquity(exchange)) {
+            console.log(`52 week low/high indicator: not an equity symbol (${exchange}) - skipped`);
+            return true;
+        }
+        const find = async () => (await this.getDescribedElements()).find(n => n.desc.startsWith('52 week range.'));
+        let node = await find();
+        for (let i = 0; i < maxSwipes && !node; i++) {
+            await this.swipe('down');
+            await this.pause(600);
+            node = await find();
+        }
+        if (!node) {
+            console.log('52 week low/high indicator not displayed: FAIL');
+            return false;
+        }
+        const m = node.desc.match(/Year low ([\d,]+(?:\.\d+)?)\. Year high ([\d,]+(?:\.\d+)?)/);
+        const low = m ? Number(m[1].replace(/,/g, '')) : NaN;
+        const high = m ? Number(m[2].replace(/,/g, '')) : NaN;
+        const valuesOk = !Number.isNaN(low) && !Number.isNaN(high) && low <= high;
+
+        const img = decodePng(Buffer.from(await this.driver.takeScreenshot(), 'base64'));
+        const { width } = await this.driver.getWindowSize();
+        const scale = img.width / width;
+        let coloured = 0, total = 0;
+        const top = node.y1 + (node.y2 - node.y1) * 0.6;
+        for (let y = top; y < node.y2 + 40; y += 3) {
+            for (let x = node.x1; x < node.x2; x += 6) {
+                const [r, g, b] = pixelAt(img, x * scale, Math.min(img.height - 1, y * scale));
+                total++;
+                if (Math.max(r, g, b) - Math.min(r, g, b) > 80) coloured++;
+            }
+        }
+        const barOk = total > 0 && coloured / total > 0.02;
+        console.log(`52 Week Low ${m ? m[1] : '?'} / 52 Week High ${m ? m[2] : '?'} displayed: ${valuesOk ? 'PASS' : 'FAIL'}`);
+        console.log(`52 week range indicator bar drawn: ${barOk ? 'PASS' : 'FAIL'}`);
+        return valuesOk && barOk;
+    }
+
+    // Opens Advanced Options ("..." beside SELL) and, for an equity symbol, checks "Compare with
+    // Peer" is listed. Returns true when it is there to tap.
+    async openAdvancedOptionsForPeer(exchange) {
+        await this.openAdvancedOptions();
+        const listed = await this.isElementVisible(this.compareWithPeerOption, 4000);
+        if (!this.isEquity(exchange)) {
+            console.log(`Compare with Peer ${listed ? 'listed' : 'not listed'} - not an equity symbol (${exchange}), skipped`);
+            return false;
+        }
+        console.log(`"Compare with Peer" listed under Advanced Options: ${listed ? 'PASS' : 'FAIL'}`);
+        return listed;
+    }
+
+    async clickCompareWithPeer() {
+        await this.click(this.compareWithPeerOption);
+        console.log('Clicked "Compare with Peer"');
     }
 
     // The Event tag has no node of its own (it's drawn inside the merged header node), so it's

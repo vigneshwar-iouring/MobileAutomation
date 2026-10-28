@@ -14,7 +14,9 @@ const SEL = {
   hamburgerBtn:     '//*[contains(@content-desc,"Hamburger") or contains(@content-desc,"hamburger")]',
   // "Logout" sits below the fold of the nav drawer, under Profile/Settings.
   logoutMenuItem:   '//*[@content-desc="Logout"]',
-  logoutConfirmYes: '//*[@content-desc="Yes"]',
+  // Dialog's confirm button is labelled "Logout" (older builds: "Yes") - scoped to the
+  // dialog prompt so it can't match the drawer's own "Logout" menu item.
+  logoutConfirmYes: '(//*[@content-desc="Do you want to logout?"]/following::*[@content-desc="Logout" or @content-desc="Yes"] | //*[@content-desc="Yes"])[1]',
 };
 
 class LoginPage extends BasePage {
