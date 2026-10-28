@@ -19,12 +19,12 @@ function printSummary(results) {
     const line = '='.repeat(60);
     console.log(`\n${line}\n SUMMARY - Latest news date/time and tag check per tab\n${line}`);
     for (const r of results) {
-        if (r.raw === null && r.date === null) {
+        if (r.noData) {
             console.log(`  ${r.tab}: No Data Found`);
             continue;
         }
         if (!r.date) {
-            console.log(`  ${r.tab}: Could not parse date (raw: "${r.raw}")`);
+            console.log(`  ${r.tab}: FAIL - could not parse date (raw: "${r.raw}")`);
             continue;
         }
         const dateStatus = !r.isPastOrNow
@@ -199,6 +199,7 @@ async function run() {
 
         console.log('\nTC 25: Clicking "See all" on Market Movers...');
         await marketsPage.clickSeeAllMarketMovers();
+        await driver.pause(1500);
         await marketsPage.verifyMarketMoversScreenOpened();
 
         // The "See all" row has more tabs than Markets' (12 vs 6 when checked live) and is also
@@ -251,7 +252,7 @@ async function run() {
 
             if (await newsPage.isNoDataFound()) {
                 console.log(`No Data Found for "${tabName}" - skipping scroll and search`);
-                results.push({ tab: tabName, ...emptyResult });
+                results.push({ tab: tabName, ...emptyResult, noData: true });
                 continue;
             }
 
