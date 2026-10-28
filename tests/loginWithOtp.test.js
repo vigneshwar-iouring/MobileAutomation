@@ -12,7 +12,7 @@ console.log(`Logging this run to: ${logFile}`);
 const LOGIN_ID = 'TEMPMF11';
 const PASSWORD = 'Globe@12345';
 const LOGIN_ID2 = 'HOGC1103';
-const PASSWORD2 = 'Jaya@0008';
+const PASSWORD2 = 'Jaya@0011';
 const LOGIN_ID3 = 'TEMPMF2';
 const PASSWORD3 = 'Globe@9876';
 const LOGIN_ID4 = 'EKY6998';
@@ -60,8 +60,8 @@ async function run() {
 
         currentStep = 'TC 3: Entering login ID and password...';
         console.log(currentStep);
-        await loginPage.enterLoginId(LOGIN_ID2);
-        await loginPage.enterPassword(PASSWORD2);
+        await loginPage.enterLoginId(LOGIN_ID4);
+        await loginPage.enterPassword(PASSWORD4);
         await loginPage.clickLogin();
 
         // Wrong credentials show a Toast here instead of advancing to OTP - it vanishes from the

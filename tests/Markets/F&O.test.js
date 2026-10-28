@@ -5,6 +5,54 @@ const { createLogger, getFailedTCs } = require('../../utils/logger');
 const { logFile, entries } = createLogger('Markets_FnO');
 console.log(`Logging this run to: ${logFile}`);
 
+// Every OI Analysis tab explains its own build-up/unwinding pattern above its list, so tab `label`'s
+// message must be shown and differ from every tab already in `messages` (label -> message).
+async function verifyOiMessage(marketsPage, where, label, messages) {
+    const message = await marketsPage.getOiAnalysisMessage();
+    const sameAs = [...messages].filter(([, m]) => m === message).map(([l]) => l);
+    console.log(`OI Analysis ${where}"${label}" message: "${message || ''}" - ${!message ? 'FAIL (no message shown)' : sameAs.length ? `FAIL (same as ${sameAs.join(', ')})` : 'PASS (different from the other tabs)'}`);
+    if (message) messages.set(label, message);
+}
+
+// Taps OI Analysis tab `index` (expected to be `label`), checks its message and verifies its list -
+// returns its rows.
+async function selectOiTab(marketsPage, index, label, messages) {
+    const tab = await marketsPage.clickOiAnalysisTab(index);
+    if (!tab) return [];
+    if (tab.label !== label) console.log(`OI Analysis tab ${index} is "${tab.label}", expected "${label}": FAIL`);
+    await verifyOiMessage(marketsPage, '', label, messages);
+    return (await marketsPage.verifyOiAnalysisRows(label)).rows;
+}
+
+async function backToFnoFromOiQuote(marketsPage, quote, label) {
+    if (quote && !(await marketsPage.navigateBackToFnoTab(`${quote.symbol}'s Quote`))) {
+        throw new Error(`Could not get back to the Markets (F&O) screen from the OI Analysis "${label}" Quote`);
+    }
+}
+
+// Back on F&O after a Quote: return to OI Analysis (re-selecting the tab if the app reset it) and
+// verify its list again.
+async function reverifyOiTab(marketsPage, index, label) {
+    if (!(await marketsPage.scrollToOiAnalysis())) {
+        throw new Error('OI Analysis section not found on the F&O tab');
+    }
+    const selectedTab = await marketsPage.getSelectedOiAnalysisTab();
+    if (selectedTab !== label) {
+        console.log(`OI Analysis is on "${selectedTab}" after coming back - re-selecting "${label}"`);
+        await marketsPage.clickOiAnalysisTab(index);
+    }
+    await marketsPage.verifyOiAnalysisRows(label);
+}
+
+// "See all": tab `label` must show its own message (different from every tab in `messages` so far)
+// above its symbols.
+async function verifyOiSeeAllTab(marketsPage, index, label, messages) {
+    const tab = await marketsPage.clickOiAnalysisTab(index);
+    if (!tab) return;
+    await verifyOiMessage(marketsPage, '"See all" ', label, messages);
+    await marketsPage.verifyOiAnalysisRows(`See all ${label}`);
+}
+
 async function run() {
     const driver = await DriverManager.getDriver();
     try {
@@ -251,6 +299,272 @@ async function run() {
         console.log(`\nTC ${tc++}: Clicking BANKEX and verifying Current Expiry, Next Expiry, Far Expiry are listed...`);
         await marketsPage.clickFutureIndexTab('BANKEX');
         await marketsPage.verifyFutureIndexCategories('BANKEX');
+
+        console.log('\nTC 59: Scrolling down to OI Analysis...');
+        if (!(await marketsPage.scrollToOiAnalysis())) {
+            throw new Error('OI Analysis section not found on the F&O tab');
+        }
+
+        // Click-only tab row like the others: tapping the tabs in order brings each next tab into view.
+        // Each tab's own message is checked before "See all" too, against the tabs already visited.
+        const oiTabMessages = new Map();
+        console.log('\nTC 60: Clicking OI Analysis "Long Buildup" and verifying its own message with symbols with expiry, Open Interest and Price...');
+        const longBuildupRows = await selectOiTab(marketsPage, 1, 'Long Buildup', oiTabMessages);
+        console.log('\nTC 61: Clicking the first OI Analysis "Long Buildup" symbol and verifying its Quote screen...');
+        const longBuildupQuote = await marketsPage.openFirstFnoSymbol('OI Analysis "Long Buildup"', longBuildupRows);
+        console.log('\nTC 62: Navigating back from the Quote to the F&O tab...');
+        await backToFnoFromOiQuote(marketsPage, longBuildupQuote, 'Long Buildup');
+        console.log('\nTC 63: Verifying OI Analysis "Long Buildup" lists symbols with expiry under Symbol, Open Interest, Price...');
+        await reverifyOiTab(marketsPage, 1, 'Long Buildup');
+
+        console.log('\nTC 64: Clicking OI Analysis "Long Unwinding" and verifying its own message with symbols with expiry, Open Interest and Price...');
+        const longUnwindingRows = await selectOiTab(marketsPage, 2, 'Long Unwinding', oiTabMessages);
+        console.log('\nTC 65: Clicking the first OI Analysis "Long Unwinding" symbol and verifying its Quote screen...');
+        const longUnwindingQuote = await marketsPage.openFirstFnoSymbol('OI Analysis "Long Unwinding"', longUnwindingRows);
+        console.log('\nTC 66: Navigating back from the Quote to the F&O tab...');
+        await backToFnoFromOiQuote(marketsPage, longUnwindingQuote, 'Long Unwinding');
+        console.log('\nTC 67: Verifying OI Analysis "Long Unwinding" lists symbols with expiry under Symbol, Open Interest, Price...');
+        await reverifyOiTab(marketsPage, 2, 'Long Unwinding');
+
+        console.log('\nTC 68: Clicking OI Analysis "Short Buildup" and verifying its own message with symbols with expiry, Open Interest and Price...');
+        const shortBuildupRows = await selectOiTab(marketsPage, 3, 'Short Buildup', oiTabMessages);
+        console.log('\nTC 69: Clicking the first OI Analysis "Short Buildup" symbol and verifying its Quote screen...');
+        const shortBuildupQuote = await marketsPage.openFirstFnoSymbol('OI Analysis "Short Buildup"', shortBuildupRows);
+        console.log('\nTC 70: Navigating back from the Quote to the F&O tab...');
+        await backToFnoFromOiQuote(marketsPage, shortBuildupQuote, 'Short Buildup');
+        console.log('\nTC 71: Verifying OI Analysis "Short Buildup" lists symbols with expiry under Symbol, Open Interest, Price...');
+        await reverifyOiTab(marketsPage, 3, 'Short Buildup');
+
+        console.log('\nTC 72: Clicking OI Analysis "Short Covering" and verifying its own message with symbols with expiry, Open Interest and Price...');
+        const shortCoveringRows = await selectOiTab(marketsPage, 4, 'Short Covering', oiTabMessages);
+        console.log('\nTC 73: Clicking the first OI Analysis "Short Covering" symbol and verifying its Quote screen...');
+        const shortCoveringQuote = await marketsPage.openFirstFnoSymbol('OI Analysis "Short Covering"', shortCoveringRows);
+        console.log('\nTC 74: Navigating back from the Quote to the F&O tab...');
+        await backToFnoFromOiQuote(marketsPage, shortCoveringQuote, 'Short Covering');
+        console.log('\nTC 75: Verifying OI Analysis "Short Covering" lists symbols with expiry under Symbol, Open Interest, Price...');
+        await reverifyOiTab(marketsPage, 4, 'Short Covering');
+
+        console.log('\nTC 76: Clicking "See all" on OI Analysis...');
+        if (!(await marketsPage.scrollToOiAnalysis())) {
+            throw new Error('OI Analysis section not found on the F&O tab');
+        }
+        await marketsPage.clickSeeAllOiAnalysis();
+        if (!(await marketsPage.verifyOiAnalysisSeeAllOpened())) {
+            throw new Error('OI Analysis "See all" screen did not open');
+        }
+
+        // Every tab explains its own build-up/unwinding pattern above its list, so each tab's message
+        // must be present and different from every other tab's.
+        const oiMessages = new Map();
+        console.log('\nTC 77: "See all" - clicking "Long Buildup" and verifying its own message with symbols...');
+        await verifyOiSeeAllTab(marketsPage, 1, 'Long Buildup', oiMessages);
+        console.log('\nTC 78: "See all" - clicking "Long Unwinding" and verifying its own message with symbols...');
+        await verifyOiSeeAllTab(marketsPage, 2, 'Long Unwinding', oiMessages);
+        console.log('\nTC 79: "See all" - clicking "Short Buildup" and verifying its own message with symbols...');
+        await verifyOiSeeAllTab(marketsPage, 3, 'Short Buildup', oiMessages);
+        console.log('\nTC 80: "See all" - clicking "Short Covering" and verifying its own message with symbols...');
+        await verifyOiSeeAllTab(marketsPage, 4, 'Short Covering', oiMessages);
+
+        console.log('\nTC 81: Navigating back from OI Analysis "See all" to the F&O tab...');
+        if (!(await marketsPage.navigateBackToFnoTab('OI Analysis "See all"'))) {
+            throw new Error('Could not get back to the Markets (F&O) screen from OI Analysis "See all"');
+        }
+
+        console.log('\nTC 82: Scrolling down to Rollover Analysis...');
+        if (!(await marketsPage.scrollToRolloverAnalysis())) {
+            throw new Error('Rollover Analysis section not found on the F&O tab');
+        }
+
+        console.log('\nTC 83: Clicking the first Rollover Analysis symbol and verifying its Quote screen...');
+        const rolloverQuote = await marketsPage.openFirstFnoSymbol('Rollover Analysis', await marketsPage.getRolloverRows());
+
+        console.log('\nTC 84: Navigating back from the Quote to the F&O tab...');
+        if (rolloverQuote && !(await marketsPage.navigateBackToFnoTab(`${rolloverQuote.symbol}'s Quote`))) {
+            throw new Error('Could not get back to the Markets (F&O) screen from the Rollover Analysis Quote');
+        }
+        if (!(await marketsPage.scrollToRolloverAnalysis())) {
+            throw new Error('Rollover Analysis section not found on the F&O tab');
+        }
+
+        console.log('\nTC 85: Verifying Rollover Analysis lists F&O symbols with expiry under Symbol, Percentage%, Rollover cost...');
+        await marketsPage.verifyRolloverRows('INDEX, HIGH');
+
+        console.log('\nTC 86: Verifying Index and High are selected by default...');
+        await marketsPage.verifyRolloverSelection('INDEX', 'HIGH');
+
+        console.log('\nTC 87: Clicking Index, Low and verifying its F&O symbols with expiry...');
+        await marketsPage.selectRollover('INDEX', 'LOW');
+        await marketsPage.verifyRolloverRows('INDEX, LOW');
+
+        console.log('\nTC 88: Clicking Stock, Low and verifying its F&O symbols with expiry...');
+        await marketsPage.selectRollover('STOCK', 'LOW');
+        await marketsPage.verifyRolloverRows('STOCK, LOW');
+
+        console.log('\nTC 89: Clicking Stock, High and verifying its F&O symbols with expiry...');
+        await marketsPage.selectRollover('STOCK', 'HIGH');
+        await marketsPage.verifyRolloverRows('STOCK, HIGH');
+
+        // Leave Rollover Analysis on its default for the next run's TC 86.
+        console.log('\nTC 90: Resetting Rollover Analysis to Index, High...');
+        await marketsPage.selectRollover('INDEX', 'HIGH');
+
+        // "See all" - same steps. High/Low are its "Highest Rollover"/"Lowest Rollover" tabs here.
+        console.log('\nTC 91: Clicking "See all" on Rollover Analysis...');
+        if (!(await marketsPage.scrollToRolloverAnalysis())) {
+            throw new Error('Rollover Analysis section not found on the F&O tab');
+        }
+        await marketsPage.clickSeeAllRollover();
+        if (!(await marketsPage.verifyRolloverSeeAllOpened())) {
+            throw new Error('Rollover Analysis "See all" screen did not open');
+        }
+
+        console.log('\nTC 92: "See all" - clicking the first Rollover Analysis symbol and verifying its Quote screen...');
+        const rolloverSeeAllQuote = await marketsPage.openFirstFnoSymbol('Rollover Analysis "See all"', await marketsPage.getRolloverRows());
+
+        console.log('\nTC 93: Navigating back from the Quote to Rollover Analysis "See all"...');
+        if (rolloverSeeAllQuote && !(await marketsPage.navigateBackToRolloverSeeAll(`${rolloverSeeAllQuote.symbol}'s Quote`))) {
+            throw new Error('Could not get back to Rollover Analysis "See all" from the Quote');
+        }
+
+        console.log('\nTC 94: "See all" - verifying Rollover Analysis lists F&O symbols with expiry under Symbol, Percentage%, Rollover cost...');
+        await marketsPage.verifyRolloverRows('See all INDEX, HIGH');
+
+        console.log('\nTC 95: "See all" - verifying Index and Highest Rollover are selected by default...');
+        await marketsPage.verifyRolloverSeeAllSelection('INDEX', 'HIGH');
+
+        console.log('\nTC 96: "See all" - clicking Index, Lowest Rollover and verifying its F&O symbols with expiry...');
+        await marketsPage.selectRolloverSeeAll('INDEX', 'LOW');
+        await marketsPage.verifyRolloverRows('See all INDEX, LOW');
+
+        console.log('\nTC 97: "See all" - clicking Stock, Lowest Rollover and verifying its F&O symbols with expiry...');
+        await marketsPage.selectRolloverSeeAll('STOCK', 'LOW');
+        await marketsPage.verifyRolloverRows('See all STOCK, LOW');
+
+        console.log('\nTC 98: "See all" - clicking Stock, Highest Rollover and verifying its F&O symbols with expiry...');
+        await marketsPage.selectRolloverSeeAll('STOCK', 'HIGH');
+        await marketsPage.verifyRolloverRows('See all STOCK, HIGH');
+
+        // Leave "See all" on its default for the next run's TC 95.
+        console.log('\nTC 99: "See all" - resetting to Index, Highest Rollover...');
+        await marketsPage.selectRolloverSeeAll('INDEX', 'HIGH');
+
+        console.log('\nTC 100: Navigating back from Rollover Analysis "See all" to the F&O tab...');
+        if (!(await marketsPage.navigateBackToFnoTab('Rollover Analysis "See all"'))) {
+            throw new Error('Could not get back to the Markets (F&O) screen from Rollover Analysis "See all"');
+        }
+
+        console.log('\nTC 101: Scrolling to FII Trend in F&O and verifying its date is not older than 3 days...');
+        let fiiTrend = await marketsPage.scrollToFiiTrend();
+        if (!fiiTrend) throw new Error('FII Trend in F&O section not found on the F&O tab');
+        marketsPage.verifyFiiTrendDate(fiiTrend);
+
+        console.log('\nTC 102: Verifying Stock Futures is selected by default in the dropdown...');
+        marketsPage.verifyFiiTrendFilter(fiiTrend, 'Stock Futures');
+
+        console.log('\nTC 103: Verifying Buy, Sell and Net Positions are displayed in Cr...');
+        marketsPage.verifyFiiTrendRows(fiiTrend);
+
+        console.log('\nTC 104: Verifying Buy, Sell and Net Positions are each shown as their own bar...');
+        let fiiBars = (await marketsPage.verifyFiiTrendBars(fiiTrend)).bars;
+
+        console.log('\nTC 105: Selecting Stock Options and verifying the graph is updated...');
+        let fiiNext = await marketsPage.selectFiiTrendFilter('Stock Options');
+        let fiiNextBars = (await marketsPage.verifyFiiTrendBars(fiiNext)).bars;
+        marketsPage.verifyFiiTrendRows(fiiNext);
+        marketsPage.verifyFiiTrendUpdated(fiiTrend, fiiNext, fiiBars, fiiNextBars);
+        [fiiTrend, fiiBars] = [fiiNext, fiiNextBars];
+
+        console.log('\nTC 106: Selecting Index Futures and verifying the graph is updated...');
+        fiiNext = await marketsPage.selectFiiTrendFilter('Index Futures');
+        fiiNextBars = (await marketsPage.verifyFiiTrendBars(fiiNext)).bars;
+        marketsPage.verifyFiiTrendRows(fiiNext);
+        marketsPage.verifyFiiTrendUpdated(fiiTrend, fiiNext, fiiBars, fiiNextBars);
+        [fiiTrend, fiiBars] = [fiiNext, fiiNextBars];
+
+        console.log('\nTC 107: Selecting Index Options and verifying the graph is updated...');
+        fiiNext = await marketsPage.selectFiiTrendFilter('Index Options');
+        fiiNextBars = (await marketsPage.verifyFiiTrendBars(fiiNext)).bars;
+        marketsPage.verifyFiiTrendRows(fiiNext);
+        marketsPage.verifyFiiTrendUpdated(fiiTrend, fiiNext, fiiBars, fiiNextBars);
+        [fiiTrend, fiiBars] = [fiiNext, fiiNextBars];
+
+        // "See all" - same steps as Equity's FII/DII "See all" (tests/Markets/Equity.test.js TC 103-122),
+        // on F&O's "FII" screen, whose sub-tabs list Stock/Index Futures and Options.
+        marketsPage.useFnoFiiSeeAll();
+        console.log('\nTC 108: Clicking "See All" on FII Trend in F&O and verifying the Daily, Monthly, Yearly tabs and ALL, STOCK, INDEX sub-tabs...');
+        if (!(await marketsPage.clickSeeAllFiiTrend()) || !(await marketsPage.verifyFiiDiiSeeAllOpened())) {
+            throw new Error('FII Trend in F&O "See All" screen did not open with its tabs and sub-tabs');
+        }
+
+        console.log('\nTC 109: Verifying Daily and ALL are selected by default with the same date shown on F&O...');
+        await marketsPage.verifyFiiDiiSeeAllDefault(fiiTrend.dateText);
+
+        console.log('\nTC 110: Daily - scrolling down ALL and verifying the past dates listed...');
+        await marketsPage.verifyFiiDiiHistory('Daily', 'ALL');
+
+        console.log('\nTC 111: Clicking STOCK and verifying only Stock Futures and Stock Options are displayed...');
+        await marketsPage.clickFiiDiiSegment('STOCK');
+
+        console.log('\nTC 112: Daily - scrolling down STOCK and verifying the past dates listed...');
+        await marketsPage.verifyFiiDiiHistory('Daily', 'STOCK');
+
+        console.log('\nTC 113: Clicking INDEX and verifying only Index Futures and Index Options are displayed...');
+        await marketsPage.clickFiiDiiSegment('INDEX');
+
+        console.log('\nTC 114: Daily - scrolling down INDEX and verifying the past dates listed...');
+        await marketsPage.verifyFiiDiiHistory('Daily', 'INDEX');
+
+        console.log('\nTC 115: Clicking Monthly and verifying the current month is displayed...');
+        await marketsPage.clickFiiDiiPeriod('Monthly');
+
+        console.log('\nTC 116: Monthly - clicking ALL and verifying its rows...');
+        await marketsPage.clickFiiDiiSegment('ALL');
+
+        console.log('\nTC 117: Monthly - scrolling down ALL and verifying the past months listed...');
+        await marketsPage.verifyFiiDiiHistory('Monthly', 'ALL');
+
+        console.log('\nTC 118: Monthly - clicking STOCK and verifying its rows...');
+        await marketsPage.clickFiiDiiSegment('STOCK');
+
+        console.log('\nTC 119: Monthly - scrolling down STOCK and verifying the past months listed...');
+        await marketsPage.verifyFiiDiiHistory('Monthly', 'STOCK');
+
+        console.log('\nTC 120: Monthly - clicking INDEX and verifying its rows...');
+        await marketsPage.clickFiiDiiSegment('INDEX');
+
+        console.log('\nTC 121: Monthly - scrolling down INDEX and verifying the past months listed...');
+        await marketsPage.verifyFiiDiiHistory('Monthly', 'INDEX');
+
+        console.log('\nTC 122: Clicking Yearly and verifying the current year is displayed...');
+        await marketsPage.clickFiiDiiPeriod('Yearly');
+
+        console.log('\nTC 123: Yearly - clicking ALL and verifying its rows...');
+        await marketsPage.clickFiiDiiSegment('ALL');
+
+        console.log('\nTC 124: Yearly - scrolling down ALL and verifying the past years listed...');
+        await marketsPage.verifyFiiDiiHistory('Yearly', 'ALL');
+
+        console.log('\nTC 125: Yearly - clicking STOCK and verifying its rows...');
+        await marketsPage.clickFiiDiiSegment('STOCK');
+
+        console.log('\nTC 126: Yearly - scrolling down STOCK and verifying the past years listed...');
+        await marketsPage.verifyFiiDiiHistory('Yearly', 'STOCK');
+
+        console.log('\nTC 127: Yearly - clicking INDEX and verifying its rows...');
+        await marketsPage.clickFiiDiiSegment('INDEX');
+
+        console.log('\nTC 128: Yearly - scrolling down INDEX and verifying the past years listed...');
+        await marketsPage.verifyFiiDiiHistory('Yearly', 'INDEX');
+
+        console.log('\nTC 129: Navigating back from FII "See All" to the F&O tab...');
+        if (!(await marketsPage.navigateBackToFnoTab('FII "See All"'))) {
+            throw new Error('Could not get back to the Markets (F&O) screen from FII "See All"');
+        }
+
+        // Leave the dropdown on its default for the next run's TC 102.
+        console.log('\nTC 130: Resetting the FII Trend in F&O dropdown to Stock Futures...');
+        if (!(await marketsPage.readFiiTrend())) await marketsPage.scrollToFiiTrend();
+        await marketsPage.selectFiiTrendFilter('Stock Futures');
     } catch (err) {
         console.error('Test failed:', err.message);
         console.error(err.stack);

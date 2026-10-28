@@ -44,6 +44,24 @@ const contractExpiry = symbol => {
     const m = (symbol || '').match(/\b(\d{1,2})([A-Z]{3})\b/);
     return m && MONTHS[m[2]] !== undefined ? { day: Number(m[1]), month: MONTHS[m[2]], text: m[0] } : null;
 };
+// OI Analysis rows (verified live): " AMBUJACEM 29DEC FUT. Exchange NFO. Open interest 422400. Open
+// interest change percentage 255.56 percent. Last traded price 355.85. Change 4.40. ...". The list's
+// column headers sit on the tab's description node, one per line: "...sentiments.\nSymbol\nOpen
+// Interest\nPrice".
+const OI_ROW_RE = /^\s*(.+?)\. Exchange (\w+)\. Open interest (\d+)\..*?Last traded price ([\d.]+)\./;
+const OI_COLUMNS = ['Symbol', 'Open Interest', 'Price'];
+// Rollover Analysis rows (verified live): "NIFTY 23NOV FUT. Rollover percentage 7.46 percent.
+// Rollover cost 153.7. Rollover cost percentage 0.67 percent., Double tap to view ...". Its column
+// headers are separate nodes. Each toggle lists its options left to right.
+const ROLLOVER_ROW_RE = /^\s*(.+?)\. Rollover percentage (-?[\d.]+) percent\. Rollover cost (-?[\d.]+)\./;
+const ROLLOVER_COLUMNS = ['Symbol', 'Percentage%', 'Rollover cost'];
+const ROLLOVER_SEGMENTS = ['INDEX', 'STOCK'];
+const ROLLOVER_TYPES = ['HIGH', 'LOW'];
+// Rollover "See all" swaps HIGH/LOW for tabs, in this order.
+const ROLLOVER_SEE_ALL_TABS = { HIGH: 'Highest Rollover', LOW: 'Lowest Rollover' };
+// Index futures' underlyings - how Rollover "See all" tells an INDEX list from a STOCK one, since its
+// segment toggle's own content-desc doesn't report the segment (see getRolloverSeeAllSelection).
+const INDEX_FUTURE_ROOTS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50', 'SENSEX', 'SENSEX50', 'BANKEX'];
 const parseFnoInsightRow = desc => {
     const m = desc.match(/^\s*(.+?)\.\s*([A-Z]+)Last traded price/);
     return { symbol: m ? m[1] : moverSymbol(desc), exchange: m ? m[2] : null, desc };
@@ -78,6 +96,20 @@ const FII_DII_SEGMENTS = {
     STOCK: ['FII Cash', 'DII Cash'],
     INDEX: ['FII Future', 'FII Option'],
 };
+// F&O's "FII Trend in F&O" (verified live): an "As on 27th Oct 2026" date, a dropdown with these
+// filters (Stock Futures by default), and Buy / Sell / Net Positions rows valued "36,284.48 Cr", each
+// with its own custom-drawn bar left of its label. Its "See all" ("FII") is the FII/DII "See all"
+// screen with these rows per sub-tab instead, and an X with no content-desc.
+const FNO_FII_FILTERS = ['Stock Futures', 'Stock Options', 'Index Futures', 'Index Options'];
+const FNO_FII_ROWS = ['Buy', 'Sell', 'Net Positions'];
+const FNO_FII_SEGMENTS = {
+    ALL: FNO_FII_FILTERS,
+    STOCK: ['Stock Futures', 'Stock Options'],
+    INDEX: ['Index Futures', 'Index Options'],
+};
+// A drawn bar pixel: any clearly coloured pixel (green, red, blue bars) - not the grey axis/text.
+const isBarPixel = ([r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b) > 60 && Math.max(r, g, b) > 120;
+const FII_TREND_MIN_BAR_PX = 8;
 // Each "See all" entry is one node: "13th Oct 2026\nFII Cash\n-1,305.13\nDII Cash\n2,439.24\n..."
 // - headed by a date on Daily, "Oct 2026" on Monthly, "2026" on Yearly.
 const FII_DII_ENTRY_HEAD = /^(\d{1,2}(?:st|nd|rd|th)? [A-Za-z]{3} \d{4}|[A-Za-z]{3} \d{4}|\d{4})$/;
@@ -130,6 +162,8 @@ class MarketsPage extends BasePage {
         // "F&O\nTab 2 of 4" - the "F&O Market Insights" heading and its "See all" never say "Tab ".
         this.fnoTab = '//*[starts-with(@content-desc,"F&O") and contains(@content-desc,"Tab 2 of")]';
         this.seeAllFnoInsights = 'android=new UiSelector().descriptionStartsWith("See all F&O Market Insights")';
+        this.seeAllOiAnalysis = 'android=new UiSelector().descriptionStartsWith("See all OI Analysis")';
+        this.seeAllRollover = 'android=new UiSelector().descriptionStartsWith("See all Rollover Analysis")';
         this.fnoInsightsTitle = 'android=new UiSelector().description("F&O Market Insights")';
         // The two dropdowns above the "See all" list read "Expiry filter. Selected All Expiry., Double
         // tap to change expiry." and "Instrument filter. Selected Stock Future., ..." (verified live).
@@ -158,6 +192,9 @@ class MarketsPage extends BasePage {
         this.backButton = 'android=new UiSelector().description("Back, Double tap to go back")';
         this.seeAllFiiDii = 'android=new UiSelector().descriptionStartsWith("See all FII/DII")';
         this.fiiDiiTitle = 'android=new UiSelector().description("FII/DII")';
+        // Which FII "See all" screen the FII/DII "See all" helpers below are driving - Equity's
+        // FII/DII by default, or F&O's FII (see useFnoFiiSeeAll).
+        this.fiiSeeAll = { name: 'FII/DII', title: this.fiiDiiTitle, close: this.backButton, segments: FII_DII_SEGMENTS };
 
         // Global search bar under the index ticker - a Button with no content-desc, only the hint
         // "Search Globe" (verified live). It opens the search screen, whose field is that screen's
@@ -572,6 +609,453 @@ class MarketsPage extends BasePage {
         });
         console.log(`"${tab}" shows ${EXPIRY_CATEGORIES.join(', ')}: ${allOk ? 'PASS' : 'FAIL'}`);
         return allOk;
+    }
+
+    // scrollToFnoSection can stop with only a section's heading and controls on screen (OI Analysis
+    // and Rollover Analysis sit low on F&O) - nudge on until the heading is in the upper half and its
+    // rows are visible below. Back from a Quote, F&O keeps its scroll offset - so when the heading
+    // is already on screen it is used as-is instead of scrolling to the top and back down each time.
+    async scrollFnoSectionIntoView(title, maxNudges = 3) {
+        const onScreen = (await this.getDescribedElements()).some(n => n.desc === title);
+        if (!onScreen && !(await this.scrollToFnoSection(title))) return false;
+        const { height } = await this.driver.getWindowSize();
+        for (let i = 0; i < maxNudges; i++) {
+            const heading = (await this.getDescribedElements()).find(n => n.desc === title);
+            if (heading && heading.y1 < height * 0.5) break;
+            await this.nudgeDown();
+            await this.pause(800);
+        }
+        return true;
+    }
+
+    async scrollToOiAnalysis() {
+        return this.scrollFnoSectionIntoView('OI Analysis');
+    }
+
+    async scrollToRolloverAnalysis() {
+        return this.scrollFnoSectionIntoView('Rollover Analysis');
+    }
+
+    // Rollover Analysis' two toggles (verified live): "Segment. Currently selected INDEX., click left
+    // or right to choose another option." and "Roll over type. Currently selected HIGH., ...". Each
+    // is one node - tapping its left half picks the first option, its right half the second.
+    async getRolloverToggles() {
+        const nodes = await this.getDescribedElements();
+        const read = prefix => {
+            const node = nodes.find(n => n.desc.startsWith(prefix));
+            return node ? { value: (node.desc.match(/Currently selected (\w+)/) || [])[1] || null, node } : null;
+        };
+        return { segment: read('Segment.'), type: read('Roll over type.') };
+    }
+
+    async verifyRolloverSelection(segment, type) {
+        const t = await this.getRolloverToggles();
+        const ok = t.segment?.value === segment && t.type?.value === type;
+        console.log(`Rollover Analysis shows ${t.segment?.value || '?'}, ${t.type?.value || '?'} selected (expected ${segment}, ${type}): ${ok ? 'PASS' : 'FAIL'}`);
+        return ok;
+    }
+
+    // Sets the Segment toggle to `segment` (INDEX/STOCK) and Roll over type to `type` (HIGH/LOW),
+    // tapping only the toggles not already on the wanted option, then checks both.
+    async selectRollover(segment, type) {
+        const toggles = await this.getRolloverToggles();
+        for (const [key, want, options] of [['segment', segment, ROLLOVER_SEGMENTS], ['type', type, ROLLOVER_TYPES]]) {
+            const toggle = toggles[key];
+            if (!toggle) {
+                console.log(`Rollover Analysis ${key} toggle not found: FAIL`);
+                return false;
+            }
+            if (toggle.value === want) continue;
+            const { x1, x2, y1, y2 } = toggle.node;
+            const x = options.indexOf(want) === 0 ? x1 + Math.round((x2 - x1) * 0.2) : x2 - Math.round((x2 - x1) * 0.2);
+            await this.tapNode({ x1: x, x2: x, y1, y2 });
+            await this.pause(2000);
+        }
+        console.log(`Clicked Rollover Analysis ${segment}, ${type}`);
+        return this.verifyRolloverSelection(segment, type);
+    }
+
+    // Rollover Analysis rows on screen, top to bottom: "NIFTY 23NOV FUT. Rollover percentage 7.46
+    // percent. Rollover cost 153.7. ..." - only rows fully above the floating bottom nav.
+    async getRolloverRows() {
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === 'Rollover Analysis');
+        if (!heading) return [];
+        const { height } = await this.driver.getWindowSize();
+        return nodes
+            .filter(n => n.y1 > heading.y2 && n.y2 - n.y1 > 100 && n.y2 < height * 0.95)
+            .map(n => ({ m: n.desc.match(ROLLOVER_ROW_RE), node: n }))
+            .filter(r => r.m)
+            .sort((a, b) => a.node.y1 - b.node.y1)
+            .map(({ m, node }) => ({ symbol: m[1], percentage: Number(m[2]), cost: Number(m[3]), node }));
+    }
+
+    // The list must show the Symbol / Percentage% / Rollover cost column headers, and every row an
+    // F&O future named with its expiry, plus its rollover percentage and cost.
+    async verifyRolloverRows(label) {
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === 'Rollover Analysis');
+        const missing = ROLLOVER_COLUMNS.filter(c => !nodes.some(n => n.desc.trim() === c && heading && n.y1 > heading.y2));
+        console.log(`Rollover Analysis "${label}" - columns ${ROLLOVER_COLUMNS.join(', ')} shown: ${missing.length ? `FAIL - missing ${missing.join(', ')}` : 'PASS'}`);
+        const rows = await this.getRolloverRows();
+        const noData = !rows.length && await this.isElementVisible('android=new UiSelector().descriptionContains("No Data Found")', 500);
+        if (!rows.length) {
+            console.log(`Rollover Analysis "${label}" - symbols listed: 0${noData ? ' - "No Data Found" shown' : ' - FAIL'}`);
+            return { ok: noData && !missing.length, rows, noData };
+        }
+        console.log(`Rollover Analysis "${label}" - symbols listed: ${rows.length} - PASS`);
+        rows.forEach(r => console.log(`  ${r.symbol} | Percentage ${r.percentage}% | Rollover cost ${r.cost}`));
+        const notFno = rows.filter(r => !/\bFUT$/.test(r.symbol) || !contractExpiry(r.symbol));
+        console.log(`All "${label}" symbols are F&O futures with an expiry: ${notFno.length ? `FAIL - ${notFno.map(r => r.symbol).join(', ')}` : 'PASS'}`);
+        return { ok: !missing.length && !notFno.length, rows, noData };
+    }
+
+    async clickSeeAllRollover(timeout = 8000) {
+        await this.click(this.seeAllRollover, timeout);
+        console.log('Clicked "See all" on Rollover Analysis');
+    }
+
+    // "See all" is a full screen titled "Rollover Analysis" with Highest/Lowest Rollover tabs and no
+    // Markets segment tabs.
+    async verifyRolloverSeeAllOpened(timeout = 8000) {
+        const opened = await this.isElementVisible('android=new UiSelector().descriptionStartsWith("Highest Rollover")', timeout)
+            && await this.isElementVisible('android=new UiSelector().description("Rollover Analysis")', 1000)
+            && !(await this.isElementVisible(this.fnoTab, 500));
+        console.log(`Rollover Analysis "See all" screen opened: ${opened ? 'PASS' : 'FAIL'}`);
+        return opened;
+    }
+
+    // Device back from a Quote opened on Rollover "See all" returns to that screen (verified live).
+    async navigateBackToRolloverSeeAll(from) {
+        await this.driver.back();
+        await this.pause(1500);
+        const back = await this.isElementVisible('android=new UiSelector().descriptionStartsWith("Highest Rollover")', 3000)
+            && await this.isElementVisible('android=new UiSelector().description("Rollover Analysis")', 1000);
+        console.log(`Back on Rollover Analysis "See all" from ${from}: ${back ? 'PASS' : 'FAIL'}`);
+        return back;
+    }
+
+    // On "See all", HIGH/LOW is the selected tab. INDEX/STOCK is a left/right toggle like on F&O, but
+    // its content-desc is wrong (verified live): it reads "Roll over type. Currently selected HIGH."
+    // and its value doesn't follow taps - so the segment is read from the symbols listed instead:
+    // all index futures -> INDEX, none -> STOCK, a mix -> null.
+    async getRolloverSeeAllSelection() {
+        let type = null;
+        for (const [value, label] of Object.entries(ROLLOVER_SEE_ALL_TABS)) {
+            const el = await this.driver.$(`android=new UiSelector().descriptionStartsWith("${label}")`);
+            if ((await el.getAttribute('selected').catch(() => null)) === 'true') type = value;
+        }
+        const rows = await this.getRolloverRows();
+        const isIndex = r => INDEX_FUTURE_ROOTS.includes(r.symbol.split(' ')[0]);
+        const segment = !rows.length ? null : rows.every(isIndex) ? 'INDEX' : rows.some(isIndex) ? null : 'STOCK';
+        return { segment, type };
+    }
+
+    async verifyRolloverSeeAllSelection(segment, type) {
+        const s = await this.getRolloverSeeAllSelection();
+        const ok = s.segment === segment && s.type === type;
+        console.log(`Rollover Analysis "See all" shows ${s.segment || '?'} symbols on "${ROLLOVER_SEE_ALL_TABS[s.type] || '?'}" (expected ${segment}, "${ROLLOVER_SEE_ALL_TABS[type]}"): ${ok ? 'PASS' : 'FAIL'}`);
+        return ok;
+    }
+
+    // Picks `type` (HIGH/LOW) by its tab and `segment` (INDEX/STOCK) by tapping the toggle's left or
+    // right half - each only when not already showing - then checks both.
+    async selectRolloverSeeAll(segment, type) {
+        const current = await this.getRolloverSeeAllSelection();
+        if (current.type !== type) {
+            await this.click(`android=new UiSelector().descriptionStartsWith("${ROLLOVER_SEE_ALL_TABS[type]}")`, 5000);
+            await this.pause(2000);
+        }
+        if ((await this.getRolloverSeeAllSelection()).segment !== segment) {
+            const toggle = (await this.getDescribedElements()).find(n => /Currently selected/.test(n.desc));
+            if (!toggle) {
+                console.log('Rollover Analysis "See all" segment toggle not found: FAIL');
+                return false;
+            }
+            const { x1, x2, y1, y2 } = toggle;
+            const x = ROLLOVER_SEGMENTS.indexOf(segment) === 0 ? x1 + Math.round((x2 - x1) * 0.2) : x2 - Math.round((x2 - x1) * 0.2);
+            await this.tapNode({ x1: x, x2: x, y1, y2 });
+            await this.pause(2000);
+        }
+        console.log(`Clicked Rollover Analysis "See all" ${segment}, "${ROLLOVER_SEE_ALL_TABS[type]}"`);
+        return this.verifyRolloverSeeAllSelection(segment, type);
+    }
+
+    // FII Trend in F&O is the last F&O section, so scrolling to the bottom brings it whole on screen.
+    // Returns readFiiTrend()'s snapshot, or null if the heading isn't on screen.
+    async scrollToFiiTrend() {
+        await this.scrollToBoundaryByMovement('down', { maxScrolls: 25 });
+        await this.pause(800);
+        const trend = await this.readFiiTrend();
+        console.log(trend ? '"FII Trend in F&O" section is now visible' : 'Could not bring the "FII Trend in F&O" section on screen: FAIL');
+        return trend;
+    }
+
+    // { dateText, date, filter, filterNode, seeAllNode, rows: [{ label, valueText, value, labelNode,
+    // valueNode }] } for the section as currently shown, or null if its heading isn't on screen.
+    async readFiiTrend() {
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === 'FII Trend in F&O');
+        if (!heading) return null;
+        const below = nodes.filter(n => n.y1 >= heading.y1);
+        const dateNode = below.find(n => /^As on /.test(n.desc.trim()));
+        const dateText = dateNode ? dateNode.desc.trim().replace(/^As on /, '') : null;
+        const filterNode = below.find(n => FNO_FII_FILTERS.includes(n.desc.trim()));
+        const seeAllNode = below.find(n => n.desc === 'See All' && n.y1 < heading.y2 && n.y2 > heading.y1) || null;
+        const rows = FNO_FII_ROWS.map(label => {
+            const labelNode = below.find(n => n.desc === label);
+            if (!labelNode) return null;
+            const mid = (labelNode.y1 + labelNode.y2) / 2;
+            const valueNode = below.find(n => n !== labelNode && n.x1 > labelNode.x2 && n.y1 <= mid && n.y2 >= mid
+                && /^-?[\d,]+(\.\d+)?( Cr)?$/.test(n.desc.trim()));
+            const valueText = valueNode ? valueNode.desc.trim() : null;
+            return { label, valueText, value: valueText === null ? null : Number(valueText.replace(/[^\d.-]/g, '')), labelNode, valueNode };
+        }).filter(Boolean);
+        return { dateText, date: dateText ? parseFiiDiiDate(dateText) : null, filter: filterNode ? filterNode.desc.trim() : null, filterNode, seeAllNode, rows };
+    }
+
+    // The "As on" date must be today or at most `maxDays` calendar days back (a Monday still shows
+    // Friday's figures).
+    verifyFiiTrendDate(trend, maxDays = 3) {
+        if (!trend || !trend.date) {
+            console.log(`FII Trend in F&O date displayed: FAIL (${trend && trend.dateText ? `could not parse "${trend.dateText}"` : 'not shown'})`);
+            return false;
+        }
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const daysOld = Math.round((today - trend.date) / (24 * 60 * 60 * 1000));
+        const ok = daysOld >= 0 && daysOld <= maxDays;
+        console.log(`FII Trend in F&O date "${trend.dateText}" - ${daysOld} day(s) old, not older than ${maxDays} days: ${ok ? 'PASS' : daysOld < 0 ? 'FAIL (in the future)' : 'FAIL'}`);
+        return ok;
+    }
+
+    // Exactly Buy, Sell and Net Positions, in that order, each valued in crores ("36,284.48 Cr").
+    verifyFiiTrendRows(trend, label = trend && trend.filter) {
+        const rows = trend ? trend.rows : [];
+        const labels = rows.map(r => r.label);
+        const orderOk = labels.length === FNO_FII_ROWS.length && FNO_FII_ROWS.every((l, i) => labels[i] === l);
+        console.log(`FII Trend in F&O "${label}" rows: ${labels.join(', ') || 'none'} - ${orderOk ? 'PASS' : `FAIL (expected ${FNO_FII_ROWS.join(', ')})`}`);
+        let valuesOk = rows.length > 0;
+        rows.forEach(r => {
+            const ok = r.valueText !== null && / Cr$/.test(r.valueText) && !Number.isNaN(r.value);
+            valuesOk = valuesOk && ok;
+            console.log(`  ${r.label}: ${r.valueText === null ? 'value not shown' : r.valueText} - ${ok ? 'PASS' : 'FAIL (expected a value in Cr)'}`);
+        });
+        return orderOk && valuesOk;
+    }
+
+    // Each row's own bar, read from a screenshot along the row's midline left of its label (the bars
+    // are drawn only): { label, px, colour } - px is the bar's length in coloured pixels.
+    async measureFiiTrendBars(trend) {
+        const rows = trend ? trend.rows : [];
+        if (!rows.length) return [];
+        const img = decodePng(Buffer.from(await this.driver.takeScreenshot(), 'base64'));
+        const { width } = await this.driver.getWindowSize();
+        const scale = img.width / width;
+        return rows.map(r => {
+            const y = ((r.labelNode.y1 + r.labelNode.y2) / 2) * scale;
+            let px = 0, sum = [0, 0, 0];
+            for (let x = 0; x < Math.round((r.labelNode.x1 - 5) * scale); x++) {
+                const p = pixelAt(img, x, y);
+                if (!isBarPixel(p)) continue;
+                px++;
+                sum = sum.map((s, i) => s + p[i]);
+            }
+            const [cr, cg, cb] = sum;
+            const colour = !px ? 'none' : cg >= cr && cg >= cb ? 'green' : cr >= cb ? 'red' : 'blue';
+            return { label: r.label, px, colour };
+        });
+    }
+
+    // Buy, Sell and Net Positions must each be drawn as their own bar.
+    async verifyFiiTrendBars(trend, label = trend && trend.filter) {
+        const bars = await this.measureFiiTrendBars(trend);
+        let ok = bars.length === FNO_FII_ROWS.length;
+        bars.forEach(b => {
+            const drawn = b.px >= FII_TREND_MIN_BAR_PX;
+            ok = ok && drawn;
+            console.log(`  ${b.label}: ${drawn ? `${b.colour} bar, ${b.px}px long` : 'no bar drawn'} - ${drawn ? 'PASS' : 'FAIL'}`);
+        });
+        console.log(`FII Trend in F&O "${label}" - Buy, Sell, Net Positions each shown as its own bar: ${ok ? 'PASS' : 'FAIL'}`);
+        return { ok, bars };
+    }
+
+    verifyFiiTrendFilter(trend, expected) {
+        const ok = !!trend && trend.filter === expected;
+        console.log(`FII Trend in F&O dropdown shows "${trend && trend.filter || 'nothing'}" (expected "${expected}"): ${ok ? 'PASS' : 'FAIL'}`);
+        return ok;
+    }
+
+    // Opens the dropdown, picks `filter`, and returns the section re-read once the dropdown shows it.
+    async selectFiiTrendFilter(filter, timeout = 6000) {
+        const current = await this.readFiiTrend();
+        if (!current || !current.filterNode) {
+            console.log('FII Trend in F&O dropdown not found: FAIL');
+            return current;
+        }
+        await this.tapNode(current.filterNode);
+        await this.pause(1200);
+        const option = (await this.getDescribedElements()).filter(n => n.desc === filter && n.clickable).pop();
+        if (!option) {
+            console.log(`FII Trend in F&O dropdown option "${filter}" not found: FAIL`);
+            await this.driver.back();
+            return current;
+        }
+        await this.tapNode(option);
+        console.log(`Selected "${filter}" in the FII Trend in F&O dropdown`);
+        let trend = null;
+        const deadline = Date.now() + timeout;
+        do {
+            await this.pause(800);
+            trend = await this.readFiiTrend();
+        } while (!(trend && trend.filter === filter) && Date.now() < deadline);
+        this.verifyFiiTrendFilter(trend, filter);
+        return trend;
+    }
+
+    // After a new filter, the graph must change: different Buy/Sell/Net Positions values, or bars.
+    verifyFiiTrendUpdated(before, after, beforeBars, afterBars) {
+        const values = t => (t ? t.rows.map(r => r.valueText).join(' | ') : '');
+        const lengths = b => b.map(x => x.px).join(' | ');
+        const ok = values(before) !== values(after) || lengths(beforeBars) !== lengths(afterBars);
+        console.log(`FII Trend in F&O graph updated from "${before && before.filter}" to "${after && after.filter}" (${values(after) || 'no values'}): ${ok ? 'PASS' : 'FAIL (same values and bars as before)'}`);
+        return ok;
+    }
+
+    async clickSeeAllFiiTrend() {
+        const trend = await this.readFiiTrend() || await this.scrollToFiiTrend();
+        if (!trend || !trend.seeAllNode) {
+            console.log('"See All" on FII Trend in F&O not found: FAIL');
+            return false;
+        }
+        await this.tapNode(trend.seeAllNode);
+        console.log('Clicked "See All" on FII Trend in F&O');
+        return true;
+    }
+
+    // Points the FII/DII "See all" helpers (verifyFiiDiiSeeAllOpened, clickFiiDiiSegment,
+    // verifyFiiDiiHistory, ...) at F&O's "FII" screen: its title, its X (no content-desc - the first
+    // clickable image), and its rows per sub-tab.
+    useFnoFiiSeeAll() {
+        this.fiiSeeAll = {
+            name: 'FII',
+            title: 'android=new UiSelector().description("FII")',
+            close: '(//android.widget.ImageView[@clickable="true"])[1]',
+            segments: FNO_FII_SEGMENTS,
+        };
+    }
+
+    // OI Analysis tabs on screen ("Long Buildup\nTab 1 of 4", ...) - those below its heading, so the
+    // F&O segment tabs (also "of 4") never count.
+    async getOiAnalysisTabs() {
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === 'OI Analysis');
+        if (!heading) return [];
+        return nodes
+            .filter(n => n.y1 >= heading.y2)
+            .map(n => n.desc.match(/^(.+)\nTab (\d+) of (\d+)$/))
+            .filter(Boolean)
+            .map(m => ({ label: m[1], index: Number(m[2]), total: Number(m[3]) }));
+    }
+
+    async getSelectedOiAnalysisTab() {
+        for (const t of await this.getOiAnalysisTabs()) {
+            const el = await this.driver.$(`(//*[contains(@content-desc,"Tab ${t.index} of ${t.total}")])[last()]`);
+            if ((await el.getAttribute('selected').catch(() => null)) === 'true') return t.label;
+        }
+        return null;
+    }
+
+    // Taps OI Analysis tab `index` and checks it reports selected. Same click-only tab row as the
+    // others - a tab only enters the tree once its neighbour is tapped, so the visible tab nearest to
+    // `index` is tapped until `index` shows up (e.g. after the row was reset, or left scrolled).
+    async clickOiAnalysisTab(index, maxSteps = 4) {
+        let tab = null;
+        for (let i = 0; i <= maxSteps; i++) {
+            const tabs = await this.getOiAnalysisTabs();
+            tab = tabs.find(t => t.index === index);
+            if (tab || !tabs.length) break;
+            const nearest = tabs.reduce((a, b) => (Math.abs(b.index - index) < Math.abs(a.index - index) ? b : a));
+            await (await this.driver.$(`(//*[contains(@content-desc,"Tab ${nearest.index} of ${nearest.total}")])[last()]`)).click();
+            await this.pause(800);
+        }
+        if (!tab) {
+            console.log(`OI Analysis tab ${index} not found: FAIL`);
+            return null;
+        }
+        const sel = `(//*[contains(@content-desc,"Tab ${tab.index} of ${tab.total}")])[last()]`;
+        let selected = false;
+        for (let attempt = 1; attempt <= 3 && !selected; attempt++) {
+            await (await this.driver.$(sel)).click();
+            await this.pause(1500);
+            selected = (await (await this.driver.$(sel)).getAttribute('selected').catch(() => null)) === 'true';
+        }
+        console.log(`Clicked OI Analysis "${tab.label}" tab - selected: ${selected ? 'PASS' : 'FAIL'}`);
+        return { label: tab.label, selected };
+    }
+
+    // OI Analysis rows on screen, top to bottom - only rows fully above the floating bottom nav, so
+    // the first one is safe to tap.
+    async getOiAnalysisRows() {
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === 'OI Analysis');
+        if (!heading) return [];
+        const { height } = await this.driver.getWindowSize();
+        return nodes
+            .filter(n => n.y1 > heading.y2 && n.y2 - n.y1 > 100 && n.y2 < height * 0.95)
+            .map(n => ({ m: n.desc.match(OI_ROW_RE), node: n }))
+            .filter(r => r.m)
+            .sort((a, b) => a.node.y1 - b.node.y1)
+            .map(({ m, node }) => ({ symbol: m[1], exchange: m[2], openInterest: Number(m[3]), price: Number(m[4]), node }));
+    }
+
+    // `label`'s list must show the Symbol / Open Interest / Price column headers, and every row an
+    // F&O contract named with its expiry, plus its open interest and price.
+    async verifyOiAnalysisRows(label) {
+        const nodes = await this.getDescribedElements();
+        const header = nodes.find(n => OI_COLUMNS.every(c => n.desc.split('\n').map(l => l.trim()).includes(c)));
+        console.log(`OI Analysis "${label}" - columns ${OI_COLUMNS.join(', ')} shown: ${header ? 'PASS' : 'FAIL'}`);
+        const rows = await this.getOiAnalysisRows();
+        const noData = !rows.length && await this.isElementVisible('android=new UiSelector().descriptionContains("No Data Found")', 500);
+        if (!rows.length) {
+            console.log(`OI Analysis "${label}" - symbols listed: 0${noData ? ' - "No Data Found" shown' : ' - FAIL'}`);
+            return { ok: noData && !!header, rows, noData };
+        }
+        console.log(`OI Analysis "${label}" - symbols listed: ${rows.length} - PASS`);
+        rows.forEach(r => console.log(`  ${r.symbol} (${r.exchange}) | Open Interest ${r.openInterest} | Price ${r.price}`));
+        const nonFno = rows.filter(r => !FNO_EXCHANGES.includes(r.exchange));
+        console.log(`All "${label}" symbols are F&O (${FNO_EXCHANGES.join('/')}) contracts: ${nonFno.length ? `FAIL - ${nonFno.map(r => `${r.symbol} (${r.exchange})`).join(', ')}` : 'PASS'}`);
+        const noExpiry = rows.filter(r => !contractExpiry(r.symbol));
+        console.log(`All "${label}" symbols show an expiry: ${noExpiry.length ? `FAIL - ${noExpiry.map(r => r.symbol).join(', ')}` : 'PASS'}`);
+        const noValues = rows.filter(r => !(r.openInterest > 0) || !(r.price > 0));
+        console.log(`All "${label}" symbols show Open Interest and Price: ${noValues.length ? `FAIL - ${noValues.map(r => r.symbol).join(', ')}` : 'PASS'}`);
+        return { ok: !!header && !nonFno.length && !noExpiry.length && !noValues.length, rows, noData };
+    }
+
+    // The explanation shown above the selected tab's list ("The prices and the open interest (OI),
+    // both are rising. ...") - the text before the Symbol / Open Interest / Price headers on the
+    // same node (verified live), or null.
+    async getOiAnalysisMessage() {
+        const node = (await this.getDescribedElements())
+            .find(n => OI_COLUMNS.every(c => n.desc.split('\n').map(l => l.trim()).includes(c)));
+        if (!node) return null;
+        const lines = node.desc.split('\n').map(l => l.trim());
+        return lines.slice(0, lines.indexOf(OI_COLUMNS[0])).join(' ').trim() || null;
+    }
+
+    async clickSeeAllOiAnalysis(timeout = 8000) {
+        await this.click(this.seeAllOiAnalysis, timeout);
+        console.log('Clicked "See all" on OI Analysis');
+    }
+
+    // "See all" opens a full screen titled "OI Analysis" with a back button and the same tabs - and
+    // without the Markets segment tabs.
+    async verifyOiAnalysisSeeAllOpened(timeout = 8000) {
+        const opened = await this.isElementVisible(this.backButton, timeout)
+            && await this.isElementVisible('android=new UiSelector().description("OI Analysis")', 2000)
+            && !(await this.isElementVisible(this.fnoTab, 500));
+        console.log(`OI Analysis "See all" screen opened: ${opened ? 'PASS' : 'FAIL'}`);
+        return opened;
     }
 
     async isTrendingTabSelected(label) {
@@ -1733,17 +2217,17 @@ class MarketsPage extends BasePage {
     // The "See all" screen: X (Back) + "FII/DII" title, the Daily/Monthly/Yearly tabs and the
     // ALL/STOCK/INDEX sub-tabs. The Equity tab disappearing confirms it isn't still Markets.
     async verifyFiiDiiSeeAllOpened(timeout = 8000) {
-        const backVisible = await this.isElementVisible(this.backButton, timeout);
-        const titleVisible = backVisible && await this.isElementVisible(this.fiiDiiTitle, 2000);
+        const backVisible = await this.isElementVisible(this.fiiSeeAll.close, timeout);
+        const titleVisible = backVisible && await this.isElementVisible(this.fiiSeeAll.title, 2000);
         const leftMarkets = titleVisible && !(await this.isElementVisible(this.equityTab, 500));
         const nodes = leftMarkets ? await this.getDescribedElements() : [];
         const tabs = FII_DII_PERIODS.filter(p => nodes.some(n => n.desc.startsWith(`${p}\nTab `)));
-        const segments = Object.keys(FII_DII_SEGMENTS).filter(s => nodes.some(n => n.desc === s));
-        const opened = leftMarkets && tabs.length === FII_DII_PERIODS.length && segments.length === Object.keys(FII_DII_SEGMENTS).length;
+        const segments = Object.keys(this.fiiSeeAll.segments).filter(s => nodes.some(n => n.desc === s));
+        const opened = leftMarkets && tabs.length === FII_DII_PERIODS.length && segments.length === Object.keys(this.fiiSeeAll.segments).length;
         const why = !backVisible ? 'no Back button' : !titleVisible ? 'no title' : !leftMarkets ? 'Markets still on screen' : 'opened';
-        console.log(`FII/DII "See all" screen opened (${why}): ${leftMarkets ? 'PASS' : 'FAIL'}`);
+        console.log(`${this.fiiSeeAll.name} "See all" screen opened (${why}): ${leftMarkets ? 'PASS' : 'FAIL'}`);
         console.log(`  Tabs displayed: ${tabs.join(', ') || 'none'} - ${tabs.length === FII_DII_PERIODS.length ? 'PASS' : `FAIL (expected ${FII_DII_PERIODS.join(', ')})`}`);
-        console.log(`  Sub-tabs displayed: ${segments.join(', ') || 'none'} - ${segments.length === Object.keys(FII_DII_SEGMENTS).length ? 'PASS' : `FAIL (expected ${Object.keys(FII_DII_SEGMENTS).join(', ')})`}`);
+        console.log(`  Sub-tabs displayed: ${segments.join(', ') || 'none'} - ${segments.length === Object.keys(this.fiiSeeAll.segments).length ? 'PASS' : `FAIL (expected ${Object.keys(this.fiiSeeAll.segments).join(', ')})`}`);
         return opened;
     }
 
@@ -1775,7 +2259,7 @@ class MarketsPage extends BasePage {
         const img = decodePng(Buffer.from(await this.driver.takeScreenshot(), 'base64'));
         const { width } = await this.driver.getWindowSize();
         const scale = img.width / width;
-        for (const seg of Object.keys(FII_DII_SEGMENTS)) {
+        for (const seg of Object.keys(this.fiiSeeAll.segments)) {
             const n = nodes.find(x => x.desc === seg);
             if (!n) continue;
             // Sample a horizontal strip just inside the pill's top edge, clear of the label text.
@@ -1792,7 +2276,7 @@ class MarketsPage extends BasePage {
 
     // Logs and checks that every listed entry shows exactly `segment`'s rows, in order.
     logFiiDiiEntries(entries, segment) {
-        const expected = FII_DII_SEGMENTS[segment];
+        const expected = this.fiiSeeAll.segments[segment];
         let ok = entries.length > 0;
         entries.forEach(e => {
             const labels = e.rows.map(r => r.label);
@@ -1830,7 +2314,7 @@ class MarketsPage extends BasePage {
         }
         await this.tapNode(node);
         console.log(`Clicked "${segment}" on FII/DII`);
-        const expected = FII_DII_SEGMENTS[segment];
+        const expected = this.fiiSeeAll.segments[segment];
         const matches = e => e.rows.length === expected.length && expected.every((l, i) => e.rows[i].label === l);
         let entries = [];
         const deadline = Date.now() + timeout;
@@ -1838,6 +2322,10 @@ class MarketsPage extends BasePage {
             await this.pause(600);
             entries = await this.getFiiDiiEntries();
         } while (!(entries.length && entries.every(matches)) && Date.now() < deadline);
+        // A sub-tab can open part-way down its list, left over from the previous sub-tab's scroll
+        // (seen live: Yearly STOCK opened at 2024, hiding 2026/2025) - start from its latest entry.
+        await this.scrollToBoundaryByMovement('up', { maxScrolls: 10 });
+        entries = await this.getFiiDiiEntries();
         const selected = await this.getSelectedFiiDiiSegment();
         console.log(`"${segment}" sub-tab selected (selected: ${selected || 'none'}): ${selected === segment ? 'PASS' : 'FAIL'}`);
         const rowsOk = this.logFiiDiiEntries(entries, segment);
@@ -1882,7 +2370,8 @@ class MarketsPage extends BasePage {
     // days on Daily, 13 months on Monthly, 6 years on Yearly, verified live; the tab rows stay
     // pinned) and checks the past entries: more than one listed, newest first with no repeats,
     // none in the future, each with only `segment`'s rows; on Daily weekdays only, on Monthly/Yearly
-    // no month/year skipped. Scrolls back to the top afterwards so the next tab starts from the latest.
+    // no month/year skipped, and the latest being the current month/year. Starts from the top (a list
+    // can be left part-way down) and scrolls back there afterwards so the next tab starts from the latest.
     async verifyFiiDiiHistory(period, segment, maxScrolls = 30) {
         const entries = new Map();
         const collect = async () => {
@@ -1892,6 +2381,7 @@ class MarketsPage extends BasePage {
             }
             return added;
         };
+        await this.scrollToBoundaryByMovement('up', { maxScrolls: 10 });
         await collect();
         for (let i = 0; i < maxScrolls; i++) {
             await this.swipe('down');
@@ -1901,11 +2391,15 @@ class MarketsPage extends BasePage {
         const list = [...entries.values()];
         console.log(`${period} / ${segment} - ${list.length} entries listed after scrolling: ${list.map(e => e.period).join(', ') || 'none'}`);
 
-        const expected = FII_DII_SEGMENTS[segment];
+        const expected = this.fiiSeeAll.segments[segment];
         const now = new Date();
         const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         const problems = [];
         if (list.length < 2) problems.push('no past entries listed');
+        if (period !== 'Daily') {
+            const current = period === 'Monthly' ? `${now.toDateString().slice(4, 7)} ${now.getFullYear()}` : String(now.getFullYear());
+            if (list.length && list[0].period !== current) problems.push(`latest entry is ${list[0].period}, not the current ${period === 'Monthly' ? 'month' : 'year'} ${current}`);
+        }
         list.forEach((e, i) => {
             const date = parseFiiDiiPeriod(e.period);
             const labels = e.rows.map(r => r.label);
