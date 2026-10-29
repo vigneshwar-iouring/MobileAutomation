@@ -38,6 +38,19 @@ const moverSymbol = desc => (desc.match(/Double tap to view (.+?) details/) || d
 // F&O Market Insights rows put the exchange straight after the contract, with no separator before
 // "Last traded price" (verified live): " KEI 27OCT FUT. NFOLast traded price 3881.70. ...".
 const FNO_EXCHANGES = ['NFO', 'BFO'];
+// Commodity Market Insights rows read "... GOLD 05DEC FUT. MCXLast traded price ..." (see
+// Regression/New_Regression.spec.js MARKET_SEL), so they parse like F&O's.
+const COMMODITY_EXCHANGES = ['MCX'];
+// Currency rows read " GBPINR 26NOV FUT. CDSLast traded price ..." (verified live).
+const CURRENCY_EXCHANGES = ['CDS'];
+// Per-segment settings: the segment tab's name, the "<Segment> Market Insights", trending and "Top"
+// section headings, the exchanges their symbols must belong to, and the contract type those
+// exchanges trade.
+const INSIGHTS = {
+    fno: { segment: 'F&O', section: 'F&O Market Insights', trending: 'Trending Options', exchanges: FNO_EXCHANGES, kind: 'F&O' },
+    commodity: { segment: 'Commodity', section: 'Commodity Market Insights', trending: 'Trending Commodities Options', top: 'Top Commodities', exchanges: COMMODITY_EXCHANGES, kind: 'Commodity' },
+    currency: { segment: 'Currency', section: 'Currency Market Insights', trending: 'Trending Currencies Options', top: 'Top Currencies', exchanges: CURRENCY_EXCHANGES, kind: 'Currency' },
+};
 // Expiry a contract name carries as DDMON ("KAYNES 27OCT FUT" -> { day: 27, month: 9, text:
 // "27OCT" }), or null.
 const contractExpiry = symbol => {
@@ -48,7 +61,9 @@ const contractExpiry = symbol => {
 // interest change percentage 255.56 percent. Last traded price 355.85. Change 4.40. ...". The list's
 // column headers sit on the tab's description node, one per line: "...sentiments.\nSymbol\nOpen
 // Interest\nPrice".
-const OI_ROW_RE = /^\s*(.+?)\. Exchange (\w+)\. Open interest (\d+)\..*?Last traded price ([\d.]+)\./;
+// Values can be blank (Currency, seen live: "Open interest . ... Last traded price . Change") - the
+// row is still matched, and its Open Interest / Price read as 0 so the value check reports it.
+const OI_ROW_RE = /^\s*(.+?)\. Exchange (\w+)\. Open interest (\d*)\..*?Last traded price ([\d.]*)\./;
 const OI_COLUMNS = ['Symbol', 'Open Interest', 'Price'];
 // Rollover Analysis rows (verified live): "NIFTY 23NOV FUT. Rollover percentage 7.46 percent.
 // Rollover cost 153.7. Rollover cost percentage 0.67 percent., Double tap to view ...". Its column
@@ -75,6 +90,17 @@ const NXT_OPTION_TOOLS = {
     'IV Analysis': ['IV Charts', 'IVR-IVP Scan'],
     'OI Analysis': ['OI', 'OI Change', 'PCR Chart'],
 };
+
+// What each NxtOption tool's screen is exercised with once open, and how long each tap is given to
+// load its data/graph. Labels as Regression R52/R54/R56 tap them (pages/NxtOption/NxtOptionPage.js).
+const NXT_OPTION_TOOL_TAPS = {
+    'Strategy Builder': { labels: ['Buy Call'], waitMs: 5000 },
+    'IV Analysis': { labels: ['IV Charts', 'IVR-IVP Scan'], waitMs: 3000 },
+    'OI Analysis': { labels: ['OI', 'OI Change', 'PCR Chart'], waitMs: 3000 },
+};
+
+// Same loader NxtOptionPage watches for: a ProgressBar or a "Loading..."/"Please wait" label.
+const NXT_OPTION_LOADER = '//android.widget.ProgressBar | //*[contains(translate(@content-desc,"LOADINGPLEASWT","loadingpleaswt"),"loading") or contains(translate(@content-desc,"LOADINGPLEASWT","loadingpleaswt"),"please wait")]';
 
 // Left-to-right order of the "Trading Tools & Products" quick-access row (verified live). The row
 // is a horizontal scroller that keeps its scroll offset between visits, so any one of these can be
@@ -165,6 +191,16 @@ class MarketsPage extends BasePage {
         this.seeAllOiAnalysis = 'android=new UiSelector().descriptionStartsWith("See all OI Analysis")';
         this.seeAllRollover = 'android=new UiSelector().descriptionStartsWith("See all Rollover Analysis")';
         this.fnoInsightsTitle = 'android=new UiSelector().description("F&O Market Insights")';
+        // "Commodity\nTab 3 of 4" (same position Regression/New_Regression.spec.js taps), with the
+        // same Market Insights section / "See all" shape as F&O.
+        this.commodityTab = '//*[starts-with(@content-desc,"Commodity") and contains(@content-desc,"Tab 3 of")]';
+        this.seeAllCommodityInsights = 'android=new UiSelector().descriptionStartsWith("See All")';
+        this.commodityInsightsTitle = 'android=new UiSelector().description("Commodity Market Insights")';
+        this.topCommoditiesHeading = INSIGHTS.commodity.top;
+        // "Currency\nTab 4 of 4" - same Market Insights / Trending / Top / OI Analysis layout as
+        // Commodity, minus the NxtOption banner, and Top Currencies has no tab row (verified live).
+        this.currencyTab = '//*[starts-with(@content-desc,"Currency") and contains(@content-desc,"Tab 4 of")]';
+        this.seeAllTopCommodities = 'android=new UiSelector().descriptionStartsWith("See All")';
         // The two dropdowns above the "See all" list read "Expiry filter. Selected All Expiry., Double
         // tap to change expiry." and "Instrument filter. Selected Stock Future., ..." (verified live).
         this.expiryFilter = 'android=new UiSelector().descriptionStartsWith("Expiry filter")';
@@ -172,6 +208,7 @@ class MarketsPage extends BasePage {
         // Banner below F&O Market Insights ("Explore the Smart Option Trading\nwith our new strategy
         // builder NxtOption"). Tapping it opens a popup over a full-screen "Dismiss" scrim.
         this.nxtOptionBanner = 'android=new UiSelector().descriptionStartsWith("Explore the Smart Option Trading")';
+        this.optionChainButton = 'android=new UiSelector().descriptionStartsWith("Option chain Button")';
         // Trending Options on F&O: "Most Traded\nTab 1 of 2" / "Highest OI\nTab 2 of 2", with real
         // selected="true" on the current tab (verified live).
         this.trendingTab = label => `//*[starts-with(@content-desc,"${label}") and contains(@content-desc," of 2")]`;
@@ -248,16 +285,39 @@ class MarketsPage extends BasePage {
 
     // Taps the F&O segment tab and checks it reports selected="true" (same real attribute as Equity).
     async clickFnoTab(timeout = 8000) {
-        await this.click(this.fnoTab, timeout);
-        console.log('Clicked F&O tab');
+        return this.clickSegmentTab('F&O', this.fnoTab, timeout);
+    }
+
+    // Commodity carries the same real selected="true" attribute as the other segment tabs.
+    async clickCommodityTab(timeout = 8000) {
+        return this.clickSegmentTab('Commodity', this.commodityTab, timeout);
+    }
+
+    async clickCurrencyTab(timeout = 8000) {
+        return this.clickSegmentTab('Currency', this.currencyTab, timeout);
+    }
+
+    // Segment tab selector for an INSIGHTS entry.
+    segmentTabOf(insights) {
+        return { 'F&O': this.fnoTab, Commodity: this.commodityTab, Currency: this.currencyTab }[insights.segment];
+    }
+
+    async isSegmentTabSelected(selector) {
+        return (await (await this.driver.$(selector)).getAttribute('selected').catch(() => null)) === 'true';
+    }
+
+    async clickSegmentTab(name, selector, timeout = 8000) {
+        await this.click(selector, timeout);
+        console.log(`Clicked ${name} tab`);
         await this.pause(2000);
-        const selected = (await (await this.driver.$(this.fnoTab)).getAttribute('selected').catch(() => null)) === 'true';
-        console.log(`F&O tab selected: ${selected ? 'PASS' : 'FAIL'}`);
+        const selected = await this.isSegmentTabSelected(selector);
+        console.log(`${name} tab selected: ${selected ? 'PASS' : 'FAIL'}`);
         return selected;
     }
 
-    // F&O Market Insights rows currently on screen, as { symbol, exchange, desc, node }. Same row shape as
-    // Equity's Market Movers ("..., or swipe right for next category"), so moversRow's test is reused.
+    // F&O (or Commodity) Market Insights rows currently on screen, as { symbol, exchange, desc, node }.
+    // Same row shape as Equity's Market Movers ("..., or swipe right for next category"), so
+    // moversRow's test is reused.
     async getFnoInsightRows() {
         const nodes = await this.getDescribedElements();
         return nodes
@@ -267,20 +327,39 @@ class MarketsPage extends BasePage {
 
     // Logs whether `label` lists any symbols, and whether every one is an F&O (NFO/BFO) contract.
     logFnoInsightRows(label, rows) {
+        return this.logInsightRows(INSIGHTS.fno, label, rows);
+    }
+
+    // Logs whether `label` lists any symbols, and whether every one is on one of `insights`'
+    // exchanges (an INSIGHTS entry).
+    logInsightRows(insights, label, rows) {
+        const { section, exchanges, kind } = insights;
         if (!rows.length) {
-            console.log(`F&O Market Insights "${label}" - symbols listed: 0 - FAIL`);
+            console.log(`${section} "${label}" - symbols listed: 0 - FAIL`);
             return false;
         }
-        console.log(`F&O Market Insights "${label}" - symbols listed: ${rows.length} - PASS`);
+        console.log(`${section} "${label}" - symbols listed: ${rows.length} - PASS`);
         rows.forEach(r => console.log(`  ${r.symbol} (${r.exchange || '?'})`));
-        const nonFno = rows.filter(r => !FNO_EXCHANGES.includes(r.exchange));
-        console.log(`All "${label}" symbols are F&O (${FNO_EXCHANGES.join('/')}) contracts: ${nonFno.length ? `FAIL - ${nonFno.map(r => `${r.symbol} (${r.exchange || '?'})`).join(', ')}` : 'PASS'}`);
-        return nonFno.length === 0;
+        const foreign = rows.filter(r => !exchanges.includes(r.exchange));
+        console.log(`All "${label}" symbols are ${kind} (${exchanges.join('/')}) contracts: ${foreign.length ? `FAIL - ${foreign.map(r => `${r.symbol} (${r.exchange || '?'})`).join(', ')}` : 'PASS'}`);
+        return foreign.length === 0;
     }
 
     // On landing on F&O, Tab 1 of the F&O Market Insights row must be "Top Gainers", selected, and
     // listing F&O symbols. Checked as found - before any rewind - so a stale selection shows as FAIL.
     async verifyFnoInsightsDefault() {
+        return this.verifyInsightsDefault(INSIGHTS.fno);
+    }
+
+    async verifyCommodityInsightsDefault() {
+        return this.verifyInsightsDefault(INSIGHTS.commodity);
+    }
+
+    async verifyCurrencyInsightsDefault() {
+        return this.verifyInsightsDefault(INSIGHTS.currency);
+    }
+
+    async verifyInsightsDefault(insights) {
         const tabs = await this.getMoversTabs();
         const total = tabs.length ? tabs[0].total : 0;
         const first = tabs.find(t => t.index === 1);
@@ -290,20 +369,98 @@ class MarketsPage extends BasePage {
             selected = (await el.getAttribute('selected').catch(() => null)) === 'true';
         }
         const isTopGainers = !!first && first.label === 'Top Gainers';
-        console.log(`F&O Market Insights tab 1: "${first ? first.label : 'not found'}" - ${isTopGainers ? 'PASS' : 'FAIL (expected "Top Gainers")'}`);
+        console.log(`${insights.section} tab 1: "${first ? first.label : 'not found'}" - ${isTopGainers ? 'PASS' : 'FAIL (expected "Top Gainers")'}`);
         console.log(`Top Gainers selected by default: ${isTopGainers && selected ? 'PASS' : 'FAIL'}`);
         const rows = await this.getFnoInsightRows();
-        const allFno = this.logFnoInsightRows('Top Gainers', rows);
-        return isTopGainers && selected && allFno;
+        const allOnSegment = this.logInsightRows(insights, 'Top Gainers', rows);
+        return isTopGainers && selected && allOnSegment;
     }
 
     // Taps F&O Market Insights sub-tab `index` of `total` and checks it lists F&O symbols.
     async clickFnoInsightsTab(index, total) {
-        const result = await this.clickMoversTab(index, total, 5000, 'F&O Market Insights');
+        return this.clickInsightsTab(INSIGHTS.fno, index, total);
+    }
+
+    // Taps Commodity Market Insights sub-tab `index` of `total` and checks it lists MCX symbols.
+    async clickCommodityInsightsTab(index, total) {
+        return this.clickInsightsTab(INSIGHTS.commodity, index, total);
+    }
+
+    async clickCurrencyInsightsTab(index, total) {
+        return this.clickInsightsTab(INSIGHTS.currency, index, total);
+    }
+
+    async clickInsightsTab(insights, index, total) {
+        const result = await this.clickMoversTab(index, total, 5000, insights.section);
         if (!result) return null;
         const rows = await this.getFnoInsightRows();
-        this.logFnoInsightRows(result.label, rows);
+        this.logInsightRows(insights, result.label, rows);
         return { ...result, rows };
+    }
+
+    async clickSeeAllCommodityInsights(timeout = 8000) {
+        return this.clickSeeAllInsights(INSIGHTS.commodity, timeout);
+    }
+
+    async clickSeeAllCurrencyInsights(timeout = 8000) {
+        return this.clickSeeAllInsights(INSIGHTS.currency, timeout);
+    }
+
+    async clickSeeAllInsights(insights, timeout = 8000) {
+        await this.clickSeeAllBeside(insights.section, this.seeAllCommodityInsights, timeout);
+        console.log(`Clicked "See all" on ${insights.section}`);
+    }
+
+    async verifyCommodityInsightsSeeAllOpened(timeout = 8000) {
+        return this.verifyInsightsSeeAllOpened(INSIGHTS.commodity, timeout);
+    }
+
+    async verifyCurrencyInsightsSeeAllOpened(timeout = 8000) {
+        return this.verifyInsightsSeeAllOpened(INSIGHTS.currency, timeout);
+    }
+
+    // The full "<Segment> Market Insights" screen: title + Back button and a symbol list. The segment
+    // tabs disappearing confirms it isn't still the Markets screen.
+    async verifyInsightsSeeAllOpened(insights, timeout = 8000) {
+        const backVisible = await this.isElementVisible(this.backButton, timeout);
+        const titleVisible = backVisible && await this.isElementVisible(`android=new UiSelector().description("${insights.section}")`, 2000);
+        const leftMarkets = titleVisible && !(await this.isElementVisible(this.segmentTabOf(insights), 500));
+        const rows = leftMarkets ? await this.getFnoInsightRows() : [];
+        const opened = leftMarkets && rows.length > 0;
+        console.log(`${insights.section} "See all" screen opened (${rows.length} symbols listed): ${opened ? 'PASS' : 'FAIL'}`);
+        return opened;
+    }
+
+    async navigateBackToCommodityInsightsSeeAll(from) {
+        return this.navigateBackToInsightsSeeAll(INSIGHTS.commodity, from);
+    }
+
+    async navigateBackToCurrencyInsightsSeeAll(from) {
+        return this.navigateBackToInsightsSeeAll(INSIGHTS.currency, from);
+    }
+
+    // Device back from a Quote opened on "<Segment> Market Insights" "See all" - expected to return
+    // to that screen, as it does on F&O's.
+    async navigateBackToInsightsSeeAll(insights, from) {
+        await this.driver.back();
+        await this.pause(1500);
+        const back = await this.isElementVisible(this.backButton, 3000)
+            && await this.isElementVisible(`android=new UiSelector().description("${insights.section}")`, 1000);
+        console.log(`Back on ${insights.section} "See all" from ${from}: ${back ? 'PASS' : 'FAIL'}`);
+        return back;
+    }
+
+    async closeCommodityInsightsSeeAll(timeout = 5000) {
+        return this.closeInsightsSeeAll(INSIGHTS.commodity, timeout);
+    }
+
+    async closeCurrencyInsightsSeeAll(timeout = 5000) {
+        return this.closeInsightsSeeAll(INSIGHTS.currency, timeout);
+    }
+
+    async closeInsightsSeeAll(insights, timeout = 5000) {
+        await this.click(this.backButton, timeout);
+        console.log(`Clicked Back on the ${insights.section} screen`);
     }
 
     async clickSeeAllFnoInsights(timeout = 8000) {
@@ -399,19 +556,21 @@ class MarketsPage extends BasePage {
         console.log('Clicked Back on the F&O Market Insights screen');
     }
 
-    // Scrolls F&O from the top until the NxtOption banner sits fully above the floating bottom nav
-    // (right below F&O Market Insights it can be partly behind it), then returns its node.
+    // Scrolls F&O until the NxtOption banner sits fully above the floating bottom nav (right below
+    // F&O Market Insights it can be partly behind it), then returns its node. The banner is near the
+    // top, so the page is only scrolled back up when the banner isn't already on screen.
     async scrollToNxtOptionBanner(maxScrolls = 5) {
-        await this.scrollToTop();
+        const isBanner = n => n.desc.startsWith('Explore the Smart Option Trading');
+        if (!(await this.getDescribedElements()).some(isBanner)) await this.scrollToTop();
         const { height } = await this.driver.getWindowSize();
         for (let i = 0; i <= maxScrolls; i++) {
             const nodes = await this.getDescribedElements();
             const navTop = (nodes.find(n => n.desc === 'Watchlist') || { y1: Math.floor(height * 0.87) }).y1;
-            const banner = nodes.find(n => n.desc.startsWith('Explore the Smart Option Trading'));
+            const banner = nodes.find(isBanner);
             if (banner && banner.y2 <= navTop) return banner;
             if (i < maxScrolls) await this.nudgeDown();
         }
-        console.log(`NxtOption banner not found on F&O after ${maxScrolls} scrolls: FAIL`);
+        console.log(`NxtOption banner not found on Markets after ${maxScrolls} scrolls: FAIL`);
         return null;
     }
 
@@ -442,21 +601,47 @@ class MarketsPage extends BasePage {
             const labels = new Set((await this.getDescribedElements()).map(n => n.desc.split('\n')[0]));
             found = markers.filter(m => labels.has(m));
             return found.length === markers.length && !labels.has('F&O');
-        }, { timeout, interval: 1000 }).catch(() => {});
+        }, { timeout, interval: 1000 }).catch(() => { });
         const opened = found.length === markers.length && !(await this.isElementVisible(this.fnoTab, 500));
         console.log(`App navigated to ${tool} (${markers.join(', ')} shown): ${opened ? 'PASS' : `FAIL - found only ${found.join(', ') || 'none'}`}`);
         return opened;
     }
 
-    // Scrolls F&O from the top until section `title`'s heading and tab row are on screen with the
-    // next section's heading below them - i.e. its whole list is visible.
+    // On an open NxtOption tool: taps each of its NXT_OPTION_TOOL_TAPS labels in turn (Strategy
+    // Builder's Buy Call, IV/OI Analysis' tabs) and waits on each for its data/graph to load. Labels
+    // are matched on the content-desc's first line ("IV Charts\nTab 1 of 2"), case-insensitively.
+    // Returns false if any label is missing or still loading after its wait.
+    async exploreNxtOptionTool(tool) {
+        const { labels, waitMs } = NXT_OPTION_TOOL_TAPS[tool];
+        let ok = true;
+        for (const label of labels) {
+            const node = (await this.getDescribedElements())
+                .find(n => n.desc.split('\n')[0].trim().toLowerCase() === label.toLowerCase());
+            if (!node) {
+                console.log(`${tool}: "${label}" not found: FAIL`);
+                ok = false;
+                continue;
+            }
+            await this.tapNode(node);
+            console.log(`${tool}: clicked "${label}" - waiting ${waitMs / 1000}s for the data to load...`);
+            await this.pause(waitMs);
+            const loading = await this.isElementVisible(NXT_OPTION_LOADER, 500);
+            console.log(`${tool}: "${label}" data loaded: ${loading ? 'FAIL (still loading)' : 'PASS'}`);
+            if (loading) ok = false;
+        }
+        return ok;
+    }
+
+    // Scrolls F&O down from where it is (see wrapToTopAtBottom) until section `title`'s heading and
+    // tab row are on screen with the next section's heading below them - i.e. its whole list is visible.
     async scrollToFnoSection(title, maxScrolls = 8) {
-        await this.scrollToTop();
+        const wrap = { last: null, wrapped: false };
         for (let i = 0; i <= maxScrolls; i++) {
             const nodes = await this.getDescribedElements();
+            if (await this.wrapToTopAtBottom(nodes, wrap)) { i = 0; continue; }
             const tabsBottom = (nodes.find(n => /^Equity\nTab 1 of \d+$/.test(n.desc)) || { y2: 0 }).y2;
             const heading = nodes.find(n => n.desc === title);
-            if (heading && heading.y1 < tabsBottom) await this.swipe('up');
+            if (heading && heading.y1 < tabsBottom) { wrap.last = null; await this.swipe('up'); }
             else if (heading && this.getSectionEnd(nodes, heading) !== null) {
                 console.log(`"${title}" section is now visible`);
                 return true;
@@ -467,8 +652,16 @@ class MarketsPage extends BasePage {
     }
 
     // Trending Options ends at the "Future Index Contracts" heading.
-    async scrollToTrendingOptions() {
-        return this.scrollToFnoSection('Trending Options');
+    async scrollToTrendingOptions(insights = INSIGHTS.fno) {
+        return this.scrollToFnoSection(insights.trending);
+    }
+
+    async scrollToTrendingCommodities() {
+        return this.scrollToTrendingOptions(INSIGHTS.commodity);
+    }
+
+    async scrollToTrendingCurrencies() {
+        return this.scrollToTrendingOptions(INSIGHTS.currency);
     }
 
     // Future Index Contracts ends at the "OI Analysis" heading.
@@ -487,10 +680,11 @@ class MarketsPage extends BasePage {
     }
 
     // Trending Options rows on screen (between its tab row and the next section), parsed like the
-    // F&O Market Insights rows - the two sections share one row shape.
-    async getTrendingOptionRows() {
+    // F&O Market Insights rows - the two sections share one row shape. Same for Commodity's
+    // "Trending Commodities Options" (pass INSIGHTS.commodity).
+    async getTrendingOptionRows(insights = INSIGHTS.fno) {
         const nodes = await this.getDescribedElements();
-        const heading = nodes.find(n => n.desc === 'Trending Options');
+        const heading = nodes.find(n => n.desc === insights.trending);
         if (!heading) return [];
         const end = this.getSectionEnd(nodes, heading) ?? Infinity;
         return nodes
@@ -1010,8 +1204,10 @@ class MarketsPage extends BasePage {
     }
 
     // `label`'s list must show the Symbol / Open Interest / Price column headers, and every row an
-    // F&O contract named with its expiry, plus its open interest and price.
-    async verifyOiAnalysisRows(label) {
+    // F&O contract (or one on `insights`' own exchanges, e.g. INSIGHTS.commodity) named with its
+    // expiry, plus its open interest and price.
+    async verifyOiAnalysisRows(label, insights = INSIGHTS.fno) {
+        const { exchanges, kind } = insights;
         const nodes = await this.getDescribedElements();
         const header = nodes.find(n => OI_COLUMNS.every(c => n.desc.split('\n').map(l => l.trim()).includes(c)));
         console.log(`OI Analysis "${label}" - columns ${OI_COLUMNS.join(', ')} shown: ${header ? 'PASS' : 'FAIL'}`);
@@ -1023,13 +1219,23 @@ class MarketsPage extends BasePage {
         }
         console.log(`OI Analysis "${label}" - symbols listed: ${rows.length} - PASS`);
         rows.forEach(r => console.log(`  ${r.symbol} (${r.exchange}) | Open Interest ${r.openInterest} | Price ${r.price}`));
-        const nonFno = rows.filter(r => !FNO_EXCHANGES.includes(r.exchange));
-        console.log(`All "${label}" symbols are F&O (${FNO_EXCHANGES.join('/')}) contracts: ${nonFno.length ? `FAIL - ${nonFno.map(r => `${r.symbol} (${r.exchange})`).join(', ')}` : 'PASS'}`);
+        const foreign = rows.filter(r => !exchanges.includes(r.exchange));
+        console.log(`All "${label}" symbols are ${kind} (${exchanges.join('/')}) contracts: ${foreign.length ? `FAIL - ${foreign.map(r => `${r.symbol} (${r.exchange})`).join(', ')}` : 'PASS'}`);
         const noExpiry = rows.filter(r => !contractExpiry(r.symbol));
         console.log(`All "${label}" symbols show an expiry: ${noExpiry.length ? `FAIL - ${noExpiry.map(r => r.symbol).join(', ')}` : 'PASS'}`);
         const noValues = rows.filter(r => !(r.openInterest > 0) || !(r.price > 0));
         console.log(`All "${label}" symbols show Open Interest and Price: ${noValues.length ? `FAIL - ${noValues.map(r => r.symbol).join(', ')}` : 'PASS'}`);
-        return { ok: !!header && !nonFno.length && !noExpiry.length && !noValues.length, rows, noData };
+        return { ok: !!header && !foreign.length && !noExpiry.length && !noValues.length, rows, noData };
+    }
+
+    // Commodity's OI Analysis - assumed to match F&O's (same tabs, row shape, message and "See all"),
+    // with MCX contracts.
+    async verifyCommodityOiAnalysisRows(label) {
+        return this.verifyOiAnalysisRows(label, INSIGHTS.commodity);
+    }
+
+    async verifyCurrencyOiAnalysisRows(label) {
+        return this.verifyOiAnalysisRows(label, INSIGHTS.currency);
     }
 
     // The explanation shown above the selected tab's list ("The prices and the open interest (OI),
@@ -1043,8 +1249,19 @@ class MarketsPage extends BasePage {
         return lines.slice(0, lines.indexOf(OI_COLUMNS[0])).join(' ').trim() || null;
     }
 
+    // Commodity's "See all" links are plain "See All" nodes, several on screen at once (verified
+    // live), so the one on `title`'s heading row is tapped - falling back to `selector` (F&O's "See
+    // all <title>" shape) when there isn't one.
+    async clickSeeAllBeside(title, selector, timeout = 8000) {
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === title);
+        const seeAll = heading && nodes.find(n => n.desc === 'See All' && n.y1 < heading.y2 && n.y2 > heading.y1);
+        if (seeAll) await this.tapNode(seeAll);
+        else await this.click(selector, timeout);
+    }
+
     async clickSeeAllOiAnalysis(timeout = 8000) {
-        await this.click(this.seeAllOiAnalysis, timeout);
+        await this.clickSeeAllBeside('OI Analysis', this.seeAllOiAnalysis, timeout);
         console.log('Clicked "See all" on OI Analysis');
     }
 
@@ -1058,32 +1275,246 @@ class MarketsPage extends BasePage {
         return opened;
     }
 
-    async isTrendingTabSelected(label) {
+    async isTrendingTabSelected(label, insights = INSIGHTS.fno) {
         const selected = (await (await this.driver.$(this.trendingTab(label))).getAttribute('selected').catch(() => null)) === 'true';
-        console.log(`Trending Options "${label}" selected: ${selected ? 'PASS' : 'FAIL'}`);
+        console.log(`${insights.trending} "${label}" selected: ${selected ? 'PASS' : 'FAIL'}`);
         return selected;
     }
 
-    async clickTrendingTab(label, timeout = 5000) {
+    async clickTrendingTab(label, timeout = 5000, insights = INSIGHTS.fno) {
         await this.click(this.trendingTab(label), timeout);
-        console.log(`Clicked Trending Options "${label}" tab`);
+        console.log(`Clicked ${insights.trending} "${label}" tab`);
         await this.pause(2000);
     }
 
-    // `label`'s list must hold F&O (NFO/BFO) contracts, each named with its expiry (DDMON).
-    async verifyTrendingOptionRows(label) {
-        const rows = await this.getTrendingOptionRows();
+    // `label`'s list must hold F&O (NFO/BFO) contracts - or `insights`' own exchanges - each named
+    // with its expiry (DDMON).
+    async verifyTrendingOptionRows(label, insights = INSIGHTS.fno) {
+        const { trending, exchanges, kind } = insights;
+        const rows = await this.getTrendingOptionRows(insights);
         if (!rows.length) {
-            console.log(`Trending Options "${label}" - symbols listed: 0 - FAIL`);
+            console.log(`${trending} "${label}" - symbols listed: 0 - FAIL`);
             return false;
         }
-        console.log(`Trending Options "${label}" - symbols listed: ${rows.length} - PASS`);
+        console.log(`${trending} "${label}" - symbols listed: ${rows.length} - PASS`);
         rows.forEach(r => console.log(`  ${r.symbol} (${r.exchange || '?'})`));
-        const nonFno = rows.filter(r => !FNO_EXCHANGES.includes(r.exchange));
-        console.log(`All "${label}" symbols are F&O (${FNO_EXCHANGES.join('/')}) contracts: ${nonFno.length ? `FAIL - ${nonFno.map(r => `${r.symbol} (${r.exchange || '?'})`).join(', ')}` : 'PASS'}`);
+        const foreign = rows.filter(r => !exchanges.includes(r.exchange));
+        console.log(`All "${label}" symbols are ${kind} (${exchanges.join('/')}) contracts: ${foreign.length ? `FAIL - ${foreign.map(r => `${r.symbol} (${r.exchange || '?'})`).join(', ')}` : 'PASS'}`);
         const noExpiry = rows.filter(r => !contractExpiry(r.symbol));
         console.log(`All "${label}" symbols show an expiry: ${noExpiry.length ? `FAIL - ${noExpiry.map(r => r.symbol).join(', ')}` : 'PASS'}`);
-        return !nonFno.length && !noExpiry.length;
+        return !foreign.length && !noExpiry.length;
+    }
+
+    // Commodity's "Trending Commodities Options" - assumed to have the same Most Traded / Highest OI
+    // tabs and row shape as F&O's Trending Options, with MCX contracts.
+    async getTrendingCommodityRows() {
+        return this.getTrendingOptionRows(INSIGHTS.commodity);
+    }
+
+    async isTrendingCommodityTabSelected(label) {
+        return this.isTrendingTabSelected(label, INSIGHTS.commodity);
+    }
+
+    async clickTrendingCommodityTab(label, timeout = 5000) {
+        return this.clickTrendingTab(label, timeout, INSIGHTS.commodity);
+    }
+
+    async verifyTrendingCommodityRows(label) {
+        return this.verifyTrendingOptionRows(label, INSIGHTS.commodity);
+    }
+
+    // Currency's "Trending Currencies Options" - same Most Traded / Highest OI tabs and row shape
+    // (verified live), with CDS contracts.
+    async getTrendingCurrencyRows() {
+        return this.getTrendingOptionRows(INSIGHTS.currency);
+    }
+
+    async isTrendingCurrencyTabSelected(label) {
+        return this.isTrendingTabSelected(label, INSIGHTS.currency);
+    }
+
+    async clickTrendingCurrencyTab(label, timeout = 5000) {
+        return this.clickTrendingTab(label, timeout, INSIGHTS.currency);
+    }
+
+    async verifyTrendingCurrencyRows(label) {
+        return this.verifyTrendingOptionRows(label, INSIGHTS.currency);
+    }
+
+    // Top Commodities on Commodity. Not captured in a dump yet, so its tabs and rows are found by
+    // position rather than by name: the tab row is the first "...\nTab N of M" row under the
+    // heading, and its rows are the "Double tap to view" nodes between that tab row and the next
+    // section's heading. Works the same on its "See all" screen, which is headed by the same title.
+    async scrollToTopCommodities(maxNudges = 3, title = this.topCommoditiesHeading) {
+        const row = await this.scrollToSection(title, desc => /\nTab \d+ of \d+$/.test(desc) || desc.includes('Double tap to view'));
+        if (!row) return false;
+        // Stops as soon as the tab row clears the bottom nav - nudge on so the list is on screen too.
+        const { height } = await this.driver.getWindowSize();
+        for (let i = 0; i < maxNudges; i++) {
+            const heading = (await this.getDescribedElements()).find(n => n.desc === title);
+            if (!heading || heading.y1 < height * 0.5) break;
+            await this.nudgeDown();
+        }
+        return true;
+    }
+
+    // Top Currencies on Currency: same heading / "See All" / row shape as Top Commodities, but no tab
+    // row - its rows sit straight under the heading (verified live).
+    async scrollToTopCurrencies(maxNudges = 3) {
+        return this.scrollToTopCommodities(maxNudges, INSIGHTS.currency.top);
+    }
+
+    async getTopCommoditiesTabs(title = this.topCommoditiesHeading) {
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === title);
+        if (!heading) return [];
+        const tabs = nodes
+            .filter(n => n.y1 >= heading.y2 && /\nTab \d+ of \d+$/.test(n.desc))
+            .map(n => {
+                const m = n.desc.match(/^(.+)\nTab (\d+) of (\d+)$/s);
+                return m && { label: m[1].trim(), index: Number(m[2]), total: Number(m[3]), node: n };
+            })
+            .filter(Boolean);
+        if (!tabs.length) return [];
+        // Only the row right under the heading - any lower tab row belongs to the next section.
+        const rowY = Math.min(...tabs.map(t => t.node.y1));
+        return tabs.filter(t => t.node.y1 - rowY <= 15).sort((a, b) => a.index - b.index);
+    }
+
+    async getTopCommoditiesRows(title = this.topCommoditiesHeading) {
+        const nodes = await this.getDescribedElements();
+        const heading = nodes.find(n => n.desc === title);
+        if (!heading) return [];
+        const tabs = await this.getTopCommoditiesTabs(title);
+        const top = tabs.length ? Math.max(...tabs.map(t => t.node.y2)) : heading.y2;
+        // Rows run until the first plain node after them (the next section's heading) - anything
+        // plain above the first row (column headers) is skipped. The bottom nav is never an end.
+        const nav = ['Watchlist', 'Market', 'Orders', 'Portfolio', 'Mutual Funds'];
+        const rows = [];
+        for (const n of nodes.filter(n => n.y1 >= top).sort((a, b) => a.y1 - b.y1)) {
+            if (n.desc.includes('Double tap to view')) rows.push(n);
+            else if (rows.length && !nav.includes(n.desc) && !/\nTab \d+ of \d+$/.test(n.desc)) break;
+        }
+        return rows.map(n => ({ ...parseFnoInsightRow(n.desc), node: n }));
+    }
+
+    async getTopCurrenciesRows() {
+        return this.getTopCommoditiesRows(INSIGHTS.currency.top);
+    }
+
+    // Top Currencies has no tabs, so its list is checked as it stands: symbols listed, all CDS.
+    async verifyTopCurrenciesRows(where = INSIGHTS.currency.top) {
+        const rows = await this.getTopCurrenciesRows();
+        this.logInsightRows({ ...INSIGHTS.currency, section: where }, 'Top Currencies', rows);
+        return rows;
+    }
+
+    // The tab node's own element, for its real selected="true" attribute: matched on its index/total
+    // and label, and - should another section share them - on its on-screen y.
+    async isTopCommoditiesTabSelected(tab) {
+        const els = await this.driver.$$(`//*[contains(@content-desc,"Tab ${tab.index} of ${tab.total}")]`);
+        for (const el of els) {
+            const desc = await el.getAttribute('content-desc').catch(() => '');
+            if (!desc.startsWith(tab.label)) continue;
+            const { y } = await el.getLocation().catch(() => ({ y: -1 }));
+            if (Math.abs(y - tab.node.y1) > 15) continue;
+            return (await el.getAttribute('selected').catch(() => null)) === 'true';
+        }
+        return false;
+    }
+
+    // Like the movers rows, the tab row is assumed click-only with a kept scroll offset - rewound by
+    // tapping the left-most visible tab until Tab 1 is selected.
+    async rewindTopCommoditiesTabs(maxTaps = 8) {
+        for (let i = 0; i < maxTaps; i++) {
+            const tabs = await this.getTopCommoditiesTabs();
+            if (!tabs.length) break;
+            await this.tapNode(tabs[0].node);
+            await this.pause(800);
+            if (tabs[0].index === 1) {
+                console.log(`Top Commodities tab row rewound to "${tabs[0].label}"`);
+                return true;
+            }
+        }
+        console.log('Could not rewind the Top Commodities tab row to Tab 1');
+        return false;
+    }
+
+    // Taps Top Commodities tab `index` and checks it is selected and lists symbols - FAIL if either
+    // isn't the case. Tapping a tab is expected to bring the next one into view, as on Market Movers.
+    async clickTopCommoditiesTab(index, where = 'Top Commodities') {
+        let tab = (await this.getTopCommoditiesTabs()).find(t => t.index === index);
+        if (!tab) {
+            console.log(`${where} tab ${index} not found: FAIL`);
+            return null;
+        }
+        let selected = false;
+        for (let attempt = 1; attempt <= 3 && !selected; attempt++) {
+            await this.tapNode(tab.node);
+            await this.pause(1500);
+            tab = (await this.getTopCommoditiesTabs()).find(t => t.index === index) || tab;
+            selected = await this.isTopCommoditiesTabSelected(tab);
+            if (!selected && attempt < 3) console.log(`${where} "${tab.label}" tab not selected after tap ${attempt} - tapping again`);
+        }
+        const rows = await this.getTopCommoditiesRows();
+        const noData = !rows.length && await this.isElementVisible('android=new UiSelector().description("No Data Found!")', 500);
+        console.log(`${where} "${tab.label}" tab (${index} of ${tab.total}) selected: ${selected ? 'PASS' : 'FAIL'}`);
+        console.log(`${where} "${tab.label}" - symbols listed: ${rows.length} - ${rows.length ? 'PASS' : `FAIL${noData ? ' ("No Data Found!" shown)' : ''}`}`);
+        rows.forEach(r => console.log(`  ${r.symbol} (${r.exchange || '?'})`));
+        return { label: tab.label, total: tab.total, selected, rows };
+    }
+
+    async clickSeeAllTopCommodities(timeout = 8000, title = this.topCommoditiesHeading) {
+        await this.clickSeeAllBeside(title, this.seeAllTopCommodities, timeout);
+        console.log(`Clicked "See all" on ${title}`);
+    }
+
+    async clickSeeAllTopCurrencies(timeout = 8000) {
+        return this.clickSeeAllTopCommodities(timeout, INSIGHTS.currency.top);
+    }
+
+    // The full Top Commodities screen: title + Back button, its own tab row, and the segment tabs gone.
+    async verifyTopCommoditiesSeeAllOpened(timeout = 8000) {
+        return this.verifyTopSeeAllOpened(INSIGHTS.commodity, timeout);
+    }
+
+    // Top Currencies has no tab row, so its "See all" screen is checked for a symbol list instead.
+    async verifyTopCurrenciesSeeAllOpened(timeout = 8000) {
+        return this.verifyTopSeeAllOpened(INSIGHTS.currency, timeout);
+    }
+
+    async verifyTopSeeAllOpened(insights, timeout = 8000) {
+        const title = insights.top;
+        const backVisible = await this.isElementVisible(this.backButton, timeout);
+        const titleVisible = backVisible && await this.isElementVisible(`android=new UiSelector().description("${title}")`, 2000);
+        const leftMarkets = titleVisible && !(await this.isElementVisible(this.segmentTabOf(insights), 500));
+        const tabs = leftMarkets ? await this.getTopCommoditiesTabs(title) : [];
+        const rows = leftMarkets && !tabs.length ? await this.getTopCommoditiesRows(title) : [];
+        const opened = leftMarkets && (tabs.length > 0 || rows.length > 0);
+        console.log(`${title} "See all" screen opened (${tabs.length ? `${tabs[0].total} tabs` : `${rows.length} symbols listed`}): ${opened ? 'PASS' : 'FAIL'}`);
+        return opened;
+    }
+
+    async closeTopCommoditiesSeeAll(timeout = 5000, title = this.topCommoditiesHeading) {
+        await this.click(this.backButton, timeout);
+        console.log(`Clicked Back on the ${title} screen`);
+    }
+
+    async closeTopCurrenciesSeeAll(timeout = 5000) {
+        return this.closeTopCommoditiesSeeAll(timeout, INSIGHTS.currency.top);
+    }
+
+    // Device back from a Quote opened on a "See all" screen titled `title` (e.g. "Top Commodities",
+    // "OI Analysis") - expected to return to that screen, as F&O Market Insights' does: its Back
+    // button and title shown, the Markets segment tabs (`segmentTab`) not.
+    async navigateBackToSeeAll(title, from, segmentTab = this.commodityTab) {
+        await this.driver.back();
+        await this.pause(1500);
+        const back = await this.isElementVisible(this.backButton, 3000)
+            && await this.isElementVisible(`android=new UiSelector().description("${title}")`, 1000)
+            && !(await this.isElementVisible(segmentTab, 500));
+        console.log(`Back on ${title} "See all" from ${from}: ${back ? 'PASS' : 'FAIL'}`);
+        return back;
     }
 
     // Taps the top-most of `rows` (from getFnoInsightRows/getTrendingOptionRows) and checks its
@@ -1102,17 +1533,32 @@ class MarketsPage extends BasePage {
 
     // Device back from an NxtOption tool or a Quote opened from F&O lands straight on Markets, still
     // on F&O (verified live).
+    async navigateBackToEquityTab(from, maxBackPresses = 3) {
+        return this.navigateBackToSegmentTab('Equity', this.equityTab, from, maxBackPresses);
+    }
+
     async navigateBackToFnoTab(from, maxBackPresses = 3) {
+        return this.navigateBackToSegmentTab('F&O', this.fnoTab, from, maxBackPresses);
+    }
+
+    async navigateBackToCommodityTab(from, maxBackPresses = 3) {
+        return this.navigateBackToSegmentTab('Commodity', this.commodityTab, from, maxBackPresses);
+    }
+
+    async navigateBackToCurrencyTab(from, maxBackPresses = 3) {
+        return this.navigateBackToSegmentTab('Currency', this.currencyTab, from, maxBackPresses);
+    }
+
+    async navigateBackToSegmentTab(name, selector, from, maxBackPresses = 3) {
         for (let i = 0; i < maxBackPresses; i++) {
             await this.driver.back();
             await this.pause(1500);
-            const selected = (await (await this.driver.$(this.fnoTab)).getAttribute('selected').catch(() => null)) === 'true';
-            if (selected) {
-                console.log(`Back on Markets (F&O) from ${from}: PASS`);
+            if (await this.isSegmentTabSelected(selector)) {
+                console.log(`Back on Markets (${name}) from ${from}: PASS`);
                 return true;
             }
         }
-        console.log(`Could not get back to Markets (F&O) from ${from}: FAIL`);
+        console.log(`Could not get back to Markets (${name}) from ${from}: FAIL`);
         return false;
     }
 
@@ -1132,6 +1578,29 @@ class MarketsPage extends BasePage {
     // only meaningful after scrolling back to the top.
     async scrollToTop() {
         await this.scrollToBoundaryByMovement('up', { maxScrolls: 15 });
+    }
+
+    // Scrolls to the top only if `firstTitle` (the segment's first section) isn't already the first
+    // heading under the segment tabs - skips the up-swipe scrollToTop needs to detect the boundary.
+    async scrollToTopUnlessAt(firstTitle) {
+        if ((await this.getFirstSectionTitle()) !== firstTitle) await this.scrollToTop();
+    }
+
+    // Section scrolls start from wherever the page already is - tests visit sections top to bottom,
+    // so the next one is usually on screen or just below. Call with each loop's fresh `nodes` and a
+    // shared `{ last: null, wrapped: false }` (reset `last` after scrolling up): when the screen is
+    // unchanged since the previous nudge down the page is at the bottom, so the section is above -
+    // scroll to the top once and return true so the caller searches down again from there.
+    async wrapToTopAtBottom(nodes, wrap) {
+        const sig = nodes.map(n => `${n.desc}@${n.y1}`).join('|');
+        const atBottom = sig === wrap.last;
+        wrap.last = sig;
+        if (!atBottom || wrap.wrapped) return false;
+        wrap.wrapped = true;
+        wrap.last = null;
+        console.log('Reached the bottom without finding the section - scrolling back to the top');
+        await this.scrollToTop();
+        return true;
     }
 
     // Returns the content-desc of the first element directly below the segment tab row - i.e. the
@@ -1155,7 +1624,7 @@ class MarketsPage extends BasePage {
         await this.driver.waitUntil(async () => {
             rows = await this.driver.$$(this.moversRow);
             return rows.length > 0;
-        }, { timeout, interval: 300 }).catch(() => {});
+        }, { timeout, interval: 300 }).catch(() => { });
         if (!rows.length) {
             console.log('No symbols found in the Market Movers list');
             return null;
@@ -1175,17 +1644,82 @@ class MarketsPage extends BasePage {
         return opened;
     }
 
-    // Visible Market Movers sub-tabs ("Top Gainers\nTab 1 of 6", ...) - those below the segment
-    // tab row. Only gives what is currently on screen; `total` comes from the "of N" suffix.
+    // Index bar above the search bar. On Commodity its "indices" are MCX futures ("Index GOLD.
+    // Expiry: 2026-12-04. Last traded price: ...", verified live) and the Quote it opens is headed
+    // with the contract: "Stock GOLD 04DEC FUT, MCX. Last traded price 143299.00. ...". Taps the
+    // left-most one and returns { symbol, ltp, segment } read off that Quote header.
+    async openFirstIndexBarQuote(timeout = 8000) {
+        const firstIndex = async () => (await this.getDescribedElements())
+            .filter(n => /^Index [^,]+\. (Expiry|Last traded)/.test(n.desc))
+            .sort((a, b) => a.x1 - b.x1)[0];
+        let first = await firstIndex();
+        // The bar scrolls with the page, and Equity keeps its scroll offset between visits.
+        if (!first) {
+            await this.scrollToTop();
+            first = await firstIndex();
+        }
+        if (!first) {
+            console.log('No index shown in the index bar above the search bar: FAIL');
+            return null;
+        }
+        await this.tapNode(first);
+        console.log(`Clicked the first index in the index bar: ${first.desc.match(/^Index (.+?)\./)[1]}`);
+        let quote = null;
+        await this.driver.waitUntil(async () => {
+            // Equity/F&O index bars hold real indices ("Index Nifty 50. Last traded price: ..."); their
+            // Quote header may be "Index ..." rather than "Stock ..." - the ", EXCHANGE." part tells
+            // either apart from the index bar's own nodes.
+            const m = (await this.getDescribedElements())
+                .map(n => n.desc.match(/^(?:Stock|Index) (.+?), (\w+)\. Last traded price ([\d,]+(?:\.\d+)?)?/))
+                .find(Boolean);
+            quote = m && { symbol: m[1], segment: m[2], ltp: m[3] || null };
+            return !!quote;
+        }, { timeout, interval: 1000 }).catch(() => { });
+        if (!quote) {
+            console.log('Quote screen did not open from the index bar: FAIL');
+            return null;
+        }
+        console.log(`Quote screen opened for ${quote.symbol}: PASS`);
+        console.log(`  Symbol: ${quote.symbol} | LTP: ${quote.ltp || 'not shown'} | Segment: ${quote.segment}`);
+        return quote;
+    }
+
+    // "Option chain Button" on a Quote opens Option Chain: OI/LTP/Greeks tabs over a Call LTP /
+    // Strike Price / Put LTP table (verified live from a Commodity index's Quote).
+    async openOptionChain(timeout = 15000) {
+        await this.click(this.optionChainButton, 5000);
+        console.log('Clicked Option Chain');
+        const opened = await this.isElementVisible('android=new UiSelector().description("Strike Price")', timeout);
+        console.log(`Option Chain screen opened: ${opened ? 'PASS' : 'FAIL'}`);
+        return opened;
+    }
+
+    // Option Chain shows the NxtOption banner (same "Explore the Smart Option Trading..." node as on
+    // Markets) for Commodity and F&O underlyings, but not for Equity or Currency - `expected` says
+    // which applies.
+    async verifyOptionChainNxtOptionBanner(expected, timeout = 5000) {
+        const shown = await this.isElementVisible(this.nxtOptionBanner, timeout);
+        console.log(`NxtOption banner on Option Chain: ${shown ? 'displayed' : 'not displayed'} - ${shown === expected ? 'PASS' : `FAIL (expected ${expected ? 'displayed' : 'not displayed'})`}`);
+        return shown === expected;
+    }
+
+    // Visible Market Movers sub-tabs ("Top Gainers\nTab 1 of 6", ...) - the first tab row below the
+    // segment tab row. Only gives what is currently on screen; `total` comes from the "of N" suffix.
+    // Lower rows belong to later sections (Commodity's "Most Traded" row, seen live) - rewinding
+    // onto one of those tapped it behind the floating bottom nav and landed on Watchlist.
     async getMoversTabs() {
         const nodes = await this.getDescribedElements();
         const equity = nodes.find(n => /^Equity\nTab 1 of \d+$/.test(n.desc));
         const minY = equity ? equity.y2 : 0;
-        return nodes
+        const tabs = nodes
             .filter(n => n.y1 >= minY)
-            .map(n => n.desc.match(/^(.+)\nTab (\d+) of (\d+)$/))
-            .filter(Boolean)
-            .map(m => ({ label: m[1], index: Number(m[2]), total: Number(m[3]) }));
+            .map(n => ({ n, m: n.desc.match(/^(.+)\nTab (\d+) of (\d+)$/) }))
+            .filter(t => t.m);
+        if (!tabs.length) return [];
+        const rowY = Math.min(...tabs.map(t => t.n.y1));
+        return tabs
+            .filter(t => t.n.y1 - rowY <= 15)
+            .map(({ m }) => ({ label: m[1], index: Number(m[2]), total: Number(m[3]) }));
     }
 
     // The sub-tab row keeps its scroll offset between visits (e.g. left on "Most Active by Value",
@@ -1298,13 +1832,14 @@ class MarketsPage extends BasePage {
 
     // Scrolls until section `title`'s heading is below the sticky segment tabs and its first row
     // (the first node below the heading that satisfies `isRow`) is fully above the floating bottom
-    // nav, then returns that row's node. Starts from the top: the page is long (Market Movers down
-    // to FII/DII) and keeps its scroll offset between visits.
+    // nav, then returns that row's node. The page keeps its scroll offset between visits, so it
+    // scrolls down from there (see wrapToTopAtBottom) rather than from the top every time.
     async scrollToSection(title, isRow, maxScrolls = 15) {
-        await this.scrollToTop();
         const { height } = await this.driver.getWindowSize();
+        const wrap = { last: null, wrapped: false };
         for (let i = 0; i <= maxScrolls; i++) {
             const nodes = await this.getDescribedElements();
+            if (await this.wrapToTopAtBottom(nodes, wrap)) { i = 0; continue; }
             const tabsBottom = (nodes.find(n => /^Equity\nTab 1 of \d+$/.test(n.desc)) || { y2: 0 }).y2;
             const navTop = (nodes.find(n => n.desc === 'Watchlist') || { y1: Math.floor(height * 0.87) }).y1;
             const heading = nodes.find(n => n.desc === title);
@@ -1315,7 +1850,7 @@ class MarketsPage extends BasePage {
             }
             if (i === maxScrolls) break;
             // Overshot (heading tucked under the sticky tabs) - nudge back the other way.
-            if (heading && heading.y1 < tabsBottom) await this.swipe('up');
+            if (heading && heading.y1 < tabsBottom) { wrap.last = null; await this.swipe('up'); }
             else await this.nudgeDown();
         }
         console.log(`Could not bring the "${title}" section on screen after ${maxScrolls} scrolls`);
@@ -1622,7 +2157,7 @@ class MarketsPage extends BasePage {
         await this.driver.waitUntil(async () => {
             after = this.hraSnapshot(await this.getHraRows());
             return after && after !== before;
-        }, { timeout, interval: 500 }).catch(() => {});
+        }, { timeout, interval: 500 }).catch(() => { });
         return after;
     }
 
@@ -1844,7 +2379,7 @@ class MarketsPage extends BasePage {
             if (rows.length) state = `${rows.length} saved basket(s) displayed`;
             else if (await this.isElementVisible(this.noBasketMessage, 200)) state = 'no baskets created - "Basket order is Empty" shown';
             return !!state;
-        }, { timeout: 5000, interval: 500 }).catch(() => {});
+        }, { timeout: 5000, interval: 500 }).catch(() => { });
         console.log(state ? `Basket screen loaded - ${state}` : 'Basket tab opened, but neither saved baskets nor "Basket order is Empty" is shown');
         return !!state;
     }
