@@ -354,12 +354,12 @@ async function run() {
             throw new Error('Could not get back to the Markets (Equity) screen after the Corporate Action checks');
         }
 
-        console.log('TC 43: Scrolling to Results and clicking the first listed symbol...');
+        console.log('TC 43: Scrolling to Results, clicking the first listed symbol and verifying its expanded Quote and 52 week indicator...');
         const firstResult = await marketsPage.tapFirstResult();
         if (!firstResult) {
             throw new Error('No symbol listed in the Results section');
         }
-        await marketsPage.verifyQuoteOpened(firstResult.symbol);
+        if (await marketsPage.verifyQuoteOpened(firstResult.symbol)) await quotesPage.expandAndVerify52WeekIndicator();
 
         console.log('TC 44: Navigating back to Markets...');
         if (!(await marketsPage.navigateBackToMarkets())) {
@@ -376,10 +376,10 @@ async function run() {
         const allResults = await resultsPage.collectAllResults();
         resultsPage.verifyDatesTodayOrFuture(allResults);
 
-        console.log('TC 47: Clicking the first symbol on Market Results...');
+        console.log('TC 47: Clicking the first symbol on Market Results and verifying its expanded Quote and 52 week indicator...');
         const listedResult = await resultsPage.tapFirstResult(allResults[0]);
         if (listedResult) {
-            await marketsPage.verifyQuoteOpened(listedResult.symbol);
+            if (await marketsPage.verifyQuoteOpened(listedResult.symbol)) await quotesPage.expandAndVerify52WeekIndicator();
         } else {
             console.log('No symbol listed on Market Results: FAIL');
         }
@@ -451,9 +451,9 @@ async function run() {
             throw new Error('High Return Achievers section not found on the Markets (Equity) screen');
         }
 
-        console.log('\nTC 65: Clicking the first High Return Achievers symbol and verifying its Quote...');
+        console.log('\nTC 65: Clicking the first High Return Achievers symbol and verifying its expanded Quote and 52 week indicator...');
         const hraSymbol = await marketsPage.tapFirstHraSymbol();
-        if (hraSymbol) await marketsPage.verifyQuoteOpened(hraSymbol);
+        if (hraSymbol && await marketsPage.verifyQuoteOpened(hraSymbol)) await quotesPage.expandAndVerify52WeekIndicator();
 
         // Back from the Quote returns to Markets with the section still in view (verified live);
         // scroll it back in only if it isn't.
@@ -490,9 +490,9 @@ async function run() {
             throw new Error('High Return Achievers "See all" screen did not open');
         }
 
-        console.log('\nTC 71: Clicking the first symbol on High Return Achievers "See all" and verifying its Quote...');
+        console.log('\nTC 71: Clicking the first symbol on High Return Achievers "See all" and verifying its expanded Quote and 52 week indicator...');
         const seeAllSymbol = await marketsPage.tapFirstHraSymbol();
-        if (seeAllSymbol) await marketsPage.verifyQuoteOpened(seeAllSymbol);
+        if (seeAllSymbol && await marketsPage.verifyQuoteOpened(seeAllSymbol)) await quotesPage.expandAndVerify52WeekIndicator();
 
         console.log('\nTC 72: Navigating back to High Return Achievers "See all" from the Quote...');
         if (!(await marketsPage.navigateBackToHraSeeAll())) {
@@ -546,9 +546,9 @@ async function run() {
             throw new Error('Stock In Range section not found on the Markets (Equity) screen');
         }
 
-        console.log('\nTC 83: Clicking the first Stock In Range symbol and verifying its Quote...');
+        console.log('\nTC 83: Clicking the first Stock In Range symbol and verifying its expanded Quote and 52 week indicator...');
         const sirSymbol = await marketsPage.tapFirstSirSymbol();
-        if (sirSymbol) await marketsPage.verifyQuoteOpened(sirSymbol);
+        if (sirSymbol && await marketsPage.verifyQuoteOpened(sirSymbol)) await quotesPage.expandAndVerify52WeekIndicator();
 
         console.log('\nTC 84: Navigating back to Markets from the Quote...');
         if (!(await marketsPage.navigateBackFromQuote())) {
@@ -567,9 +567,10 @@ async function run() {
             throw new Error('Stock In Range "See all" screen did not open');
         }
 
-        console.log('\nTC 87: Clicking the first symbol on Stock In Range "See all" and verifying its Quote...');
+        console.log('\nTC 87: Clicking the first symbol on Stock In Range "See all" and verifying its expanded Quote and 52 week indicator...');
         const sirSeeAllSymbol = await marketsPage.tapFirstSirSymbol();
         const sirSeeAllQuoteOpened = !!sirSeeAllSymbol && await marketsPage.verifyQuoteOpened(sirSeeAllSymbol);
+        if (sirSeeAllQuoteOpened) await quotesPage.expandAndVerify52WeekIndicator();
 
         console.log('\nTC 88: Navigating back to Stock In Range "See all" from the Quote...');
         // With no Quote open, a back-press would close "See all" itself and derail TC 89/90.
@@ -649,9 +650,10 @@ async function run() {
             throw new Error('Could not get back to the Markets (Equity) screen from Last Visited');
         }
 
-        console.log('\nTC 101: Clicking the first symbol under Last Visited and verifying its Quote...');
+        console.log('\nTC 101: Clicking the first symbol under Last Visited and verifying its expanded Quote and 52 week indicator...');
         const recentSymbol = await marketsPage.tapFirstRecentlyViewed();
         const recentQuoteOpened = !!recentSymbol && await marketsPage.verifyQuoteOpened(recentSymbol);
+        if (recentQuoteOpened) await quotesPage.expandAndVerify52WeekIndicator();
 
         console.log('\nTC 102: Closing the Quote and navigating back to Markets...');
         if (!recentQuoteOpened) {
