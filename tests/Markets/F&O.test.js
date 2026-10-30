@@ -100,7 +100,7 @@ async function run() {
         console.log('\nTC 8: Verifying Top Gainers is selected by default with a list of F&O symbols...');
         await marketsPage.verifyFnoInsightsDefault();
 
-        console.log('\nTC 9: Clicking the first symbol under F&O Market Insights and verifying its Quote screen...');
+        console.log('\nTC 9: Clicking the first symbol under F&O Market Insights and verifying its expanded Quote screen and 52 week indicator...');
         const insightQuote = await marketsPage.openFirstFnoSymbol('F&O Market Insights', await marketsPage.getFnoInsightRows());
 
         console.log('\nTC 10: Navigating back from the Quote to the F&O tab...');
@@ -133,7 +133,7 @@ async function run() {
         console.log(`\nTC ${tc++}: Verifying Top Gainers is selected by default with a list of F&O symbols...`);
         await marketsPage.verifyFnoInsightsDefault();
 
-        console.log(`\nTC ${tc++}: "See all" - clicking the first symbol and verifying its Quote screen...`);
+        console.log(`\nTC ${tc++}: "See all" - clicking the first symbol and verifying its expanded Quote screen and 52 week indicator...`);
         const seeAllQuote = await marketsPage.openFirstFnoSymbol('F&O Market Insights "See all"', await marketsPage.getFnoInsightRows());
 
         console.log(`\nTC ${tc++}: Navigating back from the Quote to F&O Market Insights "See all"...`);
@@ -262,7 +262,7 @@ async function run() {
         console.log(`\nTC ${tc++}: Verifying Most Traded lists F&O symbols with expiry...`);
         await marketsPage.verifyTrendingOptionRows('Most Traded');
 
-        console.log(`\nTC ${tc++}: Clicking the first Most Traded symbol and verifying its Quote screen...`);
+        console.log(`\nTC ${tc++}: Clicking the first Most Traded symbol and verifying its expanded Quote screen and 52 week indicator...`);
         const mostTradedQuote = await marketsPage.openFirstFnoSymbol('Trending Options "Most Traded"', await marketsPage.getTrendingOptionRows());
 
         console.log(`\nTC ${tc++}: Navigating back from the Quote to the F&O tab...`);
@@ -280,7 +280,7 @@ async function run() {
         console.log(`\nTC ${tc++}: Verifying Highest OI lists F&O symbols with expiry...`);
         await marketsPage.verifyTrendingOptionRows('Highest OI');
 
-        console.log(`\nTC ${tc++}: Clicking the first Highest OI symbol and verifying its Quote screen...`);
+        console.log(`\nTC ${tc++}: Clicking the first Highest OI symbol and verifying its expanded Quote screen and 52 week indicator...`);
         const highestOiQuote = await marketsPage.openFirstFnoSymbol('Trending Options "Highest OI"', await marketsPage.getTrendingOptionRows());
 
         console.log(`\nTC ${tc++}: Navigating back from the Quote to the F&O tab...`);
@@ -297,7 +297,7 @@ async function run() {
         console.log(`\nTC ${tc++}: Verifying "${defaultIndexTab}" shows Current Expiry, Next Expiry, Far Expiry...`);
         await marketsPage.verifyFutureIndexCategories(defaultIndexTab);
 
-        console.log(`\nTC ${tc++}: Clicking the first Future Index Contracts symbol and verifying its Quote screen...`);
+        console.log(`\nTC ${tc++}: Clicking the first Future Index Contracts symbol and verifying its expanded Quote screen and 52 week indicator...`);
         const indexQuote = await marketsPage.openFirstFnoSymbol('Future Index Contracts', await marketsPage.getFutureIndexRows());
 
         console.log(`\nTC ${tc++}: Navigating back from the Quote to the F&O tab...`);
@@ -339,7 +339,7 @@ async function run() {
         const oiTabMessages = new Map();
         console.log('\nTC 67: Clicking OI Analysis "Long Buildup" and verifying its own message with symbols with expiry, Open Interest and Price...');
         const longBuildupRows = await selectOiTab(marketsPage, 1, 'Long Buildup', oiTabMessages);
-        console.log('\nTC 68: Clicking the first OI Analysis "Long Buildup" symbol and verifying its Quote screen...');
+        console.log('\nTC 68: Clicking the first OI Analysis "Long Buildup" symbol and verifying its expanded Quote screen and 52 week indicator...');
         const longBuildupQuote = await marketsPage.openFirstFnoSymbol('OI Analysis "Long Buildup"', longBuildupRows);
         console.log('\nTC 69: Navigating back from the Quote to the F&O tab...');
         await backToFnoFromOiQuote(marketsPage, longBuildupQuote, 'Long Buildup');
@@ -348,7 +348,7 @@ async function run() {
 
         console.log('\nTC 71: Clicking OI Analysis "Long Unwinding" and verifying its own message with symbols with expiry, Open Interest and Price...');
         const longUnwindingRows = await selectOiTab(marketsPage, 2, 'Long Unwinding', oiTabMessages);
-        console.log('\nTC 72: Clicking the first OI Analysis "Long Unwinding" symbol and verifying its Quote screen...');
+        console.log('\nTC 72: Clicking the first OI Analysis "Long Unwinding" symbol and verifying its expanded Quote screen and 52 week indicator...');
         const longUnwindingQuote = await marketsPage.openFirstFnoSymbol('OI Analysis "Long Unwinding"', longUnwindingRows);
         console.log('\nTC 73: Navigating back from the Quote to the F&O tab...');
         await backToFnoFromOiQuote(marketsPage, longUnwindingQuote, 'Long Unwinding');
@@ -357,7 +357,7 @@ async function run() {
 
         console.log('\nTC 75: Clicking OI Analysis "Short Buildup" and verifying its own message with symbols with expiry, Open Interest and Price...');
         const shortBuildupRows = await selectOiTab(marketsPage, 3, 'Short Buildup', oiTabMessages);
-        console.log('\nTC 76: Clicking the first OI Analysis "Short Buildup" symbol and verifying its Quote screen...');
+        console.log('\nTC 76: Clicking the first OI Analysis "Short Buildup" symbol and verifying its expanded Quote screen and 52 week indicator...');
         const shortBuildupQuote = await marketsPage.openFirstFnoSymbol('OI Analysis "Short Buildup"', shortBuildupRows);
         console.log('\nTC 77: Navigating back from the Quote to the F&O tab...');
         await backToFnoFromOiQuote(marketsPage, shortBuildupQuote, 'Short Buildup');
@@ -366,7 +366,7 @@ async function run() {
 
         console.log('\nTC 79: Clicking OI Analysis "Short Covering" and verifying its own message with symbols with expiry, Open Interest and Price...');
         const shortCoveringRows = await selectOiTab(marketsPage, 4, 'Short Covering', oiTabMessages);
-        console.log('\nTC 80: Clicking the first OI Analysis "Short Covering" symbol and verifying its Quote screen...');
+        console.log('\nTC 80: Clicking the first OI Analysis "Short Covering" symbol and verifying its expanded Quote screen and 52 week indicator...');
         const shortCoveringQuote = await marketsPage.openFirstFnoSymbol('OI Analysis "Short Covering"', shortCoveringRows);
         console.log('\nTC 81: Navigating back from the Quote to the F&O tab...');
         await backToFnoFromOiQuote(marketsPage, shortCoveringQuote, 'Short Covering');
@@ -404,7 +404,7 @@ async function run() {
             throw new Error('Rollover Analysis section not found on the F&O tab');
         }
 
-        console.log('\nTC 90: Clicking the first Rollover Analysis symbol and verifying its Quote screen...');
+        console.log('\nTC 90: Clicking the first Rollover Analysis symbol and verifying its expanded Quote screen and 52 week indicator...');
         const rolloverQuote = await marketsPage.openFirstFnoSymbol('Rollover Analysis', await marketsPage.getRolloverRows());
 
         console.log('\nTC 91: Navigating back from the Quote to the F&O tab...');
@@ -447,7 +447,7 @@ async function run() {
             throw new Error('Rollover Analysis "See all" screen did not open');
         }
 
-        console.log('\nTC 99: "See all" - clicking the first Rollover Analysis symbol and verifying its Quote screen...');
+        console.log('\nTC 99: "See all" - clicking the first Rollover Analysis symbol and verifying its expanded Quote screen and 52 week indicator...');
         const rolloverSeeAllQuote = await marketsPage.openFirstFnoSymbol('Rollover Analysis "See all"', await marketsPage.getRolloverRows());
 
         console.log('\nTC 100: Navigating back from the Quote to Rollover Analysis "See all"...');

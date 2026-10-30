@@ -1,4 +1,5 @@
 const BasePage = require('./BasePage');
+const QuotesPage = require('./QuotesPage');
 const { isResultRow, parseResultRow } = require('./ResultsPage');
 const { decodePng, pixelAt } = require('../utils/pngPixels');
 
@@ -1518,7 +1519,9 @@ class MarketsPage extends BasePage {
     }
 
     // Taps the top-most of `rows` (from getFnoInsightRows/getTrendingOptionRows) and checks its
-    // Quote opens - headed "Stock KAYNES 23NOV FUT, NFO. ..." for a contract too (verified live).
+    // Quote opens - headed "Stock KAYNES 23NOV FUT, NFO. ..." for a contract too (verified live) -
+    // then expands it and checks the 52 week indicator (equity only, so absent for these segments).
+    // One back-press still closes the expanded Quote (see navigateBackFromQuote).
     async openFirstFnoSymbol(section, rows) {
         if (!rows.length) {
             console.log(`No symbol listed under ${section} to click: FAIL`);
@@ -1528,6 +1531,7 @@ class MarketsPage extends BasePage {
         await this.tapNode(first.node);
         console.log(`Clicked first ${section} symbol: ${first.symbol}`);
         const opened = await this.verifyQuoteOpened(first.symbol);
+        if (opened) await new QuotesPage(this.driver).expandAndVerify52WeekIndicator();
         return { symbol: first.symbol, opened };
     }
 

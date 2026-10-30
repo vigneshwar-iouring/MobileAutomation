@@ -152,7 +152,7 @@ async function run() {
         await step('TC 8: Verifying Top Gainers is selected by default with a list of Commodity symbols...', () =>
             marketsPage.verifyCommodityInsightsDefault());
 
-        const insightQuote = await step('TC 9: Clicking the first symbol under Commodity Market Insights and verifying its Quote screen...', async () =>
+        const insightQuote = await step('TC 9: Clicking the first symbol under Commodity Market Insights and verifying its expanded Quote screen and 52 week indicator...', async () =>
             marketsPage.openFirstFnoSymbol('Commodity Market Insights', await marketsPage.getFnoInsightRows()));
 
         // Same click-only sub-tab row as Equity's Market Movers: rewind to Tab 1 (in case it was left
@@ -199,7 +199,7 @@ async function run() {
         await step('TC 17: Verifying Top Gainers is selected by default with a list of Commodity symbols...', () =>
             marketsPage.verifyCommodityInsightsDefault());
 
-        const seeAllQuote = await step('TC 18: "See all" - clicking the first symbol and verifying its Quote screen...', async () =>
+        const seeAllQuote = await step('TC 18: "See all" - clicking the first symbol and verifying its expanded Quote screen and 52 week indicator...', async () =>
             marketsPage.openFirstFnoSymbol('Commodity Market Insights "See all"', await marketsPage.getFnoInsightRows()));
 
         // "See all" has the same 5 tabs as Commodity Market Insights itself.
@@ -290,7 +290,7 @@ async function run() {
         await step('TC 41: Verifying Most Traded lists Commodity symbols with expiry...', () =>
             marketsPage.verifyTrendingCommodityRows('Most Traded'));
 
-        const mostTradedQuote = await step('TC 42: Clicking the first Most Traded symbol and verifying its Quote screen...', async () =>
+        const mostTradedQuote = await step('TC 42: Clicking the first Most Traded symbol and verifying its expanded Quote screen and 52 week indicator...', async () =>
             marketsPage.openFirstFnoSymbol('Trending Commodities Options "Most Traded"', await marketsPage.getTrendingCommodityRows()));
 
         await step('TC 43: Navigating back from the Quote to the Commodity tab...', async () => {
@@ -310,7 +310,7 @@ async function run() {
         await step('TC 45: Verifying Highest OI lists Commodity symbols with expiry...', () =>
             marketsPage.verifyTrendingCommodityRows('Highest OI'));
 
-        const highestOiQuote = await step('TC 46: Clicking the first Highest OI symbol and verifying its Quote screen...', async () =>
+        const highestOiQuote = await step('TC 46: Clicking the first Highest OI symbol and verifying its expanded Quote screen and 52 week indicator...', async () =>
             marketsPage.openFirstFnoSymbol('Trending Commodities Options "Highest OI"', await marketsPage.getTrendingCommodityRows()));
 
         await step('TC 47: Navigating back from the Quote to the Commodity tab...', async () => {
@@ -334,7 +334,7 @@ async function run() {
             return count;
         }) || 0;
 
-        const topQuote = await step('TC 49: Clicking the first Top Commodities symbol and verifying its Quote screen...', async () =>
+        const topQuote = await step('TC 49: Clicking the first Top Commodities symbol and verifying its expanded Quote screen and 52 week indicator...', async () =>
             marketsPage.openFirstFnoSymbol('Top Commodities', await marketsPage.getTopCommoditiesRows()));
 
         await step('TC 50: Navigating back from the Quote to the Commodity tab...', async () => {
@@ -365,7 +365,7 @@ async function run() {
             return topSeeAllTabs.length ? topSeeAllTabs[0].total : 0;
         }) || 0;
 
-        const topSeeAllQuote = await step(`TC ${tc++}: "See all" - clicking the first Top Commodities symbol and verifying its Quote screen...`, async () =>
+        const topSeeAllQuote = await step(`TC ${tc++}: "See all" - clicking the first Top Commodities symbol and verifying its expanded Quote screen and 52 week indicator...`, async () =>
             marketsPage.openFirstFnoSymbol('Top Commodities "See all"', await marketsPage.getTopCommoditiesRows()));
 
         await step(`TC ${tc++}: Navigating back from the Quote to Top Commodities "See all"...`, async () => {
@@ -405,7 +405,7 @@ async function run() {
 
         const longBuildupRows = await step(`TC ${tc++}: Clicking OI Analysis "Long Buildup" and verifying its own message with symbols with expiry, Open Interest and Price...`, () =>
             selectOiTab(marketsPage, 1, 'Long Buildup', oiTabMessages));
-        const longBuildupQuote = await step(`TC ${tc++}: Clicking the first OI Analysis "Long Buildup" symbol and verifying its Quote screen...`, () =>
+        const longBuildupQuote = await step(`TC ${tc++}: Clicking the first OI Analysis "Long Buildup" symbol and verifying its expanded Quote screen and 52 week indicator...`, () =>
             marketsPage.openFirstFnoSymbol('OI Analysis "Long Buildup"', longBuildupRows || []));
         await step(`TC ${tc++}: Navigating back from the Quote to the Commodity tab...`, () =>
             backToCommodityFromOiQuote(marketsPage, longBuildupQuote, 'Long Buildup'));
@@ -414,7 +414,7 @@ async function run() {
 
         const longUnwindingRows = await step(`TC ${tc++}: Clicking OI Analysis "Long Unwinding" and verifying its own message with symbols with expiry, Open Interest and Price...`, () =>
             selectOiTab(marketsPage, 2, 'Long Unwinding', oiTabMessages));
-        const longUnwindingQuote = await step(`TC ${tc++}: Clicking the first OI Analysis "Long Unwinding" symbol and verifying its Quote screen...`, () =>
+        const longUnwindingQuote = await step(`TC ${tc++}: Clicking the first OI Analysis "Long Unwinding" symbol and verifying its expanded Quote screen and 52 week indicator...`, () =>
             marketsPage.openFirstFnoSymbol('OI Analysis "Long Unwinding"', longUnwindingRows || []));
         await step(`TC ${tc++}: Navigating back from the Quote to the Commodity tab...`, () =>
             backToCommodityFromOiQuote(marketsPage, longUnwindingQuote, 'Long Unwinding'));
@@ -423,7 +423,7 @@ async function run() {
 
         const shortBuildupRows = await step(`TC ${tc++}: Clicking OI Analysis "Short Buildup" and verifying its own message with symbols with expiry, Open Interest and Price...`, () =>
             selectOiTab(marketsPage, 3, 'Short Buildup', oiTabMessages));
-        const shortBuildupQuote = await step(`TC ${tc++}: Clicking the first OI Analysis "Short Buildup" symbol and verifying its Quote screen...`, () =>
+        const shortBuildupQuote = await step(`TC ${tc++}: Clicking the first OI Analysis "Short Buildup" symbol and verifying its expanded Quote screen and 52 week indicator...`, () =>
             marketsPage.openFirstFnoSymbol('OI Analysis "Short Buildup"', shortBuildupRows || []));
         await step(`TC ${tc++}: Navigating back from the Quote to the Commodity tab...`, () =>
             backToCommodityFromOiQuote(marketsPage, shortBuildupQuote, 'Short Buildup'));
@@ -432,7 +432,7 @@ async function run() {
 
         const shortCoveringRows = await step(`TC ${tc++}: Clicking OI Analysis "Short Covering" and verifying its own message with symbols with expiry, Open Interest and Price...`, () =>
             selectOiTab(marketsPage, 4, 'Short Covering', oiTabMessages));
-        const shortCoveringQuote = await step(`TC ${tc++}: Clicking the first OI Analysis "Short Covering" symbol and verifying its Quote screen...`, () =>
+        const shortCoveringQuote = await step(`TC ${tc++}: Clicking the first OI Analysis "Short Covering" symbol and verifying its expanded Quote screen and 52 week indicator...`, () =>
             marketsPage.openFirstFnoSymbol('OI Analysis "Short Covering"', shortCoveringRows || []));
         await step(`TC ${tc++}: Navigating back from the Quote to the Commodity tab...`, () =>
             backToCommodityFromOiQuote(marketsPage, shortCoveringQuote, 'Short Covering'));
@@ -461,7 +461,7 @@ async function run() {
         await step(`TC ${tc++}: "See all" - clicking "Short Covering" and verifying its own message with symbols...`, () =>
             verifyOiSeeAllTab(marketsPage, 4, 'Short Covering', oiMessages));
 
-        const oiSeeAllQuote = await step(`TC ${tc++}: "See all" - clicking the first OI Analysis "Short Covering" symbol and verifying its Quote screen...`, async () =>
+        const oiSeeAllQuote = await step(`TC ${tc++}: "See all" - clicking the first OI Analysis "Short Covering" symbol and verifying its expanded Quote screen and 52 week indicator...`, async () =>
             marketsPage.openFirstFnoSymbol('OI Analysis "See all"', await marketsPage.getOiAnalysisRows()));
 
         await step(`TC ${tc++}: Navigating back from the Quote to OI Analysis "See all"...`, async () => {

@@ -360,19 +360,19 @@ class QuotesPage extends BasePage {
 
     // The 52 week section ("52 week range. Year low 381.00. Year high 1036.70., ...") with its
     // red-to-green range bar and marker drawn just below the labels. Only equity Quotes have it, so
-    // anything else is skipped. The bar is confirmed from the screenshot as saturated pixels in the
-    // node's lower part (the labels themselves are white).
+    // for anything else (NFO/BFO/MCX/CDS...) it must not be displayed. The bar is confirmed from the
+    // screenshot as saturated pixels in the node's lower part (the labels themselves are white).
     async verify52WeekIndicator(exchange, maxSwipes = 2) {
-        if (!this.isEquity(exchange)) {
-            console.log(`52 week low/high indicator: not an equity symbol (${exchange}) - skipped`);
-            return true;
-        }
         const find = async () => (await this.getDescribedElements()).find(n => n.desc.startsWith('52 week range.'));
         let node = await find();
         for (let i = 0; i < maxSwipes && !node; i++) {
             await this.swipe('down');
             await this.pause(600);
             node = await find();
+        }
+        if (!this.isEquity(exchange)) {
+            console.log(`52 week low/high indicator not displayed for a non-equity symbol (${exchange}): ${node ? 'FAIL (displayed)' : 'PASS'}`);
+            return !node;
         }
         if (!node) {
             console.log('52 week low/high indicator not displayed: FAIL');
@@ -399,6 +399,18 @@ class QuotesPage extends BasePage {
         console.log(`52 Week Low ${m ? m[1] : '?'} / 52 Week High ${m ? m[2] : '?'} displayed: ${valuesOk ? 'PASS' : 'FAIL'}`);
         console.log(`52 week range indicator bar drawn: ${barOk ? 'PASS' : 'FAIL'}`);
         return valuesOk && barOk;
+    }
+
+    // For a Quote just opened from a Markets list: reads its exchange off the header, expands it and
+    // checks the 52 week indicator (shown for NSE/BSE, absent for everything else).
+    async expandAndVerify52WeekIndicator() {
+        const header = await this.getQuoteHeader();
+        if (!header) {
+            console.log('Quote header (symbol, exchange) not found - cannot check the 52 week indicator: FAIL');
+            return false;
+        }
+        if (!(await this.swipeUpQuoteScreen())) return false;
+        return this.verify52WeekIndicator(header.exchange);
     }
 
     // Opens Advanced Options ("..." beside SELL) and, for an equity symbol, checks "Compare with
