@@ -24,7 +24,7 @@ const SIR_TABS = [
 // Its rows read like the movers rows: " TERAI. TERAI TEA CO. LTD.. Last traded price 140.01. Change
 // 23.33. ..., Double tap to view TERAI details, or swipe right for next category".
 const isSirRow = desc => desc.includes('Last traded price') && desc.includes('Double tap to view');
-// Stocks You Viewed Recently cards on Markets read " IDEA. Last traded price 12.80. ...\nIDEA \n12.80..."
+// Last Visited cards on Markets read " IDEA. Last traded price 12.80. ...\nIDEA \n12.80..."
 // (" NIFTY 13OCT 22750 CE. Last traded price ..." for a contract) - unlike the other sections' rows,
 // with no "Double tap to view".
 const isRecentCard = desc => desc.includes('\n') && !desc.includes('Double tap to view') && /^\s*\S.*?\. Last traded price/.test(desc);
@@ -240,7 +240,7 @@ class MarketsPage extends BasePage {
         this.globalSearchBar = '//android.widget.Button[@hint="Search Globe"]';
         this.searchField = 'android=new UiSelector().className("android.widget.Button").instance(0)';
         this.searchCancelButton = 'android=new UiSelector().description("Cancel")';
-        this.seeAllRecentlyViewed = 'android=new UiSelector().descriptionStartsWith("See all Stocks You Viewed Recently")';
+        this.seeAllRecentlyViewed = 'android=new UiSelector().descriptionStartsWith("See all Last Visited")';
         this.recentlyViewedTitle = 'android=new UiSelector().description("Stocks You Viewed Recently")';
 
         // Each movers row is one content-desc (" SYMBOL. COMPANY. Last traded price ..., Double tap
@@ -1986,7 +1986,7 @@ class MarketsPage extends BasePage {
     }
 
     // Rows listed under the price-range tab row, as { symbol, ltp, node }. On Markets the list
-    // stops at the next section's heading ("Stocks You Viewed Recently", whose rows look the same);
+    // stops at the next section's heading ("Last Visited", whose rows look the same);
     // on "See all" there is nothing below it.
     async getSirRows() {
         const nodes = await this.getDescribedElements();
@@ -2384,7 +2384,7 @@ class MarketsPage extends BasePage {
         return !!state;
     }
 
-    // ── Global search / Stocks You Viewed Recently ─────────────────────────────
+    // ── Global search / Last Visited ─────────────────────────────
 
     async clickGlobalSearchBar(timeout = 8000) {
         await this.click(this.globalSearchBar, timeout);
@@ -2490,7 +2490,7 @@ class MarketsPage extends BasePage {
     }
 
     async scrollToRecentlyViewed() {
-        return this.scrollToSection('Stocks You Viewed Recently', isRecentCard);
+        return this.scrollToSection('Last Visited', isRecentCard);
     }
 
     // Recently viewed cards currently on screen, left to right, as { symbol, node, remove } - `remove`
@@ -2528,7 +2528,7 @@ class MarketsPage extends BasePage {
         }
     }
 
-    // Scrolls to Stocks You Viewed Recently and taps the first card under the header (on its left
+    // Scrolls to Last Visited and taps the first card under the header (on its left
     // half, clear of the X) - returns its symbol.
     async tapFirstRecentlyViewed() {
         const firstRow = await this.scrollToRecentlyViewed();
@@ -2536,12 +2536,12 @@ class MarketsPage extends BasePage {
         await this.rewindRecentRow(Math.round((firstRow.y1 + firstRow.y2) / 2));
         const [first] = await this.getRecentCards();
         if (!first) {
-            console.log('No symbol displayed under Stocks You Viewed Recently: FAIL');
+            console.log('No symbol displayed under Last Visited: FAIL');
             return null;
         }
         const { x1, x2, y1, y2 } = first.node;
         await this.tapAt(x1 + (x2 - x1) / 4, (y1 + y2) / 2);
-        console.log(`Clicked the first symbol under Stocks You Viewed Recently: ${first.symbol}`);
+        console.log(`Clicked the first symbol under Last Visited: ${first.symbol}`);
         return first.symbol;
     }
 
@@ -2550,7 +2550,7 @@ class MarketsPage extends BasePage {
     async removeRecentlyViewed(symbol, maxSwipes = 6) {
         const firstRow = (await this.getDescribedElements()).find(n => isRecentCard(n.desc)) || await this.scrollToRecentlyViewed();
         if (!firstRow) {
-            console.log(`Stocks You Viewed Recently not found while removing ${symbol}: FAIL`);
+            console.log(`Last Visited not found while removing ${symbol}: FAIL`);
             return false;
         }
         const rowY = Math.round((firstRow.y1 + firstRow.y2) / 2);
@@ -2561,29 +2561,29 @@ class MarketsPage extends BasePage {
             if (!card && i < maxSwipes) await this.swipeRowAt(rowY, 'left');
         }
         if (!card) {
-            console.log(`${symbol} not displayed under Stocks You Viewed Recently - could not remove it: FAIL`);
+            console.log(`${symbol} not displayed under Last Visited - could not remove it: FAIL`);
             return false;
         }
         const before = (await this.getRecentCards()).filter(c => c.symbol === symbol).length;
         const { x1, x2, y1, y2 } = card.remove;
         await this.tapAt((x1 + x2) / 2, (y1 + y2) / 2);
         await this.pause(1200);
-        const sectionGone = !(await this.getDescribedElements()).some(n => n.desc === 'Stocks You Viewed Recently');
+        const sectionGone = !(await this.getDescribedElements()).some(n => n.desc === 'Last Visited');
         const after = sectionGone ? 0 : (await this.getRecentCards()).filter(c => c.symbol === symbol).length;
         const removed = after < before;
-        console.log(`Clicked X on ${symbol} - removed from Stocks You Viewed Recently${sectionGone ? ' (section no longer shown)' : ''}: ${removed ? 'PASS' : 'FAIL'}`);
+        console.log(`Clicked X on ${symbol} - removed from Last Visited${sectionGone ? ' (section no longer shown)' : ''}: ${removed ? 'PASS' : 'FAIL'}`);
         return removed;
     }
 
     async clickSeeAllRecentlyViewed(timeout = 8000) {
         await this.click(this.seeAllRecentlyViewed, timeout);
-        console.log('Clicked "See all" on Stocks You Viewed Recently');
+        console.log('Clicked "See all" on Last Visited');
     }
 
     async verifyRecentlyViewedSeeAllOpened(timeout = 8000) {
         const opened = await this.isElementVisible(this.backButton, timeout)
             && await this.isElementVisible(this.recentlyViewedTitle, 2000);
-        console.log(`Stocks You Viewed Recently "See all" screen opened: ${opened ? 'PASS' : 'FAIL'}`);
+        console.log(`Last Visited "See all" screen opened: ${opened ? 'PASS' : 'FAIL'}`);
         return opened;
     }
 
@@ -2624,19 +2624,19 @@ class MarketsPage extends BasePage {
     // `symbols` (the ones just opened via search) among them.
     async verifyRecentlyViewedList(symbols, maxListed = symbols.length) {
         const entries = await this.getAllRecentlyViewed();
-        console.log(`Stocks You Viewed Recently lists ${entries.length} symbol(s): ${entries.map(e => e.symbol).join(', ') || 'none'}`);
+        console.log(`Last Visited lists ${entries.length} symbol(s): ${entries.map(e => e.symbol).join(', ') || 'none'}`);
         const countOk = entries.length <= maxListed;
         console.log(`At most ${maxListed} symbols listed: ${countOk ? 'PASS' : `FAIL (${entries.length} listed, expected at most ${maxListed})`}`);
         const listed = new Set(entries.map(e => e.symbol));
         for (const s of symbols) {
-            console.log(`${s} listed under Stocks You Viewed Recently: ${listed.has(s) ? 'PASS' : 'FAIL'}`);
+            console.log(`${s} listed under Last Visited: ${listed.has(s) ? 'PASS' : 'FAIL'}`);
         }
         return countOk && symbols.every(s => listed.has(s));
     }
 
     async closeRecentlyViewedSeeAll(timeout = 5000) {
         await this.click(this.backButton, timeout);
-        console.log('Clicked Back on the Stocks You Viewed Recently screen');
+        console.log('Clicked Back on the Last Visited screen');
     }
 
     // ── FII/DII ─────────────────────────────────────────────────────────────────

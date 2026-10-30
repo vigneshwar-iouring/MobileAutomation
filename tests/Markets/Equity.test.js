@@ -9,7 +9,7 @@ const { CorporateActionPage } = require('../../pages/CorporateActionPage');
 const { ResultsPage } = require('../../pages/ResultsPage');
 const { createLogger, getFailedTCs } = require('../../utils/logger');
 
-// Stocks You Viewed Recently "See all" keeps at most this many symbols.
+// Last Visited "See all" keeps at most this many symbols.
 const RECENTLY_VIEWED_LIMIT = 50;
 
 const { logFile, entries } = createLogger('Markets_Equity');
@@ -242,7 +242,7 @@ async function run() {
         }
 
         // News is one TC end to end: open it from Markets, run the per-tab checks, close it.
-        console.log('\nTC 32: News - scroll to News, See all, check every tab, close...');
+        console.log('\nTC 32: News - Entire module validation...');
         const newsVisible = await marketsPage.scrollToNews();
         if (!newsVisible) {
             throw new Error('Could not find "News" section on the Equity screen');
@@ -597,7 +597,7 @@ async function run() {
         }
 
         // Each search opens the chosen result's Quote, comes back to search and clears the text;
-        // the symbols opened must then show up under Stocks You Viewed Recently.
+        // the symbols opened must then show up under Last Visited.
         const searches = [
             { query: 'IDEA', position: 1 },
             { query: 'GTLINFRA', position: 2 },
@@ -621,51 +621,51 @@ async function run() {
             await marketsPage.clearSearch();
         }
 
-        console.log('\nTC 97: Closing global search and scrolling to Stocks You Viewed Recently...');
+        console.log('\nTC 97: Closing global search and scrolling to Last Visited...');
         await marketsPage.closeGlobalSearch();
         if (!(await marketsPage.navigateBackToMarkets())) {
             throw new Error('Could not get back to the Markets (Equity) screen from global search');
         }
         if (!(await marketsPage.scrollToRecentlyViewed())) {
-            throw new Error('Stocks You Viewed Recently section not found on the Markets (Equity) screen');
+            throw new Error('Last Visited section not found on the Markets (Equity) screen');
         }
 
-        console.log('\nTC 98: Clicking "See all" on Stocks You Viewed Recently...');
+        console.log('\nTC 98: Clicking "See all" on Last Visited...');
         await marketsPage.clickSeeAllRecentlyViewed();
         if (!(await marketsPage.verifyRecentlyViewedSeeAllOpened())) {
-            throw new Error('Stocks You Viewed Recently "See all" screen did not open');
+            throw new Error('Last Visited "See all" screen did not open');
         }
 
-        console.log(`\nTC 99: Verifying the searched symbols are listed under Stocks You Viewed Recently (at most ${RECENTLY_VIEWED_LIMIT})...`);
+        console.log(`\nTC 99: Verifying the searched symbols are listed under Last Visited (at most ${RECENTLY_VIEWED_LIMIT})...`);
         console.log(`Symbols viewed via search: ${viewedSymbols.join(', ') || 'none'}`);
         if (viewedSymbols.length < searches.length) {
             console.log(`Only ${viewedSymbols.length} of ${searches.length} searched symbols opened a Quote: FAIL`);
         }
         await marketsPage.verifyRecentlyViewedList(viewedSymbols, RECENTLY_VIEWED_LIMIT);
 
-        console.log('\nTC 100: Closing Stocks You Viewed Recently and navigating back to Markets...');
+        console.log('\nTC 100: Closing Last Visited and navigating back to Markets...');
         await marketsPage.closeRecentlyViewedSeeAll();
         if (!(await marketsPage.navigateBackToMarkets())) {
-            throw new Error('Could not get back to the Markets (Equity) screen from Stocks You Viewed Recently');
+            throw new Error('Could not get back to the Markets (Equity) screen from Last Visited');
         }
 
-        console.log('\nTC 101: Clicking the first symbol under Stocks You Viewed Recently and verifying its Quote...');
+        console.log('\nTC 101: Clicking the first symbol under Last Visited and verifying its Quote...');
         const recentSymbol = await marketsPage.tapFirstRecentlyViewed();
         const recentQuoteOpened = !!recentSymbol && await marketsPage.verifyQuoteOpened(recentSymbol);
 
         console.log('\nTC 102: Closing the Quote and navigating back to Markets...');
         if (!recentQuoteOpened) {
-            console.log('No Quote open from Stocks You Viewed Recently - skipping the back-press: FAIL');
+            console.log('No Quote open from Last Visited - skipping the back-press: FAIL');
         } else if (!(await marketsPage.navigateBackFromQuote())) {
-            throw new Error('Could not get back to the Markets (Equity) screen from the Stocks You Viewed Recently Quote');
+            throw new Error('Could not get back to the Markets (Equity) screen from the Last Visited Quote');
         }
 
         // Most recently viewed is listed first - that's the symbol TC 101 opened, or failing that the
         // last one searched.
         const firstRecent = recentSymbol || viewedSymbols[viewedSymbols.length - 1];
-        console.log(`\nTC 103: Clicking X on the first symbol (${firstRecent || 'none'}) and verifying it is removed from Stocks You Viewed Recently...`);
+        console.log(`\nTC 103: Clicking X on the first symbol (${firstRecent || 'none'}) and verifying it is removed from Last Visited...`);
         if (!firstRecent) {
-            console.log('No symbol listed under Stocks You Viewed Recently to remove: FAIL');
+            console.log('No symbol listed under Last Visited to remove: FAIL');
         } else {
             await marketsPage.removeRecentlyViewed(firstRecent);
         }
