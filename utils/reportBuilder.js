@@ -28,7 +28,14 @@ const MODULE_REGISTRY = [
     { group: 'Research Calls', label: 'Derivative - Technical', testName: 'ResearchCalls-Derivative-Technical' },
     { group: 'Research Calls', label: 'Derivative - Strategies', testName: 'ResearchCalls-Derivative-Strategies' },
     { group: 'Research Calls', label: 'Commodity - Technical', testName: 'ResearchCalls-Commodity-Technical' },
-    { group: 'Research Calls', label: 'Commodity - Strategies', testName: 'ResearchCalls-Commodity-Strategies' }
+    { group: 'Research Calls', label: 'Commodity - Strategies', testName: 'ResearchCalls-Commodity-Strategies' },
+    { group: 'Watchlist', label: 'Watchlist', testName: 'Watchlist' },
+    { group: 'Watchlist', label: 'Index', testName: 'WatchlistIndex' },
+    { group: 'Watchlist', label: 'Manage Index', testName: 'ManageIndex' },
+    { group: 'Markets', label: 'Equity', testName: 'Markets_Equity' },
+    { group: 'Markets', label: 'F&O', testName: 'Markets_FnO' },
+    { group: 'Markets', label: 'Currency', testName: 'Markets_Currency' },
+    { group: 'Markets', label: 'Commodity', testName: 'Markets_Commodity' }
 ];
 
 function ensureDir(dir) {
