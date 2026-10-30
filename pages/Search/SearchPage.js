@@ -30,11 +30,10 @@ const SEL = {
   noResultsText:      '//*[contains(@content-desc,"No search results") or contains(@text,"No search results") or contains(@content-desc,"no results") or contains(@text,"no results")]',
 
   // ── Result rows ─────────────────────────────────────────────────────────────
-  // Generic result row: any View whose content-desc mentions an exchange AND is
-  // longer than 10 chars. Real rows have "SYMBOL\nEXCH\nSEG\nNAME" (20+ chars);
-  // the CDS filter tab has just "CDS" (3 chars). &#10; cannot be used in XPath 1.0
-  // string literals — string-length() is the XPath-1.0-compatible guard.
-  resultRows:         '//android.view.View[(contains(@content-desc,"NSE") or contains(@content-desc,"BSE") or contains(@content-desc,"NFO") or contains(@content-desc,"MCX") or contains(@content-desc,"CDS")) and string-length(@content-desc) > 10]',
+  // Real rows' content-desc is "SYMBOL\nAdd Watchlist, Double tap to open Quote
+  // Screen." — no NSE/BSE/exchange tag is exposed here at all (confirmed via
+  // device dump). "Quote Screen" anchors the match to a genuine result row.
+  resultRows:         '//android.view.View[contains(@content-desc,"Add Watchlist") and contains(@content-desc,"Quote Screen")]',
 
   // Result row containing a specific symbol
   resultBySymbol:     (sym) => `//android.view.View[starts-with(@content-desc,"${sym.toUpperCase()}")]`,
@@ -54,8 +53,21 @@ class SearchPage extends BasePage {
 
   // The Cancel link is only present on the Search screen, not on the Watchlist screen
   // (both screens share the same EditText selector, so we cannot rely on searchField alone).
+  // Page-source fallbacks handle Markets-origin search screens where Cancel may render differently.
   async isLoaded(timeout = 8000) {
-    return this.isDisplayed(SEL.cancelBtn, timeout);
+    return this.pollUntil(async () => {
+      try {
+        const src = await driver.getPageSource();
+        if (/content-desc="Cancel"|text="Cancel"/.test(src)) return true;
+        // Search screen has ALL + STOCK segment tabs; these are unique to the Search screen
+        if (src.includes('"ALL"') && src.includes('"STOCK"')) return true;
+        // Focused EditText means the search field is active (navigated to search)
+        if (/focused="true"/.test(src) && src.includes('EditText')) return true;
+        // "No Recent Searches" is the search screen empty state (before any query)
+        if (src.includes('No Recent') || src.includes('Recent Search')) return true;
+      } catch {}
+      return false;
+    }, timeout, 500);
   }
 
   async isSearchFieldFocused(timeout = 5000) {
@@ -72,30 +84,96 @@ class SearchPage extends BasePage {
   // Android hides the hint attribute once text is typed into the field, so the
   // hint-based selector stops matching after the first typeQuery() call. Fall
   // back to the single EditText on the search screen when that happens.
+  // When opened from Markets the keyboard is pre-raised and waitForDisplayed
+  // may return false even though the element exists — use isExisting() first.
   async _getSearchField(timeout = 4000) {
-    // Use a short probe for the hint-based selector so the fallback kicks in
-    // quickly when the field already has text (hint attribute disappears once typed).
-    const PROBE_MS = 2000;
+    // UiSelector: find focused or first EditText — works even when waitForDisplayed fails
+    for (const uiSel of [
+      'android=new UiSelector().className("android.widget.EditText").focused(true)',
+      'android=new UiSelector().className("android.widget.EditText").instance(0)',
+    ]) {
+      try {
+        const el = await $(uiSel);
+        if (await el.isExisting()) return el;
+      } catch {}
+    }
+    // XPath: hint-based (fast path when field still shows placeholder)
     try {
       const el = await $(SEL.searchField);
-      await el.waitForDisplayed({ timeout: PROBE_MS });
-      return el;
-    } catch {
-      const el = await $('//android.widget.EditText');
-      await el.waitForDisplayed({ timeout });
-      return el;
-    }
+      if (await el.isExisting()) return el;
+    } catch {}
+    // Last resort: wait for any EditText via XPath
+    const el = await $('//android.widget.EditText');
+    await el.waitForDisplayed({ timeout });
+    return el;
   }
 
   async typeQuery(query) {
-    const el = await this._getSearchField(8000);
-    // Click first to refocus the field and show the keyboard. Without this,
-    // setValue() uses ACTION_SET_TEXT which bypasses onChangeText (e.g. after
-    // the (+) button tap in Phase 6 dismisses the keyboard).
-    await el.click();
-    await browser.pause(300);
-    await el.clearValue();
-    await el.setValue(String(query));
+    // Strategy 1: native android.widget.EditText (Watchlist search screen)
+    for (const uiSel of [
+      'android=new UiSelector().className("android.widget.EditText").focused(true)',
+      'android=new UiSelector().className("android.widget.EditText").instance(0)',
+    ]) {
+      try {
+        const el = await $(uiSel);
+        if (await el.isExisting()) {
+          await el.click();
+          await browser.pause(300);
+          await el.clearValue();
+          await el.setValue(String(query));
+          await browser.pause(300);
+          return;
+        }
+      } catch {}
+    }
+
+    // Strategy 2: ANY focused element (catches React Native custom TextInput that
+    // doesn't report as android.widget.EditText in the accessibility tree).
+    try {
+      const el = await $('android=new UiSelector().focused(true)');
+      if (await el.isExisting()) {
+        console.log('  ℹ  [typeQuery] found focused element via UiSelector');
+        try { await el.clearValue(); } catch {}
+        await el.setValue(String(query));
+        await browser.pause(300);
+        return;
+      }
+    } catch (e) {
+      console.log(`  ℹ  [typeQuery] focused UiSelector: ${String(e.message).slice(0, 80)}`);
+    }
+
+    // Ensure keyboard is visible before sending key events
+    try {
+      const kbShown = await driver.isKeyboardShown();
+      console.log(`  ℹ  [typeQuery] keyboard shown: ${kbShown}`);
+      if (!kbShown) {
+        const { width, height } = await browser.getWindowSize();
+        await browser.action('pointer', { parameters: { pointerType: 'touch' } })
+          .move({ x: Math.round(width * 0.5), y: Math.round(height * 0.06) })
+          .down().pause(80).up().perform();
+        await browser.pause(800);
+      }
+    } catch (e) {
+      console.log(`  ℹ  [typeQuery] keyboard check: ${String(e.message).slice(0, 60)}`);
+    }
+
+    // Strategy 3: browser.keys() — sends real Android KeyEvents via W3C Actions API.
+    // Unlike mobile: type (IME injection), key events trigger React Native onChangeText.
+    try {
+      await browser.keys([...String(query)]);
+      await browser.pause(500);
+      return;
+    } catch (e) {
+      console.log(`  ℹ  [typeQuery] browser.keys failed: ${String(e.message).slice(0, 80)}`);
+    }
+
+    // Strategy 4: mobile: type (IME injection — may not trigger RN event handlers)
+    try {
+      await driver.executeScript('mobile: type', [{ text: String(query) }]);
+    } catch (e) {
+      console.log(`  ℹ  [typeQuery] mobile: type failed: ${String(e.message).slice(0, 80)}`);
+    }
+
     await browser.pause(500);
   }
 
@@ -207,15 +285,29 @@ class SearchPage extends BasePage {
 
   async waitForResults(timeout = 8000) {
     return this.pollUntil(async () => {
-      return (await $$(SEL.resultRows)).length > 0;
+      if ((await $$(SEL.resultRows)).length > 0) return true;
+      // Markets search format: results render as separate symbol + action elements
+      // rather than a single View with exchange info bundled in content-desc
+      const src = await driver.getPageSource();
+      return src.includes('Double tap to add to watchlist') || src.includes('Double tap to remove');
     }, timeout, 500);
   }
 
   async getResultCount() {
-    return (await $$(SEL.resultRows)).length;
+    const native = (await $$(SEL.resultRows)).length;
+    if (native > 0) return native;
+    try {
+      const src         = await driver.getPageSource();
+      const addCount    = (src.match(/Double tap to add to watchlist/g) || []).length;
+      const removeCount = (src.match(/Double tap to remove/g) || []).length;
+      return addCount + removeCount;
+    } catch { return 0; }
   }
 
-  // Returns array of { symbol, exchange, segment, secondary, rawDesc } for each visible row
+  // Returns array of { symbol, exchange, segment, secondary, rawDesc } for each visible row.
+  // exchange/segment/secondary are always null — the app's content-desc for a result
+  // row is just "SYMBOL\nAdd Watchlist, Double tap to open Quote Screen." with no
+  // exchange/segment/secondary data exposed via accessibility in this build.
   async getResultRows() {
     const rows = [];
     try {
@@ -223,17 +315,46 @@ class SearchPage extends BasePage {
       for (const el of els) {
         try {
           const rawDesc = await el.getAttribute('content-desc') || '';
-          const parts   = rawDesc.split(/\n|&#10;/).map(p => p.trim()).filter(Boolean);
-          // Typical parts: ["INFY", "NSE", "EQ", "INFOSYS LIMITED"] or ["INFY25JUN", "NFO", "F&O", "30 Jun 2026"]
-          const symbol    = parts[0] || '';
-          const exchange  = parts[1] || '';
-          const segment   = parts[2] || '';
-          const secondary = parts[3] || '';
-          rows.push({ symbol, exchange, segment, secondary, rawDesc });
+          const symbol  = rawDesc.split(/\n|&#10;/)[0].trim();
+          rows.push({ symbol, exchange: null, segment: null, secondary: null, rawDesc });
         } catch {}
       }
     } catch {}
     return rows;
+  }
+
+  // Taps the first visible result row and waits for navigation
+  async tapFirstResult() {
+    // Watchlist format: single View per row with exchange info in content-desc
+    try {
+      const rows = await $$(SEL.resultRows);
+      if (rows.length > 0) { await rows[0].click(); await browser.pause(1200); return true; }
+    } catch {}
+
+    // Markets format: symbol labels (content-desc="SBI") are non-interactive children.
+    // Locate the first add/remove action button, read its Y position, then tap the
+    // LEFT side of that row (x=30%) where the stock symbol/name is displayed.
+    // A single tap on the row's left area triggers navigation to the Quote screen.
+    for (const addSel of [
+      'android=new UiSelector().descriptionContains("Double tap to add to watchlist").instance(0)',
+      'android=new UiSelector().descriptionContains("Double tap to remove").instance(0)',
+    ]) {
+      try {
+        const el = await $(addSel);
+        if (!await el.isExisting()) continue;
+        const rect = await el.getRect();
+        const { width } = await browser.getWindowSize();
+        await browser.action('pointer', { parameters: { pointerType: 'touch' } })
+          .move({ x: Math.round(width * 0.3), y: Math.round(rect.y + rect.height / 2) })
+          .down().pause(80).up().perform();
+        await browser.pause(1200);
+        return true;
+      } catch (e) {
+        console.log(`  ℹ  [tapFirstResult] ${e.message?.slice(0, 80)}`);
+      }
+    }
+
+    return false;
   }
 
   // Returns true if any result row matches the given symbol

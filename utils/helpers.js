@@ -1,5 +1,6 @@
-const APP_ID       = process.env.APP_PACKAGE  || 'com.iouring.globecapital.dev';
-const APP_ACTIVITY = process.env.APP_ACTIVITY || 'com.iouring.globecapital.MainActivity';
+// No .dev suffix - matches the app package actually installed on this repo's real device
+// (see config/appium.config.js), not the Clone project's separate dev-build package.
+const APP_ID       = process.env.APP_PACKAGE  || 'com.iouring.globecapital';
 
 // Dismisses any Android permission popup by tapping the most permissive option.
 async function handlePermissionDialog() {
@@ -31,15 +32,15 @@ async function handlePermissionDialog() {
 }
 
 // Wipes app data and cold-launches the app from a clean state (no cached session).
-// Uses pm clear (safe on stock Android) + am start -W (waits for full launch).
+// Uses the driver's own app-management commands (clearApp/activateApp) rather than raw
+// `mobile: shell` (pm clear / am start) - confirmed live that the latter silently no-ops
+// against this repo's shared external Appium server: "Potentially insecure feature
+// 'adb_shell' has not been enabled", swallowed by the try/catch here, so the app was being
+// terminated but never relaunched. mobile: clearApp/activateApp aren't gated behind that flag.
 async function clearAndLaunch() {
-  try { await driver.terminateApp(APP_ID); } catch {}
-  await browser.pause(500);
-  try { await driver.execute('mobile: shell', { command: `pm clear ${APP_ID}` }); } catch {}
+  try { await driver.execute('mobile: clearApp', { appId: APP_ID }); } catch {}
   await browser.pause(1000);
-  try { await driver.execute('mobile: shell', { command: 'wm dismiss-keyguard' }); } catch {}
-  await browser.pause(300);
-  try { await driver.execute('mobile: shell', { command: `am start -W -n ${APP_ID}/${APP_ACTIVITY}` }); } catch {}
+  try { await driver.activateApp(APP_ID); } catch {}
   await browser.pause(3000); // extra settle time — app may do network checks after a clean install
 }
 

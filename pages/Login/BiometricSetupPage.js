@@ -12,10 +12,19 @@ const PIN_SCREEN_MARKERS = [
   'com.android.systemui:id/lockPassword',
   'com.android.systemui:id/entry',
   'com.android.settings:id/password_entry',
+  'com.android.systemui:id/cred_pin_pad',
   'Authentication required',
   'Confirm your PIN',
   'Enter your PIN',
 ];
+
+// Android 16's system credential prompt is a Compose numeric keypad, not a text
+// field — confirmed via a real resource-id dump (cred_pin_pad / key_enter /
+// delete_button; individual digit keys carry no resource-id, only their own
+// text, e.g. text="7"). Older Android versions still use PIN_SELECTORS above.
+const PIN_PAD_MARKER    = 'cred_pin_pad';
+const PIN_PAD_ENTER_SEL = '//*[@resource-id="com.android.systemui:id/key_enter"]';
+const pinPadKeySel = (digit) => `//*[@text="${digit}" or @content-desc="${digit}"]`;
 
 // Texts that indicate the system biometric face/touch overlay (not PIN input)
 const BIOMETRIC_OVERLAY_MARKERS = [
@@ -87,23 +96,41 @@ class BiometricSetupPage extends BasePage {
 
   async enterPin(pin) {
     const field = await this._findPinField();
-    if (!field) {
-      try {
-        const src    = await driver.getPageSource();
-        const unique = [...new Set([...src.matchAll(/resource-id="([^"]+)"/g)].map(m => m[1]).filter(Boolean))];
-        const descs  = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]).slice(0, 20);
-        console.log('\n  ── PIN field not found — resource-ids:', unique.join(' | '));
-        console.log('  descs:', descs.join(', '));
-        await this.takeScreenshot('pin-field-not-found');
-      } catch {}
-      throw new Error('PIN input field not found — check screenshot above');
+    if (field) {
+      await this._tap(field);
+      await browser.pause(300);
+      await field.setValue(String(pin));
+      await browser.pause(500);
+      try { await driver.execute('mobile: pressKey', { keycode: 66 }); } catch {}
+      await browser.pause(500);
+      return;
     }
-    await this._tap(field);
-    await browser.pause(300);
-    await field.setValue(String(pin));
-    await browser.pause(500);
-    try { await driver.execute('mobile: pressKey', { keycode: 66 }); } catch {}
-    await browser.pause(500);
+
+    // No text field — check for the Android 16+ Compose numeric keypad before giving up.
+    let src = '';
+    try { src = await driver.getPageSource(); } catch {}
+    if (src.includes(PIN_PAD_MARKER)) {
+      for (const digit of String(pin)) {
+        const tapped = await this.findAndTap(pinPadKeySel(digit), 3000);
+        if (!tapped) {
+          await this.takeScreenshot('pin-pad-key-not-found');
+          throw new Error(`PIN pad key "${digit}" not found — check screenshot above`);
+        }
+        await browser.pause(150);
+      }
+      await this.findAndTap(PIN_PAD_ENTER_SEL, 3000);
+      await browser.pause(500);
+      return;
+    }
+
+    try {
+      const unique = [...new Set([...src.matchAll(/resource-id="([^"]+)"/g)].map(m => m[1]).filter(Boolean))];
+      const descs  = [...src.matchAll(/content-desc="([^"]+)"/g)].map(m => m[1]).slice(0, 20);
+      console.log('\n  ── PIN field not found — resource-ids:', unique.join(' | '));
+      console.log('  descs:', descs.join(', '));
+      await this.takeScreenshot('pin-field-not-found');
+    } catch {}
+    throw new Error('PIN input field not found — check screenshot above');
   }
 }
 

@@ -7,22 +7,38 @@ const BasePage = require('../Login/BasePage');
 //   Search box:    y=688–815
 //   Stock list:    y=815+
 const SEL = {
-  searchBox:       '//android.widget.EditText[contains(@hint,"Add or search stocks")]',
-  title:           '//android.view.View[@content-desc="Watchlist"]',
+  // Search box on the Watchlist screen is a Button (not an EditText) that
+  // opens a search overlay. The overlay's typing field is also reported as
+  // a Button in the a11y tree (custom-rendered text field), not an EditText.
+  searchBox:       '//android.widget.Button[contains(@hint,"Add or search stocks")]',
+  searchInput:     '//android.widget.Button[@hint="Add or search stocks"]',
+  // Case-insensitive — the header renders as "WATCHLIST" in this app build.
+  title:           '//android.view.View[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="WATCHLIST"]',
+  // Unique to the Watchlist screen - used by isLoaded() instead of allTabs below, since
+  // allTabs's generic "Tab N of M" shape is also used by other screens' own tab strips
+  // (e.g. News's All/Result/Block Deals/... tabs) and so isn't a reliable Watchlist signal.
+  manageWatchlistBtn: '//*[contains(@content-desc,"Manage Watchlist")]',
 
   // Individual watchlist tab Views — content-desc "Name\nTab N of M"
   allTabs:         '//android.view.View[contains(@content-desc,"Tab ") and contains(@content-desc," of ")]',
-  tab:             (n) => `//android.view.View[contains(@content-desc,"Watchlist${n}") and contains(@content-desc,"Tab ${n} of ")]`,
+  // translate() normalizes case — the app renders the default tab as "WATCHLIST1" but
+  // custom-named tabs keep their original case (e.g. "Watchlist2"), so match case-insensitively.
+  tab:             (n) => `//android.view.View[contains(translate(@content-desc,"watchlist","WATCHLIST"),"WATCHLIST${n}") and contains(@content-desc,"Tab ${n} of ")]`,
   tabByName:       (name) => `//android.view.View[contains(@content-desc,"${name}") and contains(@content-desc,"Tab ") and contains(@content-desc," of ")]`,
 
   stockItems:      '//android.widget.ScrollView//android.view.View[contains(@content-desc,"NSE") or contains(@content-desc,"BSE")]',
   stockByName:     (name) => `//android.widget.ScrollView//android.view.View[starts-with(@content-desc,"${name}")]`,
 
-  navWatchlist:    '//android.widget.ImageView[contains(@content-desc,"Watchlist") and contains(@content-desc,"Tab 1 of 5")]',
-  navMarket:       '//android.widget.ImageView[contains(@content-desc,"Market") and contains(@content-desc,"Tab 2 of 5")]',
-  navOrders:       '//android.widget.ImageView[contains(@content-desc,"Orders") and contains(@content-desc,"Tab 3 of 5")]',
-  navPortfolio:    '//android.widget.ImageView[contains(@content-desc,"Portfolio") and contains(@content-desc,"Tab 4 of 5")]',
-  navMutualFunds:  '//android.widget.ImageView[contains(@content-desc,"Mutual Funds") and contains(@content-desc,"Tab 5 of 5")]',
+  // Case-insensitive exact match - confirmed live that these ImageViews carry a plain
+  // content-desc ("Watchlist", "Market", "Orders", "Portfolio", "Mutual Funds") with NO
+  // "Tab N of 5" suffix in this app build (unlike the watchlist name tabs above, which do
+  // carry one) - the previous selectors required that suffix and so never matched anything,
+  // silently failing every bottom-nav tap.
+  navWatchlist:    '//android.widget.ImageView[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="WATCHLIST"]',
+  navMarket:       '//android.widget.ImageView[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="MARKET"]',
+  navOrders:       '//android.widget.ImageView[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="ORDERS"]',
+  navPortfolio:    '//android.widget.ImageView[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="PORTFOLIO"]',
+  navMutualFunds:  '//android.widget.ImageView[translate(@content-desc,"abcdefghijklmnopqrstuvwxyz","ABCDEFGHIJKLMNOPQRSTUVWXYZ")="MUTUAL FUNDS"]',
 
   // Add (+) button: clickable ImageView inside the tab-strip container View,
   // to the right of the HorizontalScrollView that holds the watchlist tabs.
@@ -39,7 +55,7 @@ const SEL = {
   removeStock:     '//android.view.View[contains(@content-desc,"Remove")]',
   addToWatchlist:  '//*[(@content-desc="+" or contains(@content-desc,"Add to watchlist")) and @clickable="true"]',
   doneBtn:         '//*[@content-desc="Done" or @text="Done" or @text="DONE"]',
-  cancelSearchBtn: '//android.view.View[@content-desc="Cancel"]',
+  cancelSearchBtn: '//*[@content-desc="Cancel"]',
 
   emptyState:      '//android.view.View[contains(@content-desc,"No stocks") or contains(@content-desc,"Add stocks to") or contains(@content-desc,"empty")]',
 
@@ -54,8 +70,20 @@ const SEL = {
 
 class WatchlistPage extends BasePage {
 
+  // Checks multiple independent signals in parallel — the search box's hint
+  // attribute is sometimes folded into a sibling's content-desc instead of
+  // being exposed on its own EditText, so title/manageWatchlistBtn act as a fallback.
+  // Confirmed live that using the generic allTabs ("Tab N of M") selector here instead of
+  // manageWatchlistBtn caused a false positive on OTHER screens with their own "Tab N of M"
+  // tab strips (e.g. News), making isLoaded() wrongly report true while on News and causing
+  // goToWatchlist() to return immediately without ever navigating off of it.
   async isLoaded(timeout = 10000) {
-    return this.isDisplayed(SEL.searchBox, timeout);
+    const [search, title, tabs] = await Promise.all([
+      this.isDisplayed(SEL.searchBox, timeout),
+      this.isDisplayed(SEL.title, timeout),
+      this.isDisplayed(SEL.manageWatchlistBtn, timeout),
+    ]);
+    return search || title || tabs;
   }
 
   async isTitleDisplayed() {
@@ -103,8 +131,49 @@ class WatchlistPage extends BasePage {
 
   async tapTab(n) {
     await this._dismissANRIfPresent();
+    // The tab strip may be scrolled away from tab n (e.g. a prior test left it
+    // mid-scroll, or an 11+ tab account needs more than a handful of swipes
+    // to rewind) — swipe left until it's on-screen, or until swiping stops
+    // changing what's visible (already at the leftmost scroll position).
+    const found = await this._scrollTabStripUntil(() => this.isDisplayed(SEL.tab(n), 800), 'left');
+    if (!found) {
+      try {
+        const src   = await driver.getPageSource();
+        const descs = [...src.matchAll(/content-desc="([^"]{1,80})"/g)]
+          .map(m => m[1].split(/\n|&#10;/).join(' / '))
+          .filter(d => /Tab \d+ of/.test(d));
+        console.log(`  ⚠  tapTab(${n}): no match — visible tab descs: ${descs.join(' | ')}`);
+      } catch {}
+    }
     await this.click(SEL.tab(n));
     await browser.pause(100);
+  }
+
+  // Reads the raw content-desc of every currently visible watchlist tab.
+  async _getVisibleTabDescs() {
+    try {
+      return await (await $$(SEL.allTabs)).reduce(async (accP, el) => {
+        const acc = await accP;
+        try { acc.push(await el.getAttribute('content-desc')); } catch {}
+        return acc;
+      }, Promise.resolve([]));
+    } catch { return []; }
+  }
+
+  // Swipes the tab strip in `direction` until predicateFn() is true, or the
+  // visible tab set stops changing between swipes (stalled — already at the
+  // scroll boundary), up to maxSwipes attempts.
+  async _scrollTabStripUntil(predicateFn, direction = 'left', maxSwipes = 20) {
+    let lastDescs = null;
+    for (let i = 0; i < maxSwipes; i++) {
+      await this._dismissANRIfPresent();
+      if (await predicateFn()) return true;
+      await this._swipeTabStrip(direction);
+      const descs = (await this._getVisibleTabDescs()).join('|');
+      if (descs === lastDescs) break;
+      lastDescs = descs;
+    }
+    return predicateFn();
   }
 
   async isSearchBoxDisplayed() {
@@ -112,14 +181,49 @@ class WatchlistPage extends BasePage {
   }
 
   async searchStock(query) {
-    await this.click(SEL.searchBox);
-    await browser.pause(100);
-    await (await $(SEL.searchBox)).setValue(String(query));
+    try {
+      await this.click(SEL.searchBox);
+    } catch (e) {
+      try {
+        const src       = await driver.getPageSource();
+        const editTexts = [...src.matchAll(/<android\.widget\.EditText[^>]*>/g)].map(m => m[0]);
+        console.log('\n  ── searchStock: search box not found ──');
+        console.log('  EditText nodes:\n  ' + editTexts.join('\n  '));
+        const fs   = require('fs'), path = require('path');
+        const dump = path.join(__dirname, '../../ui_dumps/search_box_debug.xml');
+        fs.mkdirSync(path.dirname(dump), { recursive: true });
+        fs.writeFileSync(dump, src);
+        console.log('  Full XML → ui_dumps/search_box_debug.xml');
+      } catch {}
+      throw e;
+    }
     await browser.pause(300);
+    try {
+      await (await $(SEL.searchInput)).setValue(String(query));
+    } catch (e) {
+      try {
+        const src       = await driver.getPageSource();
+        const editTexts = [...src.matchAll(/<android\.widget\.EditText[^>]*>/g)].map(m => m[0]);
+        console.log('\n  ── searchStock: search input not found after opening overlay ──');
+        console.log('  EditText nodes:\n  ' + editTexts.join('\n  '));
+        const fs   = require('fs'), path = require('path');
+        const dump = path.join(__dirname, '../../ui_dumps/search_overlay_debug.xml');
+        fs.mkdirSync(path.dirname(dump), { recursive: true });
+        fs.writeFileSync(dump, src);
+        console.log('  Full XML → ui_dumps/search_overlay_debug.xml');
+      } catch {}
+      throw e;
+    }
+    await browser.pause(500);
   }
 
+  // `exchange` is accepted for call-site compatibility but not matched on:
+  // search-result rows' content-desc is "<Name>\nAdd Watchlist, Double tap
+  // to open Quote Screen." with no NSE/BSE tag, so exchange can't be
+  // distinguished here. "Quote Screen" anchors the match to a genuine
+  // search-result row (vs. a watchlist tab or other screen element).
   async isSearchResultVisible(stockName, exchange) {
-    const sel = `//android.view.View[contains(@content-desc,"${stockName}") and contains(@content-desc,"${exchange}")]`;
+    const sel = `//android.view.View[starts-with(@content-desc,"${stockName}") and contains(@content-desc,"Quote Screen")]`;
     return this.isDisplayed(sel, 5000);
   }
 
@@ -137,11 +241,17 @@ class WatchlistPage extends BasePage {
   }
 
   // Returns immediately if already on watchlist; navigates back via bottom nav otherwise.
-  async goToWatchlist() {
+  // Presses back repeatedly (not just once) until the bottom nav becomes visible -
+  // confirmed live that a single back-press isn't enough from a screen more than one
+  // level deep (e.g. Watchlist -> Quote -> OrderPad): it only surfaces to Quote, still
+  // short of Watchlist, so a caller landing here straight from OrderPad (R27 -> R28 in
+  // the full suite) ended up stuck there, cascading into every test that assumed it
+  // was starting from Watchlist.
+  async goToWatchlist(maxBackPresses = 5) {
     await this._dismissANRIfPresent();
     if (await this.isLoaded(2000)) return;
     let navVisible = await this.isDisplayed(SEL.navWatchlist, 1500);
-    if (!navVisible) {
+    for (let i = 0; !navVisible && i < maxBackPresses; i++) {
       try { await driver.back(); } catch {}
       await browser.pause(500);
       await this._dismissANRIfPresent();
@@ -199,21 +309,55 @@ class WatchlistPage extends BasePage {
     await browser.pause(200);
   }
 
-  // Scrolls the tab strip back to the leftmost position (makes Watchlist1 visible).
+  // Scrolls the tab strip back to the leftmost position (makes tab 1 visible, and selects it).
+  // By position, not SEL.tab(1) - that needs "WATCHLIST1" in the desc, but accounts can
+  // name tab 1 anything (confirmed live: "Watchlist_1" never matched, so this never stopped).
   async scrollToFirstTab() {
-    for (let i = 0; i < 7; i++) {
-      try { if (await (await $(SEL.tab(1))).isDisplayed()) return; } catch {}
-      await this._swipeTabStrip('left');
+    return !!(await this.scrollToTabPosition(1));
+  }
+
+  // Brings the tab at position `pos` ("Tab pos of M") into view by TAPPING tabs, not
+  // swiping - confirmed live that swipes on this ScrollableTabRow are ignored (R10 left the
+  // strip on tabs 5-8 and every swipe-based rewind silently did nothing, failing R11), but
+  // selecting a tab auto-scrolls the row toward it. Each step taps the on-screen tab nearest
+  // `pos`, revealing its neighbours, until `pos` is visible or the visible set stops changing.
+  // Side effect: changes the selected watchlist. Returns { el, name } or null.
+  async scrollToTabPosition(pos, maxTaps = 12) {
+    const { width } = await driver.getWindowRect();
+    let lastKey = null;
+    for (let i = 0; i <= maxTaps; i++) {
+      await this._dismissANRIfPresent();
+      const visible = [];
+      for (const el of await $$(SEL.allTabs)) {
+        try {
+          const desc = await el.getAttribute('content-desc');
+          const m = desc && desc.match(/Tab (\d+) of \d+/);
+          if (!m) continue;
+          const n = Number(m[1]);
+          if (n === pos) return { el, name: desc.split(/\n|&#10;/)[0].trim() };
+          const loc  = await el.getLocation();
+          const size = await el.getSize();
+          const cx   = loc.x + size.width / 2;
+          if (cx > 0 && cx < width) visible.push({ el, n });
+        } catch {}
+      }
+      const key = visible.map(v => v.n).join(',');
+      if (!visible.length || key === lastKey) return null;
+      lastKey = key;
+      const nearest = visible.reduce((a, b) => (Math.abs(b.n - pos) < Math.abs(a.n - pos) ? b : a));
+      try { await nearest.el.click(); } catch {}
+      await browser.pause(400);
     }
+    return null;
   }
 
   async areAllNavTabsDisplayed() {
     const navSels = [
-      '//android.widget.ImageView[contains(@content-desc,"Watchlist") and contains(@content-desc,"Tab 1 of 5")]',
-      '//android.widget.ImageView[contains(@content-desc,"Market") and contains(@content-desc,"Tab 2 of 5")]',
-      '//android.widget.ImageView[contains(@content-desc,"Orders") and contains(@content-desc,"Tab 3 of 5")]',
-      '//android.widget.ImageView[contains(@content-desc,"Portfolio") and contains(@content-desc,"Tab 4 of 5")]',
-      '//android.widget.ImageView[contains(@content-desc,"Mutual Funds") and contains(@content-desc,"Tab 5 of 5")]',
+      SEL.navWatchlist,
+      SEL.navMarket,
+      SEL.navOrders,
+      SEL.navPortfolio,
+      SEL.navMutualFunds,
     ];
     const results = await Promise.all(navSels.map(s => this.isDisplayed(s, 3000)));
     return results.every(Boolean);

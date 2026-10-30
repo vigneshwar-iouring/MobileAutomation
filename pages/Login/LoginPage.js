@@ -6,9 +6,17 @@ const SEL = {
   passwordInput:    '//android.widget.EditText[2]',
   loginBtn:         '~LOGIN',
   signUpBtn:        '~SIGN UP',
-  forgotPasswordBtn:'~FORGET PASSWORD',
+  forgotPasswordBtn:'~FORGOT PASSWORD',
   termsBtn:         '~Terms and Conditions',
   termsText:        '~By logging in, I accept the ',
+  // Same hamburger-menu match every other menu-driven page object in this stack uses
+  // (Funds/News/Alerts) - no dedicated resource-id exposed for it.
+  hamburgerBtn:     '//*[contains(@content-desc,"Hamburger") or contains(@content-desc,"hamburger")]',
+  // "Logout" sits below the fold of the nav drawer, under Profile/Settings.
+  logoutMenuItem:   '//*[@content-desc="Logout"]',
+  // Dialog's confirm button is labelled "Logout" (older builds: "Yes") - scoped to the
+  // dialog prompt so it can't match the drawer's own "Logout" menu item.
+  logoutConfirmYes: '(//*[@content-desc="Do you want to logout?"]/following::*[@content-desc="Logout" or @content-desc="Yes"] | //*[@content-desc="Yes"])[1]',
 };
 
 class LoginPage extends BasePage {
@@ -102,6 +110,34 @@ class LoginPage extends BasePage {
   async isSignUpButtonDisplayed()   { return this.isDisplayed(SEL.signUpBtn); }
   async isForgotPasswordDisplayed() { return this.isDisplayed(SEL.forgotPasswordBtn); }
   async isTermsTextDisplayed()      { return this.isDisplayed(SEL.termsText); }
+
+  // ── Logout ───────────────────────────────────────────────────────────────────
+
+  async openHamburgerMenu(timeout = 5000) { return this.findAndTap(SEL.hamburgerBtn, timeout); }
+
+  // Scrolls the nav drawer until "Logout" is visible instead of assuming a fixed swipe
+  // count - the menu item list above it can grow without breaking this.
+  async clickLogout(maxScrolls = 5) {
+    let visible = await this.isDisplayed(SEL.logoutMenuItem, 1500);
+    for (let i = 0; i < maxScrolls && !visible; i++) {
+      await this.swipeUp();
+      await browser.pause(400);
+      visible = await this.isDisplayed(SEL.logoutMenuItem, 1500);
+    }
+    if (!visible) return false;
+    return this.findAndTap(SEL.logoutMenuItem, 2000);
+  }
+
+  async confirmLogout(timeout = 5000) { return this.findAndTap(SEL.logoutConfirmYes, timeout); }
+
+  async logout() {
+    const menuOpened = await this.openHamburgerMenu();
+    await browser.pause(500);
+    const logoutClicked = menuOpened && await this.clickLogout();
+    await browser.pause(500);
+    const confirmed = logoutClicked && await this.confirmLogout();
+    return !!confirmed;
+  }
 }
 
 module.exports = new LoginPage();
