@@ -12,7 +12,8 @@ class ForgotPasswordPage extends BasePage {
         this.errorText = 'android=new UiSelector().descriptionContains("Login ID cannot be empty")';
 
         // OTP screen - its own step now (after NEXT, before Set Password), with a single OTP
-        // EditText and a "Verify OTP" button that has to be tapped to move on.
+        // EditText and a "Verify OTP" button. The app clicks Verify OTP by itself once the full
+        // OTP is entered and navigates on - it's never tapped here.
         this.otpInput = 'android=new UiSelector().className("android.widget.EditText").instance(0)';
         this.verifyOtpButton = 'android=new UiSelector().description("Verify OTP")';
 
@@ -175,14 +176,8 @@ class ForgotPasswordPage extends BasePage {
         return null;
     }
 
-    async clickVerifyOtp() {
-        await this.driver.hideKeyboard().catch(() => { });
-        await this.click(this.verifyOtpButton);
-        console.log('Clicked Verify OTP');
-    }
-
-    // True while still on the OTP screen (e.g. after an invalid OTP was rejected), false once
-    // Verify OTP has moved on to Set Password. Like the login OTP screen, Verify OTP drops out of
+    // True while still on the OTP screen (e.g. after an invalid OTP was rejected), false once the
+    // auto-clicked Verify OTP has moved on to Set Password. Like the login OTP screen, Verify OTP drops out of
     // the accessibility tree while the keyboard is open, so hide it first.
     async isOnOtpScreen(timeout = 3000) {
         await this.driver.hideKeyboard().catch(() => { });

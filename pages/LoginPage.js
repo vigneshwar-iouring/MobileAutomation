@@ -22,8 +22,9 @@ class LoginPage extends BasePage {
         // screen at that point.
         this.otpField = 'android=new UiSelector().className("android.widget.EditText").instance(0)';
 
-        // Both OTP screens need an explicit "Verify OTP" tap after entry; it stays greyed out
-        // (enabled="false") until an OTP has been entered.
+        // On both OTP screens the app clicks "Verify OTP" by itself once the full OTP is entered and
+        // navigates on - it's never tapped here. It stays greyed out (enabled="false") until an OTP
+        // has been entered.
         this.otpVerifyButton = 'android=new UiSelector().description("Verify OTP")';
 
         // A wrong OTP surfaces this text in place (after Verify OTP), rather than a Toast like the
@@ -107,12 +108,6 @@ class LoginPage extends BasePage {
         const el = await this.driver.$(this.otpVerifyButton);
         await el.waitForDisplayed({ timeout });
         return (await el.getAttribute('enabled')) === 'true';
-    }
-
-    async clickOtpVerify() {
-        await this.driver.hideKeyboard().catch(() => { });
-        await this.click(this.otpVerifyButton);
-        console.log('Clicked Verify OTP');
     }
 
     async isIncorrectOtpShown(timeout = 3000) {

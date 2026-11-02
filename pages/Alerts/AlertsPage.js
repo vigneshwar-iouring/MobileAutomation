@@ -114,7 +114,14 @@ class AlertsPage extends BasePage {
     await browser.pause(300);
   }
 
-  async tapCreateAlert() { return this.findAndTap(SEL.createAlertBtn, 5000); }
+  // The keyboard left open by setAlertValue() covers Create Alert, and Compose drops the
+  // button from the hierarchy entirely while it's covered (confirmed via a real dump) —
+  // so dismiss the keyboard first or the button is never found.
+  async tapCreateAlert() {
+    try { if (await driver.isKeyboardShown()) await driver.hideKeyboard(); } catch {}
+    await browser.pause(500);
+    return this.findAndTap(SEL.createAlertBtn, 5000);
+  }
 
   // Best-effort transient-toast capture — polls briefly right after an action.
   async captureToast(timeoutMs = 3000, pollMs = 250) {
