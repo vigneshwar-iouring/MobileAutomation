@@ -102,6 +102,21 @@ class OrderbookPage extends BasePage {
     await browser.pause(400);
   }
 
+  // Swipes down until the visible order rows stop changing between swipes (= already at
+  // the top of the list), so a long list scrolled several screens down still gets back
+  // to its first row. Returns the number of swipes that actually moved the list.
+  async scrollToTop(maxSwipes = 10) {
+    const snapshot = async () => (await this.getOrderRows()).map(r => r.raw).join('|');
+    let before = await snapshot();
+    for (let i = 0; i < maxSwipes; i++) {
+      await this.swipeDown();
+      const after = await snapshot();
+      if (after === before) return i;
+      before = after;
+    }
+    return maxSwipes;
+  }
+
   async getOrderRows() {
     try {
       const src  = await driver.getPageSource();

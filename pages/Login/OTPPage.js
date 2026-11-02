@@ -19,17 +19,10 @@ class OTPPage extends BasePage {
     await this._tap(field);
     await browser.pause(300);
     await field.setValue(String(code));
+    // On both login OTP screens (after LOGIN and after ENABLE NOW) the app clicks "Verify OTP" by
+    // itself once the full OTP is entered and navigates on - so it is never tapped here.
+    console.log('  ✓  Entered OTP - Verify OTP is auto-clicked by the app');
     await browser.pause(800);
-    await this.tapVerify();
-  }
-
-  // Both login OTP screens (after LOGIN and after ENABLE NOW) need an explicit "Verify OTP" tap -
-  // the OTP no longer auto-validates on entry.
-  async tapVerify() {
-    await this.hideKeyboard();
-    await this.click(SEL.verifyBtn);
-    console.log('  ✓  Tapped Verify OTP');
-    await browser.pause(500);
   }
 
   // Verify OTP is greyed out (enabled="false", clickable="false") until an OTP is entered. While the

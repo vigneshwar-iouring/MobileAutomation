@@ -98,16 +98,14 @@ async function openOtpScreen(driver, loginPage, forgotPage, loginId) {
     console.log(`On OTP page (${loginId})`);
 }
 
-// Fetches the real OTP from Gmail and verifies it, landing on the Set Password screen. Throws
-// if Verify OTP doesn't move on, since nothing after it can run from the OTP screen.
+// Fetches the real OTP from Gmail and enters it - the app auto-clicks Verify OTP, landing on the
+// Set Password screen. Throws if it doesn't move on, since nothing after it can run from the OTP screen.
 async function verifyRealOtp(driver, forgotPage, sinceUid) {
     console.log('Fetching OTP from Gmail...');
     const otp = await fetchLatestOtp(sinceUid, 'One time password');
     console.log(`OTP fetched: ${otp}`);
     await forgotPage.enterOtp(otp);
-    await driver.pause(1000);
-    await forgotPage.clickVerifyOtp();
-    await driver.pause(3000);
+    await driver.pause(4000);
     if (await forgotPage.isOnOtpScreen()) {
         const otpError = await forgotPage.getOtpErrorMessage();
         throw new Error(`OTP was not accepted by Verify OTP${otpError ? `: "${otpError}"` : ''}`);
@@ -122,8 +120,8 @@ async function scenario3_MismatchedPasswords(driver, loginPage, forgotPage) {
     const sinceUid = await getLatestUid();
     await openOtpScreen(driver, loginPage, forgotPage, 'TEMPMF11');
 
-    // TC 7: Enter the real OTP -> Verify OTP
-    console.log('TC 7: Entering OTP and clicking Verify OTP...');
+    // TC 7: Enter the real OTP -> Verify OTP is auto-clicked
+    console.log('TC 7: Entering OTP (Verify OTP is auto-clicked)...');
     await verifyRealOtp(driver, forgotPage, sinceUid);
 
     // TC 8: Enter new password 'qwert'
@@ -161,12 +159,10 @@ async function scenario4_InvalidOtp(driver, loginPage, forgotPage) {
     // TC 12: Enter invalid OTP '123456'
     console.log('TC 12: Entering invalid OTP 123456...');
     await forgotPage.enterOtp('123456');
-    await driver.pause(500);
 
-    // TC 13: Click Verify OTP → print error. An invalid OTP is now rejected on the OTP screen
-    // itself, so Set Password (and its password fields) is never reached.
-    console.log('TC 13: Clicking Verify OTP...');
-    await forgotPage.clickVerifyOtp();
+    // TC 13: Verify OTP is auto-clicked on entry → print error. An invalid OTP is now rejected on
+    // the OTP screen itself, so Set Password (and its password fields) is never reached.
+    console.log('TC 13: Waiting for auto-clicked Verify OTP to reject the OTP...');
     await driver.pause(4000);
     const otpError = await forgotPage.getOtpErrorMessage();
     if (otpError) {

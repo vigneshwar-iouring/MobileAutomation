@@ -21,7 +21,8 @@ const DEVICE_PASSWORD = '11111'; // device screen-lock PIN, used to confirm biom
 // ─────────────────────────────────────────────────────────────────────
 
 // Verify OTP on the OTP screen must stay greyed out until an OTP is entered - logged as FAIL
-// (picked up by getFailedTCs) rather than thrown, so the login itself still proceeds.
+// (picked up by getFailedTCs) rather than thrown, so the login itself still proceeds. It's never
+// tapped: the app clicks it by itself once the full OTP is entered.
 async function verifyOtpVerifyDisabled(loginPage, label) {
     const enabled = await loginPage.isOtpVerifyEnabled();
     console.log(enabled
@@ -79,7 +80,6 @@ async function run() {
         await verifyOtpVerifyDisabled(loginPage, 'Login OTP');
         const loginOtp = await fetchLatestOtp(sinceUid, 'One time password');
         await loginPage.enterOtp(loginOtp);
-        await loginPage.clickOtpVerify();
         await driver.pause(2000);
 
         // If the fetched OTP was somehow already stale/wrong by the time it's submitted, the
@@ -99,7 +99,6 @@ async function run() {
             console.log(currentStep);
             const resentOtp = await fetchLatestOtp(resendUid, 'One time password');
             await loginPage.enterOtp(resentOtp);
-            await loginPage.clickOtpVerify();
             await driver.pause(2000);
 
             if (await loginPage.isIncorrectOtpShown()) {
@@ -122,7 +121,6 @@ async function run() {
             await verifyOtpVerifyDisabled(loginPage, 'Enable Globe Secure OTP');
             const secureOtp = await fetchLatestOtp(sinceUid, 'One time password');
             await loginPage.enterOtp(secureOtp);
-            await loginPage.clickOtpVerify();
             await driver.pause(2000);
 
             if (await loginPage.isDeviceCredentialPromptShown()) {

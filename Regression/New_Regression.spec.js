@@ -4,9 +4,9 @@
  * R1 : Build version             — read the "vX.Y.Z (build)" label on the Login screen
  * R2 : Forgot Password           — tap, verify navigation, back to Login (validated before login)
  * R3 : Login flow                — enter credentials, tap LOGIN
- * R4 : OTP Login                 — enter FIRST OTP + tap Verify OTP
+ * R4 : OTP Login                 — enter FIRST OTP (app auto-clicks Verify OTP)
  * R5 : Enable Now                — Enable Globe Secure screen
- * R6 : Second OTP page           — enter SECOND OTP + tap Verify OTP
+ * R6 : Second OTP page           — enter SECOND OTP (app auto-clicks Verify OTP)
  * R7 : Device PIN Login          — biometric/PIN screen
  * R8 : Risk Disclosure           — some accounts don't show this screen at all; accept if shown, skip if not
  *
@@ -145,7 +145,8 @@ const MARKET_SEL = {
 // this repo's existing gmailOtpHelper/credentials/gmail-config.json, same as tests/loginWithOtp.test.js.
 // One resend-and-retry on rejection, mirroring that file's incorrect-OTP recovery.
 async function submitOtp(label, sinceUid) {
-  // Verify OTP must stay greyed out while no OTP has been entered.
+  // Verify OTP must stay greyed out while no OTP has been entered. Once the OTP is entered the app
+  // clicks Verify OTP itself, so enterOTP() only types it - no manual tap.
   const verifyEnabled = await otpPage.isVerifyEnabled();
   await assertOrDump(!verifyEnabled, `${label}: Verify OTP enabled with empty OTP`,
     `${label}: Verify OTP should be disabled when no OTP is entered`);
@@ -582,6 +583,22 @@ async function submitAndConfirmOrder(label, price, symbolName, expectedExchange)
 // Uses whichever movers sub-tab is already selected by default (Top Gainers, confirmed
 // live to be "Tab 1 of 5" - the leftmost/default one) rather than explicitly tapping a
 // sub-tab - only switches to fallbackSubTab if that default list turns out to be empty.
+// moversRow also matches rows of the "Trending <X> Options" section below the movers list.
+// Confirmed live (Currency, Top Gainers showing "No Data Found!") that taking those as
+// movers skipped the fallback sub-tab and tapped a row sitting under the bottom nav bar,
+// landing on Orders instead of Quote - so only count rows above that section's header.
+async function getMoversRows() {
+  const rows = await $$(MARKET_SEL.moversRow);
+  const header = await $('//*[starts-with(@content-desc,"Trending ")]');
+  if (!(await header.isExisting())) return rows;
+  const headerY = (await header.getLocation()).y;
+  const above = [];
+  for (const row of rows) {
+    if ((await row.getLocation()).y < headerY) above.push(row);
+  }
+  return above;
+}
+
 async function tapFirstMarketMover(marketTab, fallbackSubTab = 'Top Losers') {
   await watchlistPage.goToWatchlist();
   await watchlistPage.tapNavMarket();
@@ -592,13 +609,13 @@ async function tapFirstMarketMover(marketTab, fallbackSubTab = 'Top Losers') {
   if (!tabTapped) return false;
   await browser.pause(1000);
 
-  let rows = await $$(MARKET_SEL.moversRow);
+  let rows = await getMoversRows();
   if (!rows.length && fallbackSubTab) {
     console.log(`  ℹ  No symbols in the default movers list - falling back to "${fallbackSubTab}"`);
     const subTapped = await watchlistPage.findAndTap(`//*[contains(@content-desc,"${fallbackSubTab}")]`, 5000);
     if (subTapped) {
       await browser.pause(1000);
-      rows = await $$(MARKET_SEL.moversRow);
+      rows = await getMoversRows();
     }
   }
   if (!rows.length) return false;
@@ -1337,9 +1354,12 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     console.log(`  ℹ  Entries after scrolling down (${rowsAfterScrollDown.length}):`);
     rowsAfterScrollDown.forEach((r, i) => console.log(`     [${i}] ${r.raw}`));
 
-    await orderbookPage.swipeDown();
+    // A single swipe back isn't guaranteed to reach the top on a long list — keep
+    // scrolling up until the list stops moving.
+    const swipesUp = await orderbookPage.scrollToTop();
     await browser.pause(400);
     const rowsAfterScrollUp = await orderbookPage.getOrderRows();
+    console.log(`  ℹ  Scrolled back to the top (${swipesUp} swipe(s) moved the list)`);
     console.log(`  ℹ  Entries after scrolling back up (${rowsAfterScrollUp.length}):`);
     rowsAfterScrollUp.forEach((r, i) => console.log(`     [${i}] ${r.raw}`));
 
@@ -1370,22 +1390,22 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   }
 
   it('R30: Validate the Orderbook — All tab', async function () {
-    this.timeout(20000);
+    this.timeout(40000);
     await validateOrderbookTab('R30', 'all');
   });
 
   it('R31: Validate the Orderbook — Pending tab', async function () {
-    this.timeout(20000);
+    this.timeout(40000);
     await validateOrderbookTab('R31', 'pending');
   });
 
   it('R32: Validate the Orderbook — Executed tab', async function () {
-    this.timeout(20000);
+    this.timeout(40000);
     await validateOrderbookTab('R32', 'executed');
   });
 
   it('R33: Validate the Orderbook — Cancelled tab', async function () {
-    this.timeout(20000);
+    this.timeout(40000);
     await validateOrderbookTab('R33', 'cancelled');
     await watchlistPage.goToWatchlist();
   });
@@ -1963,7 +1983,8 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     const hasTargetValue = (raw) => raw.replace(/,/g, '').includes(targetValue);
 
     // Create the alert and capture whatever toast/error appears.
-    await alertsPage.tapCreateAlert();
+    const createTapped = await alertsPage.tapCreateAlert();
+    await assertOrDump(createTapped, 'R49: Create Alert button not found', 'Create Alert button should be tappable on the Set Alert screen');
     const toast = await alertsPage.captureToast(3000);
     console.log(`  ℹ  Toast after Create Alert: ${toast || '(none captured — likely a silent success, returned straight to Alerts list)'}`);
     await browser.pause(1000);
