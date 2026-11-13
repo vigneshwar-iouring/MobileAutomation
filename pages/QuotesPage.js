@@ -413,6 +413,29 @@ class QuotesPage extends BasePage {
         return this.verify52WeekIndicator(header.exchange);
     }
 
+    // Lower/upper circuit off the expanded Quote ("Circuit limits. Lower circuit 5.41. Upper circuit
+    // 8.11., Displays the lower and upper circuit limits."). The Order Pad never shows these, so
+    // this must be read on the Quote before tapping BUY. Scrolls down a little if the row isn't
+    // on screen yet. Returns { lower, upper } as the strings the app shows, or null.
+    async getCircuitLimits(maxSwipes = 3) {
+        const re = /Circuit limits\. Lower circuit ([\d,]+(?:\.\d+)?)\. Upper circuit ([\d,]+(?:\.\d+)?)/;
+        for (let i = 0; i <= maxSwipes; i++) {
+            const node = (await this.getDescribedElements()).find(n => re.test(n.desc));
+            if (node) {
+                const m = node.desc.match(re);
+                const limits = { lower: m[1].replace(/,/g, ''), upper: m[2].replace(/,/g, '') };
+                console.log(`Circuit limits read from the Quote - Lower ${limits.lower}, Upper ${limits.upper}: PASS`);
+                return limits;
+            }
+            if (i < maxSwipes) {
+                await this.swipe('down');
+                await this.pause(600);
+            }
+        }
+        console.log('Circuit limits not found on the Quote screen: FAIL');
+        return null;
+    }
+
     // Opens Advanced Options ("..." beside SELL) and, for an equity symbol, checks "Compare with
     // Peer" is listed. Returns true when it is there to tap.
     async openAdvancedOptionsForPeer(exchange) {

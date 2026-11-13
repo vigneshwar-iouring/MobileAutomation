@@ -12,7 +12,7 @@ console.log(`Logging this run to: ${logFile}`);
 const LOGIN_ID = 'TEMPMF11';
 const PASSWORD = 'Globe@12345';
 const LOGIN_ID2 = 'HOGC1103';
-const PASSWORD2 = 'Jaya@0011';
+const PASSWORD2 = 'Jaya@0012';
 const LOGIN_ID3 = 'TEMPMF2';
 const PASSWORD3 = 'Globe@9876';
 const LOGIN_ID4 = 'EKY6998';
@@ -131,22 +131,21 @@ async function run() {
             }
         }
 
-        // "Risk Disclosure on Derivatives" is shown only on an account's very first login, but
-        // surfaces once the app lands on the default Watchlist screen post-login - not right
-        // after the biometric device-credential step. Give the app time to reach that screen
-        // before checking, so the popup isn't missed while it's still navigating there.
+        // The updated "Risk Disclosure on Derivatives" popup is now expected after every login. It
+        // surfaces once the app lands on the default Watchlist screen post-login - not right after
+        // the biometric device-credential step - so give the app time to reach that screen first.
         currentStep = 'TC 9: Waiting for Watchlist screen to load...';
         console.log(currentStep);
         await driver.pause(2000);
 
         currentStep = 'TC 9: Checking Risk Disclosure on Derivatives popup...';
-        if (await loginPage.isRiskDisclosureShown(2000)) {
-            console.log('Risk Disclosure on Derivatives popup shown - clicking "I Understand"...');
-            await loginPage.acknowledgeRiskDisclosure();
-            await driver.pause(1000);
-        } else {
-            console.log('Risk Disclosure on Derivatives popup not shown - proceeding');
+        console.log(currentStep);
+        if (!(await loginPage.isRiskDisclosureShown(10000))) {
+            throw new Error('Risk Disclosure on Derivatives popup was expected but not shown');
         }
+        console.log('Risk Disclosure on Derivatives popup shown - clicking "I Understand"...');
+        await loginPage.acknowledgeRiskDisclosure();
+        await driver.pause(1000);
 
         currentStep = 'Final check: verifying home screen';
         const loggedIn = await loginPage.isLoggedIn();

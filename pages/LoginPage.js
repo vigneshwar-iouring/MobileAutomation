@@ -46,12 +46,14 @@ class LoginPage extends BasePage {
         // biometric-enrollment fallback - not part of the app under test.
         this.deviceCredentialInput = 'android=new UiSelector().resourceId("com.android.systemui:id/auth_credential_input")';
 
-        // "Risk Disclosure on Derivatives" prompt - shown only on an account's very first login,
-        // never again afterwards. Guarded the same way as Enable Globe Secure above. Rendered
+        // "Risk Disclosure on Derivatives" popup - now expected after every login. Rendered
         // as plain Views with the label in content-desc (text is empty), not a native TextView,
         // so this has to match on description rather than text.
-        this.riskDisclosureHeading = 'android=new UiSelector().descriptionContains("RISK DISCLOSURE")';
-        this.iUnderstandButton = 'android=new UiSelector().descriptionContains("I Understand")';
+        // Matches content-desc or text, upper or title case, so the updated popup is still found
+        // if its label moves to a TextView or its casing changes (same matching as the Regression
+        // spec's RISK_SEL).
+        this.riskDisclosureHeading = '//*[contains(@content-desc,"RISK DISCLOSURE") or contains(@content-desc,"Risk Disclosure") or contains(@text,"RISK DISCLOSURE") or contains(@text,"Risk Disclosure")]';
+        this.iUnderstandButton = '//*[contains(@content-desc,"I Understand") or contains(@text,"I Understand")]';
 
         this.homeHamburgerMenu = 'android=new UiSelector().description("Hamburger menu, Double tap to open the hamburger menu")';
 
