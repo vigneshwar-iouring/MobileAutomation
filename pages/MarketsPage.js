@@ -1535,6 +1535,52 @@ class MarketsPage extends BasePage {
         return { symbol: first.symbol, opened };
     }
 
+    // Markets -> Currency -> Currency Market Insights: taps the first Top Gainers symbol, or - when
+    // Top Gainers lists nothing - the first Top Losers symbol, and checks its Quote opens. Returns
+    // { symbol, tab } or null. The tab row is click-only, so it is rewound to Tab 1 (Top Gainers)
+    // and Top Losers is tapped by its own label/position.
+    async openFirstCurrencyGainerOrLoser() {
+        if (!(await this.clickCurrencyTab())) return null;
+        await this.scrollToTopUnlessAt(INSIGHTS.currency.section);
+        await this.rewindMoversTabs();
+
+        let tab = 'Top Gainers';
+        let rows = await this.getFnoInsightRows();
+        console.log(`Currency Market Insights "Top Gainers" - symbols listed: ${rows.length}`);
+        if (!rows.length) {
+            const losers = (await this.getMoversTabs()).find(t => /^top losers$/i.test(t.label.trim()));
+            if (!losers) {
+                console.log('Top Gainers empty and Top Losers tab not found: FAIL');
+                return null;
+            }
+            tab = 'Top Losers';
+            await this.clickMoversTab(losers.index, losers.total, 5000, INSIGHTS.currency.section);
+            rows = await this.getFnoInsightRows();
+            console.log(`Top Gainers empty - Currency Market Insights "Top Losers" - symbols listed: ${rows.length}`);
+        }
+        if (!rows.length) {
+            console.log('No symbol listed under Top Gainers or Top Losers: FAIL');
+            return null;
+        }
+        // Insights sits low on Currency: the first row can land under the floating bottom nav
+        // (verified live - row at y 2128-2208, nav from y 2046), where a tap hits "Orders". Nudge
+        // the page up until the row clears the nav, re-reading it each time.
+        let first = rows.reduce((a, b) => (b.node.y1 < a.node.y1 ? b : a));
+        for (let i = 0; i < 3; i++) {
+            const nodes = await this.getDescribedElements();
+            const nav = nodes.find(n => n.desc === 'Watchlist' || n.desc === 'Market');
+            const navTop = nav ? nav.y1 : (await this.driver.getWindowSize()).height * 0.85;
+            const current = (await this.getFnoInsightRows()).find(r => r.symbol === first.symbol);
+            if (current) first = current;
+            if (current && current.node.y2 < navTop - 10) break;
+            await this.nudgeDown();
+        }
+        await this.tapNode(first.node);
+        console.log(`Clicked first ${tab} symbol: ${first.symbol} (${first.exchange || '?'})`);
+        if (!(await this.verifyQuoteOpened(first.symbol))) return null;
+        return { symbol: first.symbol, tab };
+    }
+
     // Device back from an NxtOption tool or a Quote opened from F&O lands straight on Markets, still
     // on F&O (verified live).
     async navigateBackToEquityTab(from, maxBackPresses = 3) {
@@ -2441,17 +2487,21 @@ class MarketsPage extends BasePage {
     }
 
     // Result rows read "SYMBOL\nIDEA, Double tap to open Quote Screen." (or "SYMBOL\nAdd Watchlist,
-    // ..."); the same symbol can be listed once per exchange. A contract search like "NIFTY 22750"
-    // lists "NIFTY 13OCT 22750 CE", ... Waits for a first row containing every word of `query` so a
-    // stale list from the previous search isn't read.
+    // ..."); the same symbol can be listed once per exchange. Newer builds (seen 12 Nov 2026) drop
+    // the line break: "RTNPOWER, Double tap to open Quote Screen." - so the symbol is cut at the
+    // first line break OR at ", Double tap"/", Add Watchlist", whichever comes first. Without that
+    // the whole desc became the "symbol" and verifyQuoteOpened() waited for a header that never
+    // exists. A contract search like "NIFTY 22750" lists "NIFTY 13OCT 22750 CE", ... Waits for a
+    // first row containing every word of `query` so a stale list from the previous search isn't read.
     async getSearchResults(query, timeout = 6000) {
         const words = query.toUpperCase().split(/\s+/);
+        const symbolOf = desc => desc.split('\n')[0].replace(/,\s*(Double tap|Add Watchlist)[\s\S]*$/i, '').trim();
         let results = [];
         const deadline = Date.now() + timeout;
         do {
             results = (await this.getDescribedElements())
                 .filter(n => n.desc.includes('Double tap to open Quote Screen'))
-                .map(n => ({ symbol: n.desc.split('\n')[0].trim(), node: n }));
+                .map(n => ({ symbol: symbolOf(n.desc), node: n }));
             if (results.length && words.every(w => results[0].symbol.toUpperCase().includes(w))) break;
             await this.pause(500);
         } while (Date.now() < deadline);

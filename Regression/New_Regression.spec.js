@@ -8,7 +8,7 @@
  * R5 : Enable Now                — Enable Globe Secure screen
  * R6 : Second OTP page           — enter SECOND OTP (app auto-clicks Verify OTP)
  * R7 : Device PIN Login          — biometric/PIN screen
- * R8 : Risk Disclosure           — some accounts don't show this screen at all; accept if shown, skip if not
+ * R8 : Risk Disclosure           — popup is expected after login; tap "I Understand"
  *
  * Note: watchlist names/count differ per client ID, so Watchlist steps (R10+) locate
  * tabs by their position ("Tab N of M") rather than by an assumed name like "Watchlist1".
@@ -96,7 +96,7 @@ const BUILD_VERSION_SEL = 'android=new UiSelector().descriptionMatches(".*v\\d+\
 const RISK_SEL = {
   // App shows "RISK DISCLOSURES ON DERIVATIVES" (uppercase, plural) with an "I Understand" accept control.
   heading:   '//*[contains(@content-desc,"RISK DISCLOSURE") or contains(@content-desc,"Risk Disclosure") or contains(@text,"RISK DISCLOSURE") or contains(@text,"Risk Disclosure")]',
-  acceptBtn: '//*[contains(@content-desc,"I Understand") or contains(@content-desc,"Accept") or contains(@content-desc,"I Agree") or contains(@content-desc,"Agree") or contains(@content-desc,"Continue") or contains(@content-desc,"PROCEED") or contains(@text,"I Understand") or contains(@text,"Accept") or contains(@text,"Agree") or contains(@text,"Continue")]',
+  acceptBtn: '//*[contains(@content-desc,"I Understand") or contains(@text,"I Understand")]',
 };
 
 // Selectors used only by the Watchlist steps below (mirrors WatchlistPage's
@@ -757,25 +757,21 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     this.timeout(30000);
     const handled = await handleBiometricIfNeeded(15000);
     console.log(`  ℹ  Device PIN / biometric screen handled: ${handled}`);
-    // Some builds skip straight to Risk Disclosure / Watchlist — not a failure.
+    // Some builds skip straight to Risk Disclosure — not a failure.
   });
 
   authIt('R8: Verify Risk Disclosure', async function () {
     this.timeout(30000);
-    // Not every account shows this screen — some client IDs skip straight to Watchlist.
-    // So this is a genuine if/else, not a required step: accept it when present, otherwise
-    // move on without failing.
-    const onRisk = await loginPage.isDisplayed(RISK_SEL.heading, 5000);
-    console.log(`  ℹ  Risk Disclosure screen shown for this account: ${onRisk}`);
+    // The updated Risk Disclosure popup is now expected after every login - it must appear,
+    // and is dismissed via its "I Understand" button.
+    const onRisk = await loginPage.isDisplayed(RISK_SEL.heading, 10000);
+    console.log(`  ℹ  Risk Disclosure popup shown: ${onRisk}`);
+    await assertOrDump(onRisk, 'R8: Risk Disclosure popup not shown', 'Risk Disclosure popup should appear after login');
 
-    if (onRisk) {
-      const accepted = await loginPage.findAndTap(RISK_SEL.acceptBtn, 5000);
-      console.log(`  ℹ  Risk Disclosure accept tapped: ${accepted}`);
-      await assertOrDump(accepted, 'R8: Risk Disclosure accept control not found', 'Should be able to accept the Risk Disclosure screen');
-      await browser.pause(1000);
-    } else {
-      console.log('  ℹ  This account has no Risk Disclosure step — proceeding straight to landing check');
-    }
+    const accepted = await loginPage.findAndTap(RISK_SEL.acceptBtn, 5000);
+    console.log(`  ℹ  "I Understand" tapped: ${accepted}`);
+    await assertOrDump(accepted, 'R8: "I Understand" button not found', 'Should be able to tap "I Understand" on the Risk Disclosure popup');
+    await browser.pause(1000);
 
     const onWatchlist = await watchlistPage.isLoaded(10000);
     await assertOrDump(onWatchlist, 'R8: Watchlist not reached after login flow', 'Watchlist home screen should be visible after full login flow');
