@@ -38,10 +38,10 @@ const { decodePng, regionCoverage, pixelAt } = require('../utils/pngPixels');
 const { createLogger, getFailedTCs } = require('../utils/logger');
 const { logSection, countTab, verifyOrderPad, runSymbolQuoteFlow, countAndRunQuoteFlow } = require('./ResearchCalls/shared');
 
+try {
 
 
-
-  catch (err) {
+} catch (err) {
     console.error('Test failed:', err.message);
     console.error(err.stack);
 } finally {
@@ -58,6 +58,6 @@ const { logSection, countTab, verifyOrderPad, runSymbolQuoteFlow, countAndRunQuo
         console.log('\nAll test cases passed.');
     }
 }
-}
+
 
 run();

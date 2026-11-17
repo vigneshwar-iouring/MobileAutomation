@@ -10,8 +10,8 @@ const { createLogger, getFailedTCs } = require('../utils/logger');
 const { logFile, entries } = createLogger('NCforgotpassword');
 console.log(`Logging this run to: ${logFile}`);
 
-const NEW_PASSWORD = 'Globe@54321';
-const CONFIRM_PASSWORD = 'Globe@54321';
+const NEW_PASSWORD = 'Globe@5432';
+const CONFIRM_PASSWORD = 'Globe@5432';
 
 //Scenario 1 - Validation of Forgot password with empty Login ID
 async function scenario1_EmptyLoginId(driver, splashPage, loginPage, forgotPage) {
@@ -40,7 +40,7 @@ async function scenario1_EmptyLoginId(driver, splashPage, loginPage, forgotPage)
     if (emptyError) {
         console.log(`✔ Empty login ID error: "${emptyError}"`);
     } else {
-        console.log('✘ Expected error not displayed for empty login ID');
+        console.error('FAIL ✘ Expected error not displayed for empty login ID');
     }
 
     // TC 4: Tap back navigation button
@@ -67,7 +67,7 @@ async function scenario2_InvalidLoginId(driver, loginPage, forgotPage) {
     if (abcdError) {
         console.log(`✔ TC 6 error: "${abcdError}"`);
     } else {
-        console.log('✘ No error found for ABCD@123');
+        console.error('FAIL ✘ No error found for ABCD@123');
     }
 
     // Navigate back to login page → Forgot Password again
@@ -118,7 +118,7 @@ async function scenario3_MismatchedPasswords(driver, loginPage, forgotPage) {
     // The OTP is now verified on its own screen before Set Password is shown, so this needs the
     // real OTP to get as far as the password fields.
     const sinceUid = await getLatestUid();
-    await openOtpScreen(driver, loginPage, forgotPage, 'TEMPMF11');
+    await openOtpScreen(driver, loginPage, forgotPage, 'TEMPMF2');
 
     // TC 7: Enter the real OTP -> Verify OTP is auto-clicked
     console.log('TC 7: Entering OTP (Verify OTP is auto-clicked)...');
@@ -138,11 +138,12 @@ async function scenario3_MismatchedPasswords(driver, loginPage, forgotPage) {
     console.log('TC 10: Clicking Submit...');
     await forgotPage.clickSubmit();
     await driver.pause(4000);
+    await forgotPage.dumpPage('fp_mismatch_after_submit');
     const submitError1 = await forgotPage.getOtpErrorMessage();
     if (submitError1) {
         console.log(`✔ TC 10 error: "${submitError1}"`);
     } else {
-        console.log('✘ No error message found after submit (step 10)');
+        console.error('FAIL ✘ No error message found after submit (step 10)');
     }
 
     // Navigate back to login page
@@ -152,9 +153,9 @@ async function scenario3_MismatchedPasswords(driver, loginPage, forgotPage) {
 
 //Scenario 4 - Validation of Forgot password with valid Login ID and invalid OTP
 async function scenario4_InvalidOtp(driver, loginPage, forgotPage) {
-    // TC 11: Enter valid login ID 'TEMPMF11' → click Next
-    console.log('TC 11: Entering valid login ID TEMPMF11...');
-    await openOtpScreen(driver, loginPage, forgotPage, 'TEMPMF11');
+    // TC 11: Enter valid login ID 'TEMPMF2' → click Next
+    console.log('TC 11: Entering valid login ID TEMPMF2...');
+    await openOtpScreen(driver, loginPage, forgotPage, 'TEMPMF2');
 
     // TC 12: Enter invalid OTP '123456'
     console.log('TC 12: Entering invalid OTP 123456...');
@@ -164,11 +165,12 @@ async function scenario4_InvalidOtp(driver, loginPage, forgotPage) {
     // the OTP screen itself, so Set Password (and its password fields) is never reached.
     console.log('TC 13: Waiting for auto-clicked Verify OTP to reject the OTP...');
     await driver.pause(4000);
+    await forgotPage.dumpPage('fp_invalid_otp');
     const otpError = await forgotPage.getOtpErrorMessage();
     if (otpError) {
         console.log(`✔ TC 13 error: "${otpError}"`);
     } else {
-        console.log('✘ No error message found after Verify OTP (step 13)');
+        console.error('FAIL ✘ No error message found after Verify OTP (step 13)');
     }
 
     // TC 14: Invalid OTP must not advance to Set Password
@@ -176,32 +178,82 @@ async function scenario4_InvalidOtp(driver, loginPage, forgotPage) {
     if (await forgotPage.isOnOtpScreen()) {
         console.log('✔ TC 14: still on OTP screen after invalid OTP');
     } else {
-        console.log('✘ TC 14: invalid OTP moved past the OTP screen');
+        console.error('FAIL ✘ TC 14: invalid OTP moved past the OTP screen');
     }
 }
 
 //Sceanario 5 - Validation of Forgot password with valid Login ID and valid OTP
 async function scenario5_HappyPath(driver, loginPage, forgotPage) {
-    // TC 16: Normal forgot password flow (happy path)
-    console.log('TC 16: Starting normal forgot password flow...');
+    // Same steps as tests/forgotPassword.test.js TC 2-11, starting from the login screen.
 
-    // Snapshot inbox before triggering OTP send
+    // TC 16: Back to login → tap Forgot Password
+    console.log('TC 16: Tapping Forgot Password...');
+    await backToLogin(driver, loginPage);
+    await loginPage.clickForgotPassword();
+    await driver.pause(2000);
+    console.log('Navigated to Forgot Password page');
+
+    // TC 17: Snapshot inbox BEFORE triggering OTP
+    console.log('TC 17: Snapshotting Gmail inbox...');
     const sinceUid = await getLatestUid();
-    await openOtpScreen(driver, loginPage, forgotPage, 'TEMPMF11');
 
-    await verifyRealOtp(driver, forgotPage, sinceUid);
+    // TC 18: Enter login ID → click Next
+    console.log('TC 18: Entering login ID and clicking Next...');
+    await forgotPage.clickLoginIdField();
+    await forgotPage.enterLoginId('TEMPMF2');
+    await forgotPage.clickNext();
+    await driver.pause(3000);
+    console.log('Navigated to OTP page');
 
-    await forgotPage.enterNewPassword(NEW_PASSWORD);
-    await driver.pause(1000);
+    // TC 19: Fetch OTP from Gmail
+    console.log('TC 19: Fetching OTP from Gmail...');
+    const otp = await fetchLatestOtp(sinceUid, 'One time password');
+    console.log(`OTP fetched: ${otp}`);
 
-    await forgotPage.enterConfirmPassword(CONFIRM_PASSWORD);
-    await driver.pause(1000);
-
-    await forgotPage.clickSubmit();
+    // TC 20: Enter OTP digit by digit
+    console.log('TC 20: Entering OTP (Verify OTP is auto-clicked)...');
+    await forgotPage.enterOtp(otp);
     await driver.pause(4000);
+    if (await forgotPage.isOnOtpScreen()) {
+        const otpError = await forgotPage.getOtpErrorMessage();
+        throw new Error(`OTP was not accepted by Verify OTP${otpError ? `: "${otpError}"` : ''}`);
+    }
+    console.log('Navigated to Set Password page');
 
-    await forgotPage.clickContinue();
-    console.log('Done — password reset complete');
+    // TC 21: Enter new password
+    console.log('TC 21: Entering new password...');
+    await forgotPage.enterNewPassword(NEW_PASSWORD);
+    await driver.pause(1500);
+    console.log(`New password entered: ${NEW_PASSWORD}`);
+
+    // TC 22: Enter confirm password
+    console.log('TC 22: Entering confirm password...');
+    await forgotPage.enterConfirmPassword(CONFIRM_PASSWORD);
+    await driver.pause(1500);
+    console.log(`Confirm password entered: ${CONFIRM_PASSWORD}`);
+
+    // TC 23: Click Submit only after both passwords are filled
+    console.log('TC 23: Clicking Submit...');
+    const toastShown = await forgotPage.submitAndWaitForResetSuccess();
+
+    // TC 24: A successful reset shows a "Password reset successful" toast and returns to login.
+    console.log('TC 24: Verifying "Password reset successful" toast...');
+    if (toastShown) {
+        console.log('✔ "Password reset successful" toast shown');
+    } else {
+        console.error('FAIL: "Password reset successful" toast not shown after Submit');
+    }
+
+    // TC 25: Back on the login screen
+    console.log('TC 25: Verifying return to login screen...');
+    await driver.pause(1500);
+    if (await loginPage.isElementVisible(loginPage.forgotPasswordLink, 5000)) {
+        console.log('✔ Back on login screen - password reset complete');
+    } else {
+        await forgotPage.dumpPage('fp_happy_after_submit');
+        const err = await forgotPage.getOtpErrorMessage();
+        console.error(`FAIL: not on login screen after Submit${err ? ` - screen shows: "${err}"` : ''}`);
+    }
 }
 
 async function run() {
