@@ -280,18 +280,35 @@ class ForgotPasswordPage extends BasePage {
     }
 
     // Taps SUBMIT and watches for the "Password reset successful" toast starting straight after
-    // the tap (it's short-lived, so a pause before checking would miss it). enableMultiWindows
-    // makes system Toast windows visible in the page source (same as BasketPage's toast checks).
+    // the tap (it's short-lived, so a pause before checking would miss it).
+    // This toast is a system Toast drawn in its own window (like BasketPage's basket-limit toast):
+    // it is NOT in the default page source - a run with plain polling saw the reset succeed and
+    // return to login but never found the text (logs/forgotPassword_2026-11-17T11-31-34-417Z.log).
+    // enableMultiWindows makes that window part of the page source, so it's on while polling.
     async submitAndWaitForResetSuccess(timeout = 6000) {
         await this.driver.hideKeyboard().catch(() => { });
-        await this.driver.updateSettings({ enableMultiWindows: true }).catch(() => { });
+        await this.driver.updateSettings({ enableMultiWindows: true })
+            .catch(e => console.log(`enableMultiWindows could not be set: ${e.message}`));
+        let shown = false;
         try {
             await this.click(this.submitButton);
+            const tappedAt = Date.now();
             console.log('Clicked Submit');
-            return await this.waitForToast(this.resetSuccessToastText, { timeout, interval: 150 });
+            while (Date.now() - tappedAt < timeout) {
+                try {
+                    const src = await this.driver.getPageSource();
+                    if (src.includes(this.resetSuccessToastText)) { shown = true; break; }
+                } catch (e) {
+                    // Surface a dead session immediately instead of reporting it as "toast missing".
+                    if (/session/i.test(e.message)) throw new Error(`Appium session lost while waiting for toast: ${e.message}`);
+                }
+                await this.driver.pause(150);
+            }
+            console.log(`Toast "${this.resetSuccessToastText}" ${shown ? `seen after ${Date.now() - tappedAt}ms` : `not seen within ${timeout}ms`}`);
         } finally {
             await this.driver.updateSettings({ enableMultiWindows: false }).catch(() => { });
         }
+        return shown;
     }
 }
 

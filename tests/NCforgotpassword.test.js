@@ -184,28 +184,68 @@ async function scenario4_InvalidOtp(driver, loginPage, forgotPage) {
 
 //Sceanario 5 - Validation of Forgot password with valid Login ID and valid OTP
 async function scenario5_HappyPath(driver, loginPage, forgotPage) {
-    // TC 16: Normal forgot password flow (happy path)
-    console.log('TC 16: Starting normal forgot password flow...');
+    // Same steps as tests/forgotPassword.test.js TC 2-11, starting from the login screen.
 
-    // Snapshot inbox before triggering OTP send
+    // TC 16: Back to login → tap Forgot Password
+    console.log('TC 16: Tapping Forgot Password...');
+    await backToLogin(driver, loginPage);
+    await loginPage.clickForgotPassword();
+    await driver.pause(2000);
+    console.log('Navigated to Forgot Password page');
+
+    // TC 17: Snapshot inbox BEFORE triggering OTP
+    console.log('TC 17: Snapshotting Gmail inbox...');
     const sinceUid = await getLatestUid();
-    await openOtpScreen(driver, loginPage, forgotPage, 'TEMPMF2');
 
-    await verifyRealOtp(driver, forgotPage, sinceUid);
+    // TC 18: Enter login ID → click Next
+    console.log('TC 18: Entering login ID and clicking Next...');
+    await forgotPage.clickLoginIdField();
+    await forgotPage.enterLoginId('TEMPMF2');
+    await forgotPage.clickNext();
+    await driver.pause(3000);
+    console.log('Navigated to OTP page');
 
+    // TC 19: Fetch OTP from Gmail
+    console.log('TC 19: Fetching OTP from Gmail...');
+    const otp = await fetchLatestOtp(sinceUid, 'One time password');
+    console.log(`OTP fetched: ${otp}`);
+
+    // TC 20: Enter OTP digit by digit
+    console.log('TC 20: Entering OTP (Verify OTP is auto-clicked)...');
+    await forgotPage.enterOtp(otp);
+    await driver.pause(4000);
+    if (await forgotPage.isOnOtpScreen()) {
+        const otpError = await forgotPage.getOtpErrorMessage();
+        throw new Error(`OTP was not accepted by Verify OTP${otpError ? `: "${otpError}"` : ''}`);
+    }
+    console.log('Navigated to Set Password page');
+
+    // TC 21: Enter new password
+    console.log('TC 21: Entering new password...');
     await forgotPage.enterNewPassword(NEW_PASSWORD);
-    await driver.pause(1000);
+    await driver.pause(1500);
+    console.log(`New password entered: ${NEW_PASSWORD}`);
 
+    // TC 22: Enter confirm password
+    console.log('TC 22: Entering confirm password...');
     await forgotPage.enterConfirmPassword(CONFIRM_PASSWORD);
-    await driver.pause(1000);
+    await driver.pause(1500);
+    console.log(`Confirm password entered: ${CONFIRM_PASSWORD}`);
 
-    // A successful reset shows a "Password reset successful" toast and returns to the login screen.
+    // TC 23: Click Submit only after both passwords are filled
+    console.log('TC 23: Clicking Submit...');
     const toastShown = await forgotPage.submitAndWaitForResetSuccess();
+
+    // TC 24: A successful reset shows a "Password reset successful" toast and returns to login.
+    console.log('TC 24: Verifying "Password reset successful" toast...');
     if (toastShown) {
         console.log('✔ "Password reset successful" toast shown');
     } else {
         console.error('FAIL: "Password reset successful" toast not shown after Submit');
     }
+
+    // TC 25: Back on the login screen
+    console.log('TC 25: Verifying return to login screen...');
     await driver.pause(1500);
     if (await loginPage.isElementVisible(loginPage.forgotPasswordLink, 5000)) {
         console.log('✔ Back on login screen - password reset complete');

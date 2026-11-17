@@ -10,8 +10,8 @@ const { logFile, entries } = createLogger('forgotPassword');
 console.log(`Logging this run to: ${logFile}`);
 
 // ── Fill in your passwords before running ──────────────────────────
-const NEW_PASSWORD = 'Globe@5432';
-const CONFIRM_PASSWORD = 'Globe@5432';
+const NEW_PASSWORD = 'Globe@2345';
+const CONFIRM_PASSWORD = 'Globe@2345';
 // ───────────────────────────────────────────────────────────────────
 
 async function run() {
@@ -25,8 +25,8 @@ async function run() {
         // TC 1: Relaunch app
         // relaunch, not launch: activateApp alone resumes wherever a previous run stopped (e.g. mid
         // Set Password), and Forgot Password isn't reachable from there.
-        console.log('TC 1: Relaunching app...');
-        await splashPage.relaunch();
+        console.log('TC 1: launching app...');
+        await splashPage.launch();
         await splashPage.pause(8000);
         await permissionHandler.dismissAllPermissions(driver);
         console.log('App ready on login page');

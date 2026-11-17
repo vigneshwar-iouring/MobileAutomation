@@ -14,7 +14,7 @@ const PASSWORD = 'Globe@12345';
 const LOGIN_ID2 = 'HOGC1103';
 const PASSWORD2 = 'Jaya@0012';
 const LOGIN_ID3 = 'TEMPMF2';
-const PASSWORD3 = 'Globe@0987';
+const PASSWORD3 = 'Globe@2345';
 const LOGIN_ID4 = 'EKY6998';
 const PASSWORD4 = 'May@2026';
 const DEVICE_PASSWORD = '11111'; // device screen-lock PIN, used to confirm biometric enrollment
@@ -61,8 +61,8 @@ async function run() {
 
         currentStep = 'TC 3: Entering login ID and password...';
         console.log(currentStep);
-        await loginPage.enterLoginId(LOGIN_ID3);
-        await loginPage.enterPassword(PASSWORD3);
+        await loginPage.enterLoginId(LOGIN_ID4);
+        await loginPage.enterPassword(PASSWORD4);
         await loginPage.clickLogin();
 
         // Wrong credentials show a Toast here instead of advancing to OTP - it vanishes from the
