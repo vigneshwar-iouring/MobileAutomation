@@ -10,8 +10,8 @@ const { logFile, entries } = createLogger('forgotPassword');
 console.log(`Logging this run to: ${logFile}`);
 
 // ── Fill in your passwords before running ──────────────────────────
-const NEW_PASSWORD = 'Globe@12345';
-const CONFIRM_PASSWORD = 'Globe@12345';
+const NEW_PASSWORD = 'Globe@5432';
+const CONFIRM_PASSWORD = 'Globe@5432';
 // ───────────────────────────────────────────────────────────────────
 
 async function run() {
@@ -23,6 +23,8 @@ async function run() {
         const forgotPage = new ForgotPasswordPage(driver);
 
         // TC 1: Relaunch app
+        // relaunch, not launch: activateApp alone resumes wherever a previous run stopped (e.g. mid
+        // Set Password), and Forgot Password isn't reachable from there.
         console.log('TC 1: Relaunching app...');
         await splashPage.relaunch();
         await splashPage.pause(8000);
@@ -46,7 +48,7 @@ async function run() {
         // TC 4: Enter login ID → click Next
         console.log('TC 4: Entering login ID and clicking Next...');
         await forgotPage.clickLoginIdField();
-        await forgotPage.enterLoginId('TEMPMF11');
+        await forgotPage.enterLoginId('TEMPMF2');
         await forgotPage.clickNext();
         await driver.pause(3000);
         console.log('Navigated to OTP page');
@@ -80,13 +82,26 @@ async function run() {
 
         // TC 9: Click Submit only after both passwords are filled
         console.log('TC 9: Clicking Submit...');
-        await forgotPage.clickSubmit();
-        await driver.pause(4000);
+        const toastShown = await forgotPage.submitAndWaitForResetSuccess();
 
-        // TC 10: Click Continue on the success screen
-        console.log('TC 10: Clicking Continue...');
-        await forgotPage.clickContinue();
-        console.log('Done — password reset complete');
+        // TC 10: A successful reset shows a "Password reset successful" toast and returns to login.
+        console.log('TC 10: Verifying "Password reset successful" toast...');
+        if (toastShown) {
+            console.log('✔ "Password reset successful" toast shown');
+        } else {
+            console.error('FAIL: "Password reset successful" toast not shown after Submit');
+        }
+
+        // TC 11: Back on the login screen
+        console.log('TC 11: Verifying return to login screen...');
+        await driver.pause(1500);
+        if (await loginPage.isElementVisible(loginPage.forgotPasswordLink, 5000)) {
+            console.log('✔ Back on login screen - password reset complete');
+        } else {
+            await forgotPage.dumpPage('fp_after_submit');
+            const err = await forgotPage.getOtpErrorMessage();
+            console.error(`FAIL: not on login screen after Submit${err ? ` - screen shows: "${err}"` : ''}`);
+        }
 
     } catch (err) {
         console.error('Test failed:', err.message);
