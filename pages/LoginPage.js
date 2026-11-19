@@ -46,13 +46,12 @@ class LoginPage extends BasePage {
         // biometric-enrollment fallback - not part of the app under test.
         this.deviceCredentialInput = 'android=new UiSelector().resourceId("com.android.systemui:id/auth_credential_input")';
 
-        // "Risk Disclosure on Derivatives" popup - now expected after every login. Rendered
-        // as plain Views with the label in content-desc (text is empty), not a native TextView,
-        // so this has to match on description rather than text.
-        // Matches content-desc or text, upper or title case, so the updated popup is still found
-        // if its label moves to a TextView or its casing changes (same matching as the Regression
-        // spec's RISK_SEL).
-        this.riskDisclosureHeading = '//*[contains(@content-desc,"RISK DISCLOSURE") or contains(@content-desc,"Risk Disclosure") or contains(@text,"RISK DISCLOSURE") or contains(@text,"Risk Disclosure")]';
+        // Risk disclosure popup - now expected after every login. The updated popup is headed
+        // "SEBI presents Samajh Se Investing Simple" and dismissed via "I Understand".
+        // Matches content-desc or text, upper or title case, so the popup is still found if its
+        // label moves to a TextView or its casing changes. Keep in sync with the Regression
+        // spec's RISK_SEL.heading.
+        this.riskDisclosureHeading = '//*[contains(@content-desc,"SEBI presents Samajh Se Investing Simple") or contains(@content-desc,"SEBI PRESENTS SAMAJH SE INVESTING SIMPLE") or contains(@text,"SEBI presents Samajh Se Investing Simple") or contains(@text,"SEBI PRESENTS SAMAJH SE INVESTING SIMPLE")]';
         this.iUnderstandButton = '//*[contains(@content-desc,"I Understand") or contains(@text,"I Understand")]';
 
         this.homeHamburgerMenu = 'android=new UiSelector().description("Hamburger menu, Double tap to open the hamburger menu")';
