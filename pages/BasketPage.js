@@ -20,8 +20,6 @@ class BasketPage extends BasePage {
         this.closeBasketButton = 'android=new UiSelector().description("Close, Double tap to close")';
         this.addSymbolsButton = 'android=new UiSelector().description("Add symbols to your basket")';
         this.emptyBasketCenterMessage = 'android=new UiSelector().description("Empty Basket")';
-        // Basket Orders list empty state - used by tests/Basket.test.js (same as master's version).
-        this.emptyBasketMessage = 'android=new UiSelector().description("Basket order is Empty")';
         this.executeButton = 'android=new UiSelector().description("EXECUTE")';
 
         // The global search field is a plain Button (not an EditText) with a hint, already
@@ -366,13 +364,6 @@ class BasketPage extends BasePage {
 
     // Confirms the "Empty Basket" message is both visible and horizontally centered on screen,
     // rather than assuming a fixed position.
-    // Content-desc of the Basket Orders empty-state message (tests/Basket.test.js).
-    async getEmptyBasketMessage() {
-        const el = await this.driver.$(this.emptyBasketMessage);
-        await el.waitForDisplayed({ timeout: 3000 });
-        return await el.getAttribute('content-desc');
-    }
-
     async isEmptyBasketCentered(timeout = 3000) {
         const visible = await this.isElementVisible(this.emptyBasketCenterMessage, timeout);
         if (!visible) return { visible: false, centered: false };
