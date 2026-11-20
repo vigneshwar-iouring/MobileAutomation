@@ -94,8 +94,10 @@ const BUILD_VERSION_SEL = 'android=new UiSelector().descriptionMatches(".*v\\d+\
 // No dedicated page object exists for this screen yet — app doesn't expose a
 // stable resource-id for it, so we key off common disclosure/consent wording.
 const RISK_SEL = {
-  // App shows "RISK DISCLOSURES ON DERIVATIVES" (uppercase, plural) with an "I Understand" accept control.
-  heading:   '//*[contains(@content-desc,"RISK DISCLOSURE") or contains(@content-desc,"Risk Disclosure") or contains(@text,"RISK DISCLOSURE") or contains(@text,"Risk Disclosure")]',
+  // The updated popup is headed "SEBI presents Samajh Se Investing Simple" (matched in title or
+  // upper case, content-desc or text) with an "I Understand" accept control. Kept in sync with
+  // pages/LoginPage.js's riskDisclosureHeading.
+  heading:   '//*[contains(@content-desc,"SEBI presents Samajh Se Investing Simple") or contains(@content-desc,"SEBI PRESENTS SAMAJH SE INVESTING SIMPLE") or contains(@text,"SEBI presents Samajh Se Investing Simple") or contains(@text,"SEBI PRESENTS SAMAJH SE INVESTING SIMPLE")]',
   acceptBtn: '//*[contains(@content-desc,"I Understand") or contains(@text,"I Understand")]',
 };
 
@@ -763,7 +765,11 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
   authIt('R8: Verify Risk Disclosure', async function () {
     this.timeout(30000);
     // The updated Risk Disclosure popup is now expected after every login - it must appear,
-    // and is dismissed via its "I Understand" button.
+    // and is dismissed via its "I Understand" button. It surfaces once the app lands on the
+    // default Watchlist screen post-login - not right after the device-PIN step (R7) - so give
+    // the app time to reach that screen first (same as tests/loginWithOtp.test.js TC 9).
+    console.log('  ℹ  Waiting for Watchlist screen to load before checking Risk Disclosure...');
+    await browser.pause(2000);
     const onRisk = await loginPage.isDisplayed(RISK_SEL.heading, 10000);
     console.log(`  ℹ  Risk Disclosure popup shown: ${onRisk}`);
     await assertOrDump(onRisk, 'R8: Risk Disclosure popup not shown', 'Risk Disclosure popup should appear after login');

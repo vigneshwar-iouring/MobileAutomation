@@ -241,6 +241,10 @@ class MarketsPage extends BasePage {
         this.globalSearchBar = '//android.widget.Button[@hint="Search Globe"]';
         this.searchField = 'android=new UiSelector().className("android.widget.Button").instance(0)';
         this.searchCancelButton = 'android=new UiSelector().description("Cancel")';
+        // Current builds dropped "Cancel" for a back-arrow icon (no content-desc); the screen is
+        // recognised by its segment filter chips (ALL / STOCK / F&O / COM / CDS) instead - verified
+        // live 2026-11-19, ui_dumps/global_search_not_opened.xml. Matches either build.
+        this.searchScreen = '//*[@content-desc="Cancel" or (@content-desc="STOCK" and following-sibling::*[@content-desc="F&O"])]';
         this.seeAllRecentlyViewed = 'android=new UiSelector().descriptionStartsWith("See all Last Visited")';
         this.recentlyViewedTitle = 'android=new UiSelector().description("Stocks You Viewed Recently")';
 
@@ -2436,9 +2440,36 @@ class MarketsPage extends BasePage {
 
     // ── Global search / Last Visited ─────────────────────────────
 
+    // The search screen is detected by `searchScreen` (old "Cancel" button, or the current build's
+    // segment filter chips). If Appium's click() doesn't open the screen and the bar is still
+    // there, it's retried once with a raw adb tap on the bar (Compose sometimes ignores the
+    // accessibility click). On failure the screen is saved to ui_dumps/ for diagnosis.
     async clickGlobalSearchBar(timeout = 8000) {
+        const waitOpen = () => this.isElementVisible(this.searchScreen, timeout);
+
         await this.click(this.globalSearchBar, timeout);
-        const opened = await this.isElementVisible(this.searchCancelButton, timeout);
+        let opened = await waitOpen();
+        if (!opened) {
+            const bar = await this.driver.$(this.globalSearchBar);
+            if (await bar.isDisplayed().catch(() => false)) {
+                console.log('Global search did not open after click() - retrying with a raw adb tap on the search bar');
+                const { x, y } = await bar.getLocation();
+                const { width, height } = await bar.getSize();
+                this.adbTap(Math.round(x + width / 2), Math.round(y + height / 2));
+                opened = await waitOpen();
+            } else {
+                console.log('Search bar is gone after the tap, but the search screen was not recognised - it may have changed');
+            }
+        }
+        if (!opened) {
+            try {
+                const fs = require('fs');
+                const path = require('path');
+                const file = path.join(__dirname, '..', 'ui_dumps', 'global_search_not_opened.xml');
+                fs.writeFileSync(file, await this.driver.getPageSource());
+                console.log(`Screen at the failure saved to ${file}`);
+            } catch (_) { /* diagnostics only */ }
+        }
         console.log(`Global search screen opened: ${opened ? 'PASS' : 'FAIL'}`);
         return opened;
     }
@@ -2532,15 +2563,25 @@ class MarketsPage extends BasePage {
     async navigateBackToSearch(timeout = 5000) {
         await this.driver.back();
         await this.pause(1000);
-        const back = await this.isElementVisible(this.searchCancelButton, timeout);
+        const back = await this.isElementVisible(this.searchScreen, timeout);
         console.log(`Navigated back from Quote to global search: ${back ? 'PASS' : 'FAIL'}`);
         return back;
     }
 
+    // Older builds: tap "Cancel". Current builds have only an unlabelled back arrow, so press back
+    // (twice at most - the first can just close the keyboard) until the search screen is gone.
     async closeGlobalSearch(timeout = 5000) {
-        await this.click(this.searchCancelButton, timeout);
-        await this.pause(800);
-        console.log('Clicked Cancel on global search');
+        if (await this.isElementVisible(this.searchCancelButton, 500)) {
+            await this.click(this.searchCancelButton, timeout);
+            await this.pause(800);
+            console.log('Clicked Cancel on global search');
+            return;
+        }
+        for (let i = 0; i < 2 && await this.isElementVisible(this.searchScreen, 500); i++) {
+            await this.driver.back();
+            await this.pause(800);
+        }
+        console.log('Closed global search with back');
     }
 
     async scrollToRecentlyViewed() {

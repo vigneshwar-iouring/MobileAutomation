@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const BasePage = require('./BasePage');
 const { decodePng, pixelAt } = require('../utils/pngPixels');
 
@@ -16,6 +18,7 @@ class OrderPadPage extends BasePage {
         this.backButton = 'android=new UiSelector().description("Back, Double tap to go back")';
         this.orderTypeLabel = 'android=new UiSelector().description("Order Type:")';
         this.buyIndicator = 'android=new UiSelector().description("BUY")';
+        this.modifyButton = 'android=new UiSelector().description("MODIFY")';
         this.sellIndicator = 'android=new UiSelector().description("SELL")';
 
         // Field labels as exposed on the Order Pad (ui_dumps/r20_orderpad_fields.xml).
@@ -26,7 +29,11 @@ class OrderPadPage extends BasePage {
         this.marketLimitSwap = 'android=new UiSelector().description("Swap, Double tap to switch between Market and Limit")';
         // Exactly two EditTexts on the pad, neither with a resource-id: quantity first, price second.
         this.quantityInput = 'android=new UiSelector().className("android.widget.EditText").instance(0)';
-        this.priceInput = 'android=new UiSelector().className("android.widget.EditText").instance(1)';
+        // Price is the EditText right after its "Price (Limit|Market)" label - not instance(1): once
+        // the keyboard is up the pad scrolls Quantity off screen, leaving Price as the only
+        // EditText, so instance(1) vanished and the typed price read back as "" (verified live
+        // 2026-11-19, ui_dumps/probe_orderpad_after.xml).
+        this.priceInput = '//*[starts-with(@content-desc,"Price (")]/following::android.widget.EditText[1]';
         this.deliveryOption = 'android=new UiSelector().description("Delivery")';
         this.intradayOption = 'android=new UiSelector().description("Intraday")';
         this.carryforwardOption = 'android=new UiSelector().descriptionMatches("(?i)carry ?forward")';
@@ -68,7 +75,8 @@ class OrderPadPage extends BasePage {
         this.chargesHeading = 'android=new UiSelector().description("Brokerage and Charges")';
         // Some symbols show a surveillance (GSM/ASM) warning before the popup; PROCEED only moves
         // on to the Confirmation Preview, it does not place anything (Regression R25).
-        this.surveillanceWarning = 'android=new UiSelector().descriptionMatches("(?s).*(Surveillance|GSM|ASM).*")';
+        // Whole words only - a bare "ASM" also matched the symbol NATGASMINI (MCX, 19 Nov 2026).
+        this.surveillanceWarning = 'android=new UiSelector().descriptionMatches("(?s).*\\\\b(Surveillance|GSM|ASM)\\\\b.*")';
         this.surveillanceProceed = 'android=new UiSelector().descriptionMatches("(?i)proceed")';
     }
 
@@ -257,6 +265,14 @@ class OrderPadPage extends BasePage {
 
     // Hardware back closes the popup back to the Order Pad without confirming (verified in the
     // Regression suite) - CONFIRM is never tapped here.
+    // PLACES A REAL ORDER. Taps the Confirmation Preview's CONFIRM ("CONFIRM" content-desc,
+    // ui_dumps/r34_confirmation_popup_full.xml). Callers must verify getConfirmationDetails()
+    // first and gate this behind PLACE_REAL_ORDERS.
+    async tapConfirm() {
+        await this.click('android=new UiSelector().description("CONFIRM")', 3000);
+        console.log('Tapped CONFIRM on the Confirmation Preview - order sent');
+    }
+
     async dismissConfirmationPopup() {
         await this.driver.back();
         await this.pause(600);
@@ -293,6 +309,139 @@ class OrderPadPage extends BasePage {
         const ok = displayed && type === expected;
         console.log(`${expected} Order Pad displayed (${displayed ? `${type ? type.toUpperCase() : 'no BUY/SELL'} button shown` : 'Order Pad not shown'}): ${ok ? 'PASS' : 'FAIL'}`);
         return ok;
+    }
+
+    // ---- Modify Order Pad (Order Book -> order details -> Modify) ----
+    // Same pad as a fresh order, but the bottom CTA reads "MODIFY" instead of BUY/SELL and the
+    // fields come prefilled from the order (ui_dumps/probe_modify_pad.xml, live 2026-11-19:
+    // RTNPOWER, qty 1, Price (Limit) 5.23, Approx Margin "₹ 0.00" - the resting order's margin is
+    // already blocked, so Approx Margin shows only the extra margin the modification needs).
+    async verifyModifyPadFor(symbol, timeout = 8000) {
+        const displayed = await this.isDisplayed(timeout);
+        const shown = displayed ? await this.getDisplayedSymbol() : null;
+        const modify = displayed && await this.isElementVisible(this.modifyButton, 2000);
+        console.log(`Modify Order Pad displayed for ${symbol} (symbol "${shown || 'not shown'}", MODIFY button ${modify ? 'shown' : 'not shown'}): ${shown === symbol && modify ? 'PASS' : 'FAIL'}`);
+        return shown === symbol && modify;
+    }
+
+    // While modifying, only Quantity and Price may be editable (plus Trigger Price on an SL order).
+    // Live (ui_dumps/probe_modify_pad.xml vs a fresh Buy pad, 2026-11-19): the stoploss toggle is
+    // disabled ("toggle stoploss, Button Disabled"), only the order's own product is shown and
+    // not clickable, and the Buy/Sell swap is gone - checked from the a11y tree. The NSE/BSE radios
+    // still report clickable="true", so the other exchange is tapped and must leave the exchange
+    // unchanged; the Market/Limit swap is allowed and must switch (then restored). Returns
+    // { ok, intact } - `intact` false means the pad was left changed and must NOT be submitted.
+    async verifyModifyPadFieldAccess({ exchange, isSL = false } = {}) {
+        const nodes = await this.getPadNodes();
+        const results = [];
+        const check = (label, ok, detail) => {
+            results.push(ok);
+            console.log(`${label}${detail ? ` (${detail})` : ''}: ${ok ? 'PASS' : 'FAIL'}`);
+        };
+
+        const qty = await this.getInputBelow(/^Quantity$/);
+        const price = await this.getInputBelow(/^Price \(/);
+        check('Quantity field is editable', !!qty && qty.cls === 'EditText' && qty.enabled);
+        check('Price field is editable', !!price && price.cls === 'EditText' && price.enabled);
+
+        const toggle = nodes.find(n => n.desc === 'toggle stoploss');
+        const toggleWrap = nodes.find(n => n.desc.startsWith('toggle stoploss,'));
+        const toggleDisabled = (!!toggle && !toggle.enabled) || (!!toggleWrap && /disabled/i.test(toggleWrap.desc));
+        if (isSL) {
+            const trigger = await this.getInputBelow(/^Trigger Price$/);
+            check('SL order - Trigger Price field is editable', !!trigger && trigger.cls === 'EditText' && trigger.enabled,
+                trigger ? `reads "${trigger.text || trigger.hint}"` : 'not shown');
+        } else {
+            check('Stoploss toggle is disabled', toggleDisabled, toggleWrap ? `"${toggleWrap.desc}"` : 'not shown');
+        }
+
+        const PRODUCTS = /^(Delivery|Intraday|Carry ?forward|MTF)\b/i;
+        const products = nodes.filter(n => PRODUCTS.test(n.desc) && !/^Buy this stock/i.test(n.desc));
+        check('Product is locked - only the order\'s product shown and not selectable',
+            products.length === 1 && !products[0].clickable,
+            products.map(p => `${p.desc.split('\n')[0].trim()}${p.clickable ? ' (clickable)' : ''}`).join(', ') || 'none shown');
+        const regular = nodes.find(n => n.desc === 'Regular');
+        check('Order Type (Regular) is not selectable', !!regular && !regular.clickable);
+        check('Buy/Sell swap is not offered', !nodes.some(n => /^Swap Buy Sell/i.test(n.desc)));
+
+        let intact = true;
+        // Exchange radio: tapping the other exchange must not switch it.
+        if (['NSE', 'BSE'].includes(exchange)) {
+            const other = exchange === 'NSE' ? 'BSE' : 'NSE';
+            const otherNode = nodes.find(n => n.desc.startsWith(`${other} \n`) || n.desc.startsWith(`${other}\n`));
+            if (otherNode) {
+                await this.tapNode(otherNode);
+                await this.pause(1000);
+                const { selected } = await this.getHighlightedOption(['NSE', 'BSE']);
+                check(`Exchange is locked - tapping ${other} leaves ${exchange} selected`, selected === exchange, `highlighted: ${selected || 'none clear'}`);
+                if (selected !== exchange) {
+                    const back = (await this.getPadNodes()).find(n => n.desc.startsWith(`${exchange} \n`) || n.desc.startsWith(`${exchange}\n`));
+                    if (back) await this.tapNode(back);
+                    await this.pause(1000);
+                    intact = (await this.getHighlightedOption(['NSE', 'BSE'])).selected === exchange;
+                }
+            }
+        }
+        // Market/Limit swap is part of the Price field and IS allowed while modifying (confirmed by
+        // the product owner, 2026-11-19): tapping it must switch the price type. Switching back to
+        // Limit refills Price with the LTP, so the original price is typed back in, and the pad
+        // counts as intact only if both the price type and price match what they were.
+        const modeBefore = await this.getPriceMode();
+        const priceBefore = await this.getPrice();
+        if (!(await this.isElementVisible(this.marketLimitSwap, 1000))) {
+            check('Market/Limit swap is available while modifying', false, 'not shown');
+        } else {
+            await this.click(this.marketLimitSwap, 3000);
+            await this.pause(800);
+            const modeAfter = await this.getPriceMode();
+            check(`Market/Limit swap works while modifying - ${modeBefore} switches`, !!modeAfter && modeAfter !== modeBefore, `reads "${modeAfter}"`);
+            if (modeAfter !== modeBefore) {
+                await this.click(this.marketLimitSwap, 3000);
+                await this.pause(800);
+                const modeRestored = (await this.getPriceMode()) === modeBefore;
+                if (modeRestored && num(await this.getPrice()) !== num(priceBefore)) {
+                    console.log(`Price reset to "${await this.getPrice()}" by the Market/Limit switch - re-entering ${priceBefore}`);
+                    await this.setPrice(priceBefore);
+                    await this.hideKeyboardIfShown();
+                }
+                intact = intact && modeRestored && num(await this.getPrice()) === num(priceBefore);
+                console.log(`Modify pad restored to ${modeBefore} @ ${priceBefore} (reads ${await this.getPriceMode()} @ ${await this.getPrice()}): ${intact ? 'PASS' : 'FAIL'}`);
+            }
+        }
+        await this.hideKeyboardIfShown();
+        const ok = results.every(Boolean);
+        console.log(`Only Quantity and Price (incl. Market/Limit)${isSL ? ' and Trigger Price' : ''} are editable while modifying: ${ok ? 'PASS' : 'FAIL'}`);
+        return { ok, intact };
+    }
+
+    // Taps the pad's MODIFY, which sends the modification - unless the app shows a Confirmation
+    // Preview first, which is returned as { outcome: 'confirmation' } for the caller to check
+    // and confirm. 'left' = the pad closed without a preview; 'stuck' = still on the pad.
+    async clickModifyAndWait(timeout = 8000) {
+        await this.click(this.modifyButton, 3000);
+        console.log('Clicked MODIFY on the Order Pad');
+        let outcome = 'stuck';
+        try {
+            await this.driver.waitUntil(async () => {
+                if (await this.isElementVisible(this.confirmationHeading, 300)) outcome = 'confirmation';
+                else if (await this.isElementVisible(this.dprError, 300)) outcome = 'dpr';
+                else if (!(await this.isElementVisible(this.modifyButton, 300))) outcome = 'left';
+                return outcome !== 'stuck';
+            }, { timeout, interval: 300 });
+        } catch (_) { /* still on the pad */ }
+        await this.dumpScreenTo('orderpad_after_modify');
+        if (outcome === 'dpr') {
+            const msg = await (await this.driver.$(this.dprError)).getAttribute('content-desc').catch(() => '');
+            return { outcome, message: msg };
+        }
+        return { outcome };
+    }
+
+    async dumpScreenTo(name) {
+        try {
+            fs.writeFileSync(path.join(__dirname, '..', 'ui_dumps', `${name}.xml`), await this.driver.getPageSource());
+            console.log(`Saved UI dump: ui_dumps/${name}.xml`);
+        } catch (_) { /* diagnostics only */ }
     }
 
     async getApproxMargin() {
@@ -798,6 +947,48 @@ class OrderPadPage extends BasePage {
         if (def) ok = (await tapAndCheck(def)) && ok;
         if (names.length === 1) console.log(`Only "${names[0]}" validity offered - reselected it`);
         return ok;
+    }
+
+    // Validity chips offered (More must be expanded) and which one is highlighted, as
+    // { names, selected } - same row rules as verifyValidityOptions. Read-only.
+    async getValidityOptions() {
+        const nodes = await this.getPadNodes();
+        const label = nodes.find(n => n.desc === 'Validity');
+        if (!label) return { names: [], selected: null };
+        const stop = nodes.find(n => n.desc === 'Disclosed Qty');
+        const names = [...new Set(nodes
+            .filter(n => n.clickable && n.desc && n.y1 >= label.y2 && (!stop || n.y2 <= stop.y1) && n.y1 - label.y2 < 300)
+            .map(n => n.desc))];
+        const selected = names.length ? (await this.getHighlightedOption(names)).selected : null;
+        return { names, selected };
+    }
+
+    // Taps the validity chip `name` (More must be expanded) and checks it is the highlighted one.
+    async selectValidity(name) {
+        const node = (await this.getPadNodes()).find(n => n.desc === name);
+        if (!node) {
+            console.log(`Validity "${name}" not offered on the Order Pad: FAIL`);
+            return false;
+        }
+        await this.tapNode(node);
+        await this.pause(700);
+        const { names } = await this.getValidityOptions();
+        return this.verifyHighlighted(name, names.length ? names : [name], `Validity ${name}`);
+    }
+
+    // Taps the pad's own BUY or SELL ('Buy' / 'Sell'). Opens the Confirmation Preview only - the
+    // order goes out on its CONFIRM.
+    async clickSide(side) {
+        await this.click(side === 'Sell' ? this.sellIndicator : this.buyIndicator, 3000);
+        console.log(`Clicked ${side.toUpperCase()} on the Order Pad`);
+    }
+
+    // After market hours the app marks an order as AMO (After Market Order). NOT YET CAPTURED
+    // LIVE - matched loosely on "AMO" / "After Market" in any content-desc or text on screen
+    // (Order Pad or Confirmation Preview). Returns the label found, or null.
+    async findAmoTag() {
+        const hit = (await this.getPadNodes()).find(n => /\bAMO\b|after[\s-]?market/i.test(`${n.desc} ${n.text}`));
+        return hit ? (hit.desc || hit.text).replace(/\s+/g, ' ').trim() : null;
     }
 
     // "If applicable": absent label -> logged as not offered, not a failure.
