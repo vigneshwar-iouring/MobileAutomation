@@ -2,9 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const BasePage = require('./BasePage');
 
-// Order Book (bottom-nav "Orders" -> "Regular" tab), DriverManager stack. Read-only: never taps
-// Cancel All / Convert to Market / Modify / Cancel - an order row is only tapped to open its
-// details popup, which is closed with back.
+// Order Book (bottom-nav "Orders" -> "Regular" tab), DriverManager stack. Reading is passive (an
+// order row is only tapped to open its details popup, closed with back); the Modify / Cancel /
+// Cancel All / Convert to Market methods below act on REAL orders and are only called by tests
+// that mean to. Nothing here ever answers Yes on a Convert to Market confirmation.
 // From a real dump (ui_dumps/cds_after_mover_tap.xml):
 //   - top tabs "Regular\nTab 1 of 2" / "Basket\nTab 2 of 2";
 //   - status tabs are Buttons whose whole label is merged into one content-desc,
@@ -103,12 +104,14 @@ class OrderBookPage extends BasePage {
     // Order rows parsed into { raw, action, symbol, status, filledQty, totalQty, price } - same
     // row grammar as the Regression Orderbook page (symbol can hold spaces, price comma groups).
     async getParsedOrderRows() {
-        return (await this.getOrderRows()).map(raw => {
-            const m = raw.match(/^(BUY|SELL) order for (.+?)\.\s*Status:\s*([A-Za-z ]+?)\.\s*Quantity:\s*(\d+)\s*of\s*(\d+)\.\s*Price:\s*([\d,]+(?:\.\d+)?)/i);
-            return m
-                ? { raw, action: m[1].toUpperCase(), symbol: m[2].trim(), status: m[3].trim(), filledQty: Number(m[4]), totalQty: Number(m[5]), price: Number(m[6].replace(/,/g, '')) }
-                : { raw };
-        });
+        return (await this.getOrderRows()).map(raw => this.parseOrderRow(raw));
+    }
+
+    parseOrderRow(raw) {
+        const m = raw.match(/^(BUY|SELL) order for (.+?)\.\s*Status:\s*([A-Za-z ]+?)\.\s*Quantity:\s*(\d+)\s*of\s*(\d+)\.\s*Price:\s*([\d,]+(?:\.\d+)?)/i);
+        return m
+            ? { raw, action: m[1].toUpperCase(), symbol: m[2].trim(), status: m[3].trim(), filledQty: Number(m[4]), totalQty: Number(m[5]), price: Number(m[6].replace(/,/g, '')) }
+            : { raw };
     }
 
     // Polls the ALL tab for a row matching `predicate`. The list can lag the order (Regression
@@ -330,6 +333,196 @@ class OrderBookPage extends BasePage {
             await this.pause(1000);
         }
         return this.isOnOrderBook(5000);
+    }
+
+    // ---- Bulk actions on the Pending tab: Cancel All / Convert to Market selection mode ----
+    // Live (ui_dumps/probe_cancel_after_no.xml): above the Pending list sit
+    //   "Cancel All, Double tap to enter cancel selection mode" and
+    //   "Convert to Market, Double tap to enter convert to market selection mode".
+    // The selection mode itself (row checkboxes, Select All, Convert / Clear All / Cancel All
+    // actions, the Yes / No confirmation) has not been captured yet, so it is matched loosely -
+    // checkboxes by checkable="true", buttons by label in content-desc or text - and every screen
+    // is dumped (ui_dumps/orderbook_bulk_*.xml) so the matchers can be tightened.
+
+    // Every node with a label or a checkable state: { desc, text, label, cls, checkable, checked, ... }.
+    async getAllNodes() {
+        const src = await this.driver.getPageSource();
+        const decode = s => s.replace(/&#10;/g, '\n').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+            .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        const nodes = [];
+        for (const tag of src.match(/<[\w.]+[^>]*>/g) || []) {
+            const b = tag.match(/bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"/);
+            if (!b) continue;
+            const attr = name => { const m = tag.match(new RegExp(`\\s${name}="([^"]*)"`)); return m ? decode(m[1]) : ''; };
+            const desc = attr('content-desc').trim();
+            const text = attr('text').trim();
+            const checkable = attr('checkable') === 'true';
+            if (!desc && !text && !checkable) continue;
+            nodes.push({
+                desc, text, label: desc || text,
+                cls: (tag.match(/^<([\w.]+)/) || [])[1] || '',
+                checkable, checked: attr('checked') === 'true',
+                x1: +b[1], y1: +b[2], x2: +b[3], y2: +b[4],
+            });
+        }
+        return nodes;
+    }
+
+    // The bulk-mode entry buttons above the Pending list ({ cancelAll, convert } nodes or null).
+    async getBulkButtons() {
+        const nodes = await this.getAllNodes();
+        return {
+            cancelAll: nodes.find(n => /enter cancel selection mode/i.test(n.desc))
+                || nodes.find(n => /^cancel all\b/i.test(n.label)) || null,
+            convert: nodes.find(n => /enter convert to market selection mode/i.test(n.desc))
+                || nodes.find(n => /^convert to market\b/i.test(n.label)) || null,
+        };
+    }
+
+    // Selection-mode state. Live (ui_dumps/orderbook_bulk_convert_mode.xml, 2026-11-20) there are
+    // no checkable nodes - the checkbox state is in each row's label:
+    //   "Not selected BUY order for IDEA. Status: Pending. ... , Double tap to select order"
+    //   ("Selected BUY order for ..." once ticked), plus
+    //   "Select All, Double tap to select all orders" above the list,
+    //   "0/5 Order(s) will be converted and placed at Market price" (the selected / total counter),
+    //   bottom bar "Cancel, Double tap to exit selection mode" | "Convert 0 selected orders to market, ...".
+    // Returns { selectAll, clear, exit: nodes|null, counter: { selected, total }|null,
+    // boxes: [{ node, checked, label }] } - boxes are fully drawn rows only (a row clipped under
+    // the header is skipped so its tap can't land on the header).
+    async getSelectionState() {
+        const nodes = await this.getAllNodes();
+        const boxes = nodes
+            .filter(n => /^(not selected|selected)\s+(BUY|SELL) order for /i.test(n.desc) && n.y2 - n.y1 >= 120)
+            .sort((a, b) => a.y1 - b.y1)
+            .map(node => ({ node, checked: /^selected\b/i.test(node.desc), label: node.desc.replace(/^(not selected|selected)\s+/i, '').split(',')[0] }));
+        const c = nodes.map(n => n.desc.match(/^(\d+)\s*\/\s*(\d+)\s*Order\(s\)/i)).find(Boolean);
+        return {
+            selectAll: nodes.find(n => /^(select|deselect|unselect) all\b/i.test(n.label)) || null,
+            clear: nodes.find(n => /^clear all\b/i.test(n.label)) || null,
+            exit: nodes.find(n => /exit selection mode/i.test(n.desc)) || null,
+            counter: c ? { selected: Number(c[1]), total: Number(c[2]), text: c.input.split(',')[0] } : null,
+            boxes,
+        };
+    }
+
+    async isInSelectionMode() {
+        const s = await this.getSelectionState();
+        return !!s.exit || !!s.counter || s.boxes.length > 0;
+    }
+
+    // Taps Cancel All / Convert to Market (`kind` 'cancel' / 'convert') and waits for the
+    // checkboxes. Only enters the mode - nothing is cancelled or converted.
+    async enterSelectionMode(kind, timeout = 6000) {
+        const btn = (await this.getBulkButtons())[kind === 'convert' ? 'convert' : 'cancelAll'];
+        if (!btn) return false;
+        await this.tapNode(btn);
+        let ok = false;
+        try {
+            await this.driver.waitUntil(async () => (ok = await this.isInSelectionMode()), { timeout, interval: 500 });
+        } catch (_) { /* not entered */ }
+        await this.dumpPageSource(`orderbook_bulk_${kind}_mode`);
+        return ok;
+    }
+
+    async tapCheckbox(node) {
+        await this.tapNode(node);
+        await this.pause(800);
+    }
+
+    // A selection-mode action button by label: 'convert' ("Convert N selected orders to market"),
+    // 'clear' (Clear All) or 'cancel' (the bulk-cancel action, e.g. "Cancel N selected orders").
+    // NEVER returns the bottom "Cancel, Double tap to exit selection mode" button, the entry
+    // buttons ("... enter ... selection mode") or order rows. Lowest on screen wins.
+    async findSelectionAction(kind) {
+        const re = {
+            convert: /^convert\b/i,
+            clear: /^clear( all)?\b/i,
+            cancel: /^cancel\b(?!led)/i,
+        }[kind];
+        const hits = (await this.getAllNodes())
+            .filter(n => re.test(n.label)
+                && !/(enter|exit) .*selection mode/i.test(n.desc)
+                && !/order for /i.test(n.label))
+            .sort((a, b) => b.y1 - a.y1);
+        return hits[0] || null;
+    }
+
+    // Taps the action and waits for a Yes / No confirmation. Returns { question, yes, no } (nodes,
+    // question = the text just above Yes / No) or null. Never answers it.
+    async tapSelectionActionForConfirmation(kind, timeout = 6000) {
+        const action = await this.findSelectionAction(kind);
+        if (!action) throw new Error(`"${kind}" action not found in selection mode`);
+        console.log(`Tapping "${action.label.split(',')[0]}"`);
+        await this.tapNode(action);
+        const dialog = await this.waitForYesNo(timeout);
+        await this.dumpPageSource(`orderbook_bulk_${kind}_confirmation`);
+        return dialog;
+    }
+
+    async readYesNo() {
+        const nodes = await this.getAllNodes();
+        const yes = nodes.find(n => /^yes\s*(,|$)/i.test(n.label));
+        const no = nodes.find(n => /^no\s*(,|$)/i.test(n.label));
+        if (!yes && !no) return null;
+        const btnTop = Math.min(...[yes, no].filter(Boolean).map(n => n.y1));
+        const question = nodes.filter(n => n.y2 <= btnTop && btnTop - n.y2 < 600 && !/^scrim$/i.test(n.label) && !n.checkable)
+            .sort((a, b) => b.y2 - a.y2)[0];
+        return { yes: yes || null, no: no || null, question: question ? question.label.replace(/\s+/g, ' ') : null };
+    }
+
+    async waitForYesNo(timeout = 6000) {
+        let dialog = null;
+        try {
+            await this.driver.waitUntil(async () => !!(dialog = await this.readYesNo()), { timeout, interval: 400 });
+        } catch (_) { /* none */ }
+        return dialog;
+    }
+
+    // Closes an open Yes / No confirmation WITHOUT tapping either button: back presses only.
+    // Returns whether it is gone.
+    async dismissConfirmationWithBack(maxPresses = 2) {
+        for (let i = 0; i < maxPresses && await this.readYesNo(); i++) {
+            await this.driver.back();
+            await this.pause(1000);
+        }
+        return !(await this.readYesNo());
+    }
+
+    // Leaves selection mode via its "Cancel, Double tap to exit selection mode" button (back as a
+    // fallback, only while the mode is still shown, so it never backs out of the Order Book).
+    // Refuses while a Yes / No confirmation is open. Returns whether the mode is gone.
+    async exitSelectionMode(maxTries = 2) {
+        for (let i = 0; i < maxTries && await this.isInSelectionMode(); i++) {
+            if (await this.readYesNo()) return false;
+            const { exit } = await this.getSelectionState();
+            if (exit) await this.tapNode(exit);
+            else await this.driver.back();
+            await this.pause(1200);
+        }
+        return !(await this.isInSelectionMode());
+    }
+
+    // After Yes on a bulk cancel: taps OK on a follow-up popup if one appears. Returns its message.
+    async acknowledgeIfShown(timeout = 8000) {
+        let ok = null;
+        let message = null;
+        try {
+            await this.driver.waitUntil(async () => {
+                const nodes = await this.getAllNodes();
+                ok = nodes.find(n => /^ok(ay)?$/i.test(n.label)) || null;
+                if (!ok) return false;
+                const above = nodes.filter(n => n.y2 <= ok.y1 && ok.y1 - n.y2 < 600 && !/^(scrim|ok)$/i.test(n.label))
+                    .sort((a, b) => b.y2 - a.y2);
+                message = above.length ? above[0].label.replace(/\s+/g, ' ') : null;
+                return true;
+            }, { timeout, interval: 400 });
+        } catch (_) { /* none */ }
+        await this.dumpPageSource('orderbook_bulk_cancel_result');
+        if (ok) {
+            await this.tapNode(ok);
+            await this.pause(1500);
+        }
+        return { okShown: !!ok, message };
     }
 
     async dumpPageSource(name) {
