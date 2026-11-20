@@ -75,7 +75,8 @@ class OrderPadPage extends BasePage {
         this.chargesHeading = 'android=new UiSelector().description("Brokerage and Charges")';
         // Some symbols show a surveillance (GSM/ASM) warning before the popup; PROCEED only moves
         // on to the Confirmation Preview, it does not place anything (Regression R25).
-        this.surveillanceWarning = 'android=new UiSelector().descriptionMatches("(?s).*(Surveillance|GSM|ASM).*")';
+        // Whole words only - a bare "ASM" also matched the symbol NATGASMINI (MCX, 19 Nov 2026).
+        this.surveillanceWarning = 'android=new UiSelector().descriptionMatches("(?s).*\\\\b(Surveillance|GSM|ASM)\\\\b.*")';
         this.surveillanceProceed = 'android=new UiSelector().descriptionMatches("(?i)proceed")';
     }
 
@@ -946,6 +947,48 @@ class OrderPadPage extends BasePage {
         if (def) ok = (await tapAndCheck(def)) && ok;
         if (names.length === 1) console.log(`Only "${names[0]}" validity offered - reselected it`);
         return ok;
+    }
+
+    // Validity chips offered (More must be expanded) and which one is highlighted, as
+    // { names, selected } - same row rules as verifyValidityOptions. Read-only.
+    async getValidityOptions() {
+        const nodes = await this.getPadNodes();
+        const label = nodes.find(n => n.desc === 'Validity');
+        if (!label) return { names: [], selected: null };
+        const stop = nodes.find(n => n.desc === 'Disclosed Qty');
+        const names = [...new Set(nodes
+            .filter(n => n.clickable && n.desc && n.y1 >= label.y2 && (!stop || n.y2 <= stop.y1) && n.y1 - label.y2 < 300)
+            .map(n => n.desc))];
+        const selected = names.length ? (await this.getHighlightedOption(names)).selected : null;
+        return { names, selected };
+    }
+
+    // Taps the validity chip `name` (More must be expanded) and checks it is the highlighted one.
+    async selectValidity(name) {
+        const node = (await this.getPadNodes()).find(n => n.desc === name);
+        if (!node) {
+            console.log(`Validity "${name}" not offered on the Order Pad: FAIL`);
+            return false;
+        }
+        await this.tapNode(node);
+        await this.pause(700);
+        const { names } = await this.getValidityOptions();
+        return this.verifyHighlighted(name, names.length ? names : [name], `Validity ${name}`);
+    }
+
+    // Taps the pad's own BUY or SELL ('Buy' / 'Sell'). Opens the Confirmation Preview only - the
+    // order goes out on its CONFIRM.
+    async clickSide(side) {
+        await this.click(side === 'Sell' ? this.sellIndicator : this.buyIndicator, 3000);
+        console.log(`Clicked ${side.toUpperCase()} on the Order Pad`);
+    }
+
+    // After market hours the app marks an order as AMO (After Market Order). NOT YET CAPTURED
+    // LIVE - matched loosely on "AMO" / "After Market" in any content-desc or text on screen
+    // (Order Pad or Confirmation Preview). Returns the label found, or null.
+    async findAmoTag() {
+        const hit = (await this.getPadNodes()).find(n => /\bAMO\b|after[\s-]?market/i.test(`${n.desc} ${n.text}`));
+        return hit ? (hit.desc || hit.text).replace(/\s+/g, ' ').trim() : null;
     }
 
     // "If applicable": absent label -> logged as not offered, not a failure.

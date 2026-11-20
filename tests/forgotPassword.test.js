@@ -10,8 +10,8 @@ const { logFile, entries } = createLogger('forgotPassword');
 console.log(`Logging this run to: ${logFile}`);
 
 // ── Fill in your passwords before running ──────────────────────────
-const NEW_PASSWORD = 'Globe@2345';
-const CONFIRM_PASSWORD = 'Globe@2345';
+const NEW_PASSWORD = 'Globe@67890';
+const CONFIRM_PASSWORD = 'Globe@67890';
 // ───────────────────────────────────────────────────────────────────
 
 async function run() {

@@ -137,7 +137,9 @@ class OrderBookPage extends BasePage {
     }
 
     // ---- Order status popup shown after CONFIRM ----
-    // Not captured in a UI dump yet, so it is matched loosely: a status word (Placed, Queued,
+    // Captured once, after a Modify (2026-11-19): separate content-desc nodes "Rejected",
+    // "2 X RTNPOWER", "View Orderbook", "Close". After a fresh order it was not seen (the app went
+    // straight back to the Quote). Still matched loosely: a status word (Placed, Queued,
     // Scheduled, Failed, Rejected) anywhere in its text, plus "Close" / "View Order Book"
     // buttons. Every popup seen is saved to ui_dumps/orderbook_status_popup.xml so these
     // matchers can be tightened against the real screen.
@@ -252,6 +254,73 @@ class OrderBookPage extends BasePage {
             },
             raw: header.desc.trim(),
         };
+    }
+
+    // ---- Cancel order (order details -> Cancel -> Yes -> OK) ----
+    // Confirmation, live 2026-11-19 (ui_dumps/probe_cancel_dialog.xml): the details sheet shrinks
+    // to a summary (PENDING / BUY / symbol / Order Price / NSE DELIVERY LMT) with
+    // "Are you sure you want to cancel this order?" and "No" / "Yes" buttons. After Yes the same
+    // summary shows "Order submitted for cancellation" with an "OK" button
+    // (ui_dumps/orderbook_cancel_ok_popup.xml); the order then turns Cancelled on its own.
+
+    // Taps Cancel on the open details and waits for the confirmation. Returns { question, yes, no }
+    // (nodes) or null when the dialog did not appear. Does not answer it.
+    async tapCancelOnDetails(od, timeout = 6000) {
+        await this.tapNode(od.buttons.cancel);
+        let dialog = null;
+        try {
+            await this.driver.waitUntil(async () => {
+                const nodes = await this.getDescribedElements();
+                const question = nodes.find(n => /sure you want to cancel/i.test(n.desc));
+                if (!question) return false;
+                dialog = {
+                    question,
+                    yes: nodes.find(n => /^yes$/i.test(n.desc.trim())) || null,
+                    no: nodes.find(n => /^no$/i.test(n.desc.trim())) || null,
+                };
+                return true;
+            }, { timeout, interval: 400 });
+        } catch (_) { /* no dialog */ }
+        await this.dumpPageSource('orderbook_cancel_dialog');
+        return dialog;
+    }
+
+    // Taps No - nothing is cancelled. Live 2026-11-19 this closes the whole details sheet, back to
+    // the Order Book list. Returns whether the confirmation is gone.
+    async answerCancelNo(dialog) {
+        await this.tapNode(dialog.no);
+        await this.pause(1500);
+        return !(await this.getDescribedElements()).some(n => /sure you want to cancel/i.test(n.desc));
+    }
+
+    // Taps Yes (CANCELS the real order), waits for the OK popup and taps OK. Returns
+    // { okShown, message }.
+    async confirmCancelAndAcknowledge(dialog, timeout = 10000) {
+        await this.tapNode(dialog.yes);
+        let ok = null;
+        let message = null;
+        try {
+            await this.driver.waitUntil(async () => {
+                const texts = [
+                    ...(await this.getDescribedElements()).map(n => ({ label: n.desc.trim(), node: n })),
+                    ...(await this.getTextElements()).map(n => ({ label: n.text.trim(), node: n })),
+                ];
+                const okHit = texts.find(t => /^ok(ay)?$/i.test(t.label));
+                if (!okHit) return false;
+                ok = okHit.node;
+                // The popup's message: the text nearest above the OK button.
+                const above = texts.filter(t => t.node.y2 <= ok.y1 && t.label && !/^(scrim|ok)$/i.test(t.label) && ok.y1 - t.node.y2 < 600);
+                above.sort((a, b) => b.node.y2 - a.node.y2);
+                message = above.length ? above.slice(0, 2).reverse().map(t => t.label.replace(/\s+/g, ' ')).join(' | ') : null;
+                return true;
+            }, { timeout, interval: 300 });
+        } catch (_) { /* no OK popup */ }
+        await this.dumpPageSource('orderbook_cancel_ok_popup');
+        if (ok) {
+            await this.tapNode(ok);
+            await this.pause(1500);
+        }
+        return { okShown: !!ok, message };
     }
 
     // Closes the details popup with back (never taps Modify / Cancel) and waits for the list.
