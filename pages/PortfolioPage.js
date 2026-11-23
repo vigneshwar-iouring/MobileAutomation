@@ -560,11 +560,46 @@ class PortfolioPage extends BasePage {
     // the Close - then an unlabelled icon, and "B" / "S" (chart Buy / Sell, never tapped).
     static get WEBVIEW() { return 'android=new UiSelector().className("android.webkit.WebView")'; }
 
+    // NB: the header symbol TextView's accessibility text is stale - live 2026-11-23 it read "VISL"
+    // across runs while the screen showed "B2BSOFT BSE" - so check `company` (which does update)
+    // with symbolMatchesCompany, not headerSymbol.
+    //
+    // Does `company` (e.g. "B2B SOFTWARE TECHNOLOGIES LTD.") belong to `symbol` (e.g. "B2BSOFT")?
+    // Letters/digits only, case-insensitive: the symbol inside the company name, or its characters
+    // in order within it ("TCS" in "TATA CONSULTANCY SERVICES").
+    static symbolMatchesCompany(symbol, company) {
+        const s = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const c = String(company || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (!s || !c) return false;
+        if (c.includes(s)) return true;
+        let i = 0;
+        for (const ch of c) if (ch === s[i]) i++;
+        return i === s.length && c[0] === s[0];
+    }
+
+    async saveScreenshot(name) {
+        try {
+            const file = path.join(__dirname, '..', 'ui_dumps', `${name}.png`);
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            await this.driver.saveScreenshot(file);
+            console.log(`Saved screenshot: ui_dumps/${name}.png`);
+        } catch (e) {
+            console.log(`Could not save screenshot ${name}: ${e.message}`);
+        }
+    }
+
     // Waits `waitMs` for the chart to load, then reads it: { webView, headerSymbol, headerText, company }.
-    async readChartPage(waitMs = 10000) {
+    // The WebView's accessibility tree fills in late: live 2026-11-23 a page source taken right after
+    // the 10s wait had no WebView content at all, and one taken a moment later had it - so the read
+    // is retried (up to `settleMs`) until the company line ("sym-detail") is there.
+    async readChartPage(waitMs = 10000, settleMs = 5000) {
         await this.pause(waitMs);
         const webView = await this.isElementVisible(PortfolioPage.WEBVIEW, 2000);
-        const nodes = await this.getAllNodes();
+        let nodes = await this.getAllNodes();
+        for (const end = Date.now() + settleMs; !nodes.some(n => n.rid === 'sym-detail') && Date.now() < end;) {
+            await this.pause(500);
+            nodes = await this.getAllNodes();
+        }
         const i = nodes.findIndex(n => n.rid === 'sym-detail');
         const company = i >= 0 ? nodes[i].text.trim() : null;
         const head = i > 0 ? nodes.slice(0, i).reverse().find(n => n.text.trim()) : null;
@@ -618,12 +653,19 @@ class PortfolioPage extends BasePage {
     // for Stock Details" handle, without the tab strip. Full quote: the "Overview\nTab 1 of N" tab
     // strip (same signal as BasePage.isQuoteExpanded). Returns 'full' / 'half' / 'details' (the
     // holding detail sheet) / null.
+    // Live (ui_dumps/portfolio_quote_half.xml, 2026-11-23): the half Quote is the holding popup
+    // pulled up to mid-screen ("Stock details:" at y≈678 instead of ≈1362) with the Quote's own
+    // content now under it - "Pr. Close. 17.82., ..." / Open / High / Low, the Bid / Ask depth,
+    // "Total Buy Qty. ..." - and no summary card or tab strip yet. The popup alone has none of that.
     async getQuoteState(symbol) {
         if (await this.isQuoteExpanded()) return 'full';
         const descs = (await this.getDescribedElements()).map(n => n.desc.trim());
         const sym = symbol.toUpperCase();
-        if (descs.some(d => d.toUpperCase().startsWith(`STOCK ${sym}`) || d === 'Swipe up for Stock Details' || /Swipe up to explore quote details/i.test(d))) return 'half';
-        if (descs.some(d => /^Stock details:/i.test(d))) return 'details';
+        const quoteContent = descs.some(d => /^(Pr\. Close|Open|High|Low)\. .*Displays the/i.test(d) || /^Total (Buy|Sell) Qty\./i.test(d));
+        const details = descs.some(d => /^Stock details:/i.test(d));
+        if (details && quoteContent) return 'half';
+        if (descs.some(d => d.toUpperCase().startsWith(`STOCK ${sym},`) || d === 'Swipe up for Stock Details' || /Swipe up to explore quote details/i.test(d))) return 'half';
+        if (details) return 'details';
         return null;
     }
 

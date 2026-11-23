@@ -522,11 +522,15 @@ async function checkFirstHoldingScreens(portfolio, n, known = null) {
         console.log('Waiting 10s for the chart to load...');
         const chart = await portfolio.readChartPage(10000);
         await portfolio.dumpPageSource('portfolio_view_chart');
+        await portfolio.saveScreenshot('portfolio_view_chart');
         // The chart WebView is laid over the detail sheet, whose nodes stay in the tree behind it -
-        // so the symbol is read from the chart's own header, not from anywhere on screen.
+        // so the symbol is checked against the chart's own content. Its header symbol TextView is
+        // NOT used: the WebView's accessibility text for it is stale (live 2026-11-23 it read "VISL"
+        // while the screenshot showed "B2BSOFT BSE"). The company line (resource-id "sym-detail")
+        // does update, so the holding's symbol is matched against it.
         console.log(`Chart web page (WebView) shown: ${verdict(chart.webView)}`);
-        console.log(`Chart header: "${chart.headerText}" | company: "${chart.company}"`);
-        console.log(`Chart is for ${h.symbol} (header symbol ${chart.headerSymbol}): ${verdict(!!chart.headerSymbol && chart.headerSymbol.toUpperCase() === h.symbol.toUpperCase())}`);
+        console.log(`Chart company: "${chart.company}" (header text "${chart.headerText}" - stale in accessibility, not checked)`);
+        console.log(`Chart is for ${h.symbol} (company "${chart.company}"): ${verdict(PortfolioPage.symbolMatchesCompany(h.symbol, chart.company))}`);
 
         console.log('Clicking Close on the chart...');
         if (!(await portfolio.tapChartClose())) {
