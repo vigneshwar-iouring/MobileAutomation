@@ -537,6 +537,104 @@ class OrderBookPage extends BasePage {
         }
     }
 
+    // ---- Order Book search ----
+    // Live (ui_dumps/orderbook_list_probe.xml / orderbook_search.xml, 2026-11-23): the bar above
+    // the list is an android.widget.Button (Compose text field), not an EditText. Empty, it has no
+    // text / content-desc, only hint="Search with: name, order type etc.." (so getAllNodes() never
+    // sees it); once typed into, the hint is gone and the query is its text="..." - same bounds.
+    // So it is found by that hint, and its bounds are remembered to read / clear it afterwards.
+    async findSearchBar() {
+        const src = await this.driver.getPageSource();
+        const tags = src.match(/<[\w.]+[^>]*>/g) || [];
+        const boundsOf = tag => {
+            const b = tag.match(/bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"/);
+            return b ? { x1: +b[1], y1: +b[2], x2: +b[3], y2: +b[4] } : null;
+        };
+        const hinted = tags.find(t => /\shint="Search with[^"]*"/i.test(t) && boundsOf(t));
+        if (hinted) return (this.searchBar = boundsOf(hinted));
+        if (this.searchBar) return this.searchBar;
+        // Already holding text (e.g. left by an earlier run): no hint then. It is the unlabelled
+        // Button with text, just below the status tabs.
+        const tabs = await this.getStatusTabs();
+        if (!tabs) return null;
+        const tabsBottom = Math.max(...tabs.map(t => t.node.y2));
+        const typed = tags.find(t => {
+            const b = boundsOf(t);
+            return /^<android\.widget\.Button\b/.test(t) && /\stext="[^"]+"/.test(t)
+                && !/content-desc="[^"]+"/.test(t) && b && b.y1 >= tabsBottom && b.y1 - tabsBottom < 300;
+        });
+        return typed ? (this.searchBar = boundsOf(typed)) : null;
+    }
+
+    // The search bar's current text ('' when empty / showing its hint), or null if not found.
+    async getSearchText() {
+        const bar = this.searchBar || await this.findSearchBar();
+        if (!bar) return null;
+        const bounds = `bounds="[${bar.x1},${bar.y1}][${bar.x2},${bar.y2}]"`;
+        const src = await this.driver.getPageSource();
+        const tag = (src.match(/<[\w.]+[^>]*>/g) || []).find(t => t.includes(bounds) && /\stext="/.test(t));
+        if (!tag) return null;
+        const text = (tag.match(/\stext="([^"]*)"/) || [])[1] || '';
+        return /^search with/i.test(text) ? '' : text;
+    }
+
+    async hideKeyboardIfShown() {
+        try {
+            if (await this.driver.isKeyboardShown()) {
+                await this.driver.hideKeyboard();
+                await this.pause(500);
+            }
+        } catch (_) { /* no keyboard */ }
+    }
+
+    async isKeyboardShown() {
+        try { return await this.driver.isKeyboardShown(); } catch (_) { return false; }
+    }
+
+    // Taps the search bar (keyboard must come up), types `query` key by key (real key events -
+    // Compose fields can accept setValue() without the app seeing it), hides the keyboard.
+    // Returns { opened, typed, text }.
+    async searchOrders(query) {
+        const bar = await this.findSearchBar();
+        if (!bar) return { opened: false, typed: false, text: null };
+        if (await this.getSearchText()) {
+            console.log(`Search bar already holds "${await this.getSearchText()}" - clearing it first`);
+            await this.clearSearch();
+        }
+        await this.tapNode(bar);
+        await this.pause(800);
+        const opened = await this.isKeyboardShown();
+        for (const ch of query) {
+            await this.driver.keys(ch);
+            await this.pause(60);
+        }
+        await this.pause(1000);
+        const text = await this.getSearchText();
+        await this.dumpPageSource('orderbook_search');
+        await this.hideKeyboardIfShown();
+        return { opened, typed: text === query, text };
+    }
+
+    // Empties the search text (tap to focus, End + backspaces) so the next run starts on the full list.
+    async clearSearch() {
+        const bar = this.searchBar || await this.findSearchBar();
+        if (!bar) return false;
+        let text = await this.getSearchText();
+        for (let attempt = 0; attempt < 3 && text; attempt++) {
+            await this.tapNode(bar);
+            await this.pause(500);
+            await this.driver.pressKeyCode(123); // KEYCODE_MOVE_END
+            for (let i = 0; i < text.length; i++) {
+                await this.driver.pressKeyCode(67); // KEYCODE_DEL
+                await this.pause(40);
+            }
+            await this.pause(500);
+            text = await this.getSearchText();
+        }
+        await this.hideKeyboardIfShown();
+        return text === '';
+    }
+
     // The "You don't have any ... orders" text on screen (content-desc or text), or null.
     async getEmptyMessage() {
         const nodes = [

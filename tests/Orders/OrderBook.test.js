@@ -25,6 +25,10 @@ const PLACE_REAL_ORDERS = process.env.PLACE_REAL_ORDERS !== '0';
 // is already pending - no tab checks, no new orders.
 const BULK_ONLY = process.env.BULK_ONLY === '1';
 
+// SEARCH_ONLY=1 runs just TC 1-2 and the Order Book search (TC 128) - no tab checks, no orders,
+// no Convert to Market / Cancel All.
+const SEARCH_ONLY = process.env.SEARCH_ONLY === '1';
+
 // SEGMENTS=MCX,CDS runs just TC 1-2 and those exchanges' order flows - no tab checks (TC 3-6),
 // no other exchanges, and no Convert to Market / Cancel All (TC 117-127).
 const SEGMENTS = (process.env.SEGMENTS || '').toUpperCase().split(',').map(s => s.trim()).filter(Boolean);
@@ -113,6 +117,7 @@ function marketClosedMessage(segment) {
 // TC 81-89 / 90-98 the same on the MCX future with Carryforward / Intraday selected; TC 99-107 /
 //   108-116 on a CDS contract (Currency Top Gainers / Losers) with Carryforward / Intraday.
 // TC 117-127 Convert to Market / Cancel All on the Pending tab (see bulkActionsOnPending).
+// TC 128 Order Book search bar -> "RTNPOWER" -> the symbol is listed (see searchOrderBook).
 // Each order flow is skipped outside its exchange's hours (NSE/BSE 09:15-15:30, NFO/BFO
 // 09:15-15:40, MCX/CDS 09:00-17:00 IST, Mon-Fri) -
 // "Market closed - unable to place orders" - as the Regression suite does.
@@ -906,6 +911,40 @@ async function bulkActionsOnPending(driver, pages) {
     console.log(`Every pending order changed to Cancelled (${cancelled} of ${pendingBefore.length}): ${cancelled === pendingBefore.length ? 'PASS' : 'FAIL'}`);
 }
 
+// TC 128: after Cancel All, search the Order Book (ALL tab) for the NSE symbol (RTNPOWER) and
+// verify it is listed. Read-only - nothing is tapped on the results.
+const SEARCH_TC = B(91) + 1;
+async function searchOrderBook(driver, pages) {
+    const { orderBook, marketsPage } = pages;
+    const query = SYMBOLS.NSE.query;
+    tc(SEARCH_TC, `Clicking the Order Book search bar, searching "${query}" and verifying the symbol is listed...`);
+    if (await orderBook.isInSelectionMode()) await orderBook.exitSelectionMode();
+    await openPendingTab(driver, orderBook, marketsPage);
+    await orderBook.tapStatusTab('ALL');
+
+    const search = await orderBook.searchOrders(query);
+    console.log(`Search bar opened for typing: ${search.opened ? 'PASS' : 'FAIL'}`);
+    console.log(`Entered "${query}" in the search bar (field reads "${search.text}"): ${search.typed ? 'PASS' : 'FAIL'}`);
+
+    const isMatch = r => new RegExp(`^${query.replace(/\s+/g, '\\s*')}\\b`, 'i').test(r.symbol || '');
+    let rows = [];
+    try {
+        await driver.waitUntil(async () => {
+            rows = (await orderBook.getParsedOrderRows()).filter(r => r.action);
+            return rows.some(isMatch);
+        }, { timeout: 8000, interval: 1000 });
+    } catch (_) { /* not listed */ }
+    rows.slice(0, 5).forEach(r => console.log(`  - ${r.raw}`));
+    const hits = rows.filter(isMatch);
+    console.log(`${query} listed in the search results (${hits.length} order(s)): ${hits.length ? 'PASS' : 'FAIL'}`);
+    if (rows.length) {
+        const others = rows.filter(r => !isMatch(r));
+        console.log(`Only ${query} orders listed (${others.length} other row(s)): ${others.length ? 'FAIL' : 'PASS'}`);
+    }
+
+    console.log(`Search text cleared: ${(await orderBook.clearSearch()) ? 'PASS' : 'FAIL'}`);
+}
+
 // One status tab: tap it, then
 //   - no orders listed -> "You don't have any <Tab> orders" is shown and the tab shows no count (0);
 //   - orders listed    -> the empty message must not be shown, and the number of orders listed
@@ -970,7 +1009,7 @@ async function run() {
         const tabs = await orderBook.getStatusTabs();
         console.log(`Tab counts: ${tabs.map(t => `${t.name} ${t.count}`).join(', ')}`);
 
-        for (const [i, name] of (BULK_ONLY || SEGMENTS.length ? [] : orderBook.tabs).entries()) {
+        for (const [i, name] of (BULK_ONLY || SEARCH_ONLY || SEGMENTS.length ? [] : orderBook.tabs).entries()) {
             try {
                 await checkTab(orderBook, 3 + i, name);
             } catch (err) {
@@ -1006,7 +1045,8 @@ async function run() {
         ];
         if (BULK_ONLY) console.log('\nBULK_ONLY=1 - TC 3-80 (tab checks and order placement) skipped');
         if (SEGMENTS.length) console.log(`\nSEGMENTS=${SEGMENTS.join(',')} - only those order flows run (tab checks and Convert / Cancel All skipped)`);
-        for (const r of BULK_ONLY ? [] : runs.filter(x => !SEGMENTS.length || SEGMENTS.includes(x.exchange))) {
+        if (SEARCH_ONLY) console.log(`\nSEARCH_ONLY=1 - only the Order Book search (TC ${SEARCH_TC}) runs`);
+        for (const r of BULK_ONLY || SEARCH_ONLY ? [] : runs.filter(x => !SEGMENTS.length || SEGMENTS.includes(x.exchange))) {
             const closed = marketClosedMessage(r.exchange);
             if (closed) {
                 console.log(`\nTC ${r.firstTc}-${r.lastTc} (${r.exchange} ${r.product} order) skipped - ${closed}`);
@@ -1027,11 +1067,18 @@ async function run() {
         // TC 117-127: Convert to Market / Cancel All on whatever is pending now (ends by cancelling
         // every pending order when PLACE_REAL_ORDERS is on).
         try {
-            if (!SEGMENTS.length) await bulkActionsOnPending(driver, pages);
+            if (!SEGMENTS.length && !SEARCH_ONLY) await bulkActionsOnPending(driver, pages);
         } catch (err) {
             console.error('Convert to Market / Cancel All flow failed:', err.message);
             // Never leave a Convert confirmation open: back out of it (No / Yes are not tapped).
             await orderBook.dismissConfirmationWithBack().catch(() => { });
+        }
+
+        // TC 128: Order Book search for the NSE symbol, after Cancel All.
+        try {
+            if (!SEGMENTS.length) await searchOrderBook(driver, pages);
+        } catch (err) {
+            console.error('Order Book search failed:', err.message);
         }
     } catch (err) {
         console.error('Test failed:', err.message);
