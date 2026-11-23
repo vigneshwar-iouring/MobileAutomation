@@ -243,6 +243,67 @@ class PortfolioPage extends BasePage {
         };
     }
 
+    // ---- Holdings controls: Filter / Pledge / Alerts ----
+    // Buttons beside the search bar (clickable="false", merged Compose semantics - tapped on bounds):
+    //   "Filter Holdings, Double tap to open holdings filters" | "Pledge, Double tap to open pledge" |
+    //   "Alerts, Double tap to open alerts".
+    static get HOLDINGS_CONTROLS() {
+        return { filter: /^Filter Holdings\b/i, pledge: /^Pledge,/i, alerts: /^Alerts,/i };
+    }
+
+    async tapHoldingsControl(key) {
+        const node = (await this.getDescribedElements()).find(n => PortfolioPage.HOLDINGS_CONTROLS[key].test(n.desc));
+        if (!node) return false;
+        await this.tapNode(node);
+        await this.pause(2000);
+        return true;
+    }
+
+    // Filter: not captured yet - open when a filter sheet's own controls appear (Apply / Reset /
+    // Clear / Sort / a "Filter(s)" title) that the Holdings list itself doesn't have.
+    async isHoldingsFilterOpen(timeout = 5000) {
+        const re = /^(apply|reset|clear( all)?|sort( by)?|filters?|filter by)\b/i;
+        try {
+            await this.driver.waitUntil(async () => (await this.getAllLabels()).some(n => re.test(n.label) && !/^Filter Holdings/i.test(n.label)), { timeout, interval: 500 });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    // Pledge opens a web page - an android.webkit.WebView.
+    async isPledgePageOpen(timeout = 10000) {
+        return this.isElementVisible(PortfolioPage.WEBVIEW, timeout);
+    }
+
+    // Closes the Pledge web page with its close button - an android.widget.Button (per the user:
+    // new UiSelector().className("android.widget.Button")). The Holdings' own Buttons can stay in
+    // the tree behind the page, so those are skipped and the top-most remaining Button is tapped.
+    // Returns the tapped Button's label ('' when unlabelled), or null when none was found.
+    async closePledgePage() {
+        const own = /^(Pledge,|Filter Holdings|Alerts,|Hamburger menu|Index |Back, Double tap)/i;
+        const buttons = (await this.getAllNodes())
+            .filter(n => n.cls === 'android.widget.Button' && !own.test(n.desc) && n.y2 > n.y1)
+            .sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1);
+        if (!buttons.length) return null;
+        await this.tapNode(buttons[0]);
+        await this.pause(1500);
+        return buttons[0].desc || buttons[0].text || '';
+    }
+
+    // Alerts screen: its "Search Alerts" search box (hint, seen in the Regression run) or title.
+    async isAlertsScreenOpen(timeout = 8000) {
+        try {
+            await this.driver.waitUntil(async () => {
+                const src = await this.driver.getPageSource();
+                return /Search Alerts/i.test(src) || (await this.getDescribedElements()).some(n => /^(Alerts|My Alerts)$/i.test(n.desc.trim()));
+            }, { timeout, interval: 500 });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
     // "You don't have any Holdings" (content-desc or text, either apostrophe), or null.
     async getHoldingsEmptyMessage() {
         const all = [
@@ -319,6 +380,307 @@ class PortfolioPage extends BasePage {
             daysPnl: num(day && day[1]),
             raw: { details: details && details[0], pnl: pnl && pnl[0], ltp: ltp && ltp[0] },
         };
+    }
+
+    // MTF quantity from "Stock details: X. Exchange: BSE. Quantity: 1. Margin trading facility
+    // quantity: 0." - null when not shown.
+    async readHoldingMtfQuantity() {
+        const d = (await this.getDescribedElements()).find(n => /^Stock details:/i.test(n.desc));
+        const m = d && d.desc.match(/Margin trading facility quantity:\s*(\d+)/i);
+        return m ? Number(m[1]) : null;
+    }
+
+    // ---- Holding detail sheet buttons (real dump, 2026-11-19) ----
+    //   "Price Breakdown, Double tap to view holding price breakdown details"
+    //   "View Chart, Double tap to open interactive chart for this stock"
+    //   "Add Alerts, Double tap to create alert for this stock"
+    //   "SQUARE OFF" / "BUY MORE" - looked at, never tapped.
+    // All are clickable="false" Buttons (merged Compose semantics) - tapped on their bounds.
+    static get DETAIL_BUTTONS() {
+        return {
+            priceBreakdown: /^Price Breakdown\b/i,
+            viewChart: /^View Chart\b/i,
+            addAlerts: /^Add Alerts\b/i,
+            squareOff: /^SQUARE OFF$/i,
+            buyMore: /^BUY MORE$/i,
+            // Only on some symbols. On a Quote it reads "Option chain Button, Double tap to open the
+            // option chain." - not captured on this sheet yet, so matched loosely.
+            optionChain: /^Option chains?\b/i,
+            // An MTF holding shows NRML / MTF Square Off instead of the plain SQUARE OFF - labels
+            // not captured yet, so matched on both words in either order.
+            nrmlSquareOff: /\bNRML\b.*\bSQUARE ?OFF\b|\bSQUARE ?OFF\b.*\bNRML\b/i,
+            mtfSquareOff: /\bMTF\b.*\bSQUARE ?OFF\b|\bSQUARE ?OFF\b.*\bMTF\b/i,
+        };
+    }
+
+    // Keys whose button only opens an Order Pad (never places anything by itself).
+    static get ORDER_PAD_BUTTONS() { return ['squareOff', 'buyMore', 'nrmlSquareOff', 'mtfSquareOff']; }
+
+    // Option Chain screen: its "Strike Price" column header (same signal as MarketsPage.openOptionChain).
+    async isOptionChainOpen(timeout = 15000) {
+        return this.isElementVisible('android=new UiSelector().description("Strike Price")', timeout);
+    }
+
+    async getHoldingDetailButtons() {
+        const nodes = await this.getDescribedElements();
+        const out = {};
+        for (const [key, re] of Object.entries(PortfolioPage.DETAIL_BUTTONS)) out[key] = nodes.some(n => re.test(n.desc.trim()));
+        return out;
+    }
+
+    // Taps one of the detail sheet's buttons by key ('priceBreakdown' / 'viewChart' / 'addAlerts').
+    // SQUARE OFF / BUY MORE only open the SELL / BUY Order Pad - nothing is placed until the pad's
+    // own SELL / BUY and then CONFIRM are tapped, which nothing here does - but they still need an
+    // explicit { opensOrderPad: true } so they're never hit by accident.
+    async tapHoldingDetailButton(key, { opensOrderPad = false } = {}) {
+        if (PortfolioPage.ORDER_PAD_BUTTONS.includes(key) && !opensOrderPad) throw new Error(`Refusing to tap ${key} without opensOrderPad: true`);
+        const re = PortfolioPage.DETAIL_BUTTONS[key];
+        const node = (await this.getDescribedElements()).find(n => re.test(n.desc.trim()));
+        if (!node) return false;
+        await this.tapNode(node);
+        await this.pause(1500);
+        return true;
+    }
+
+    // Every label on screen (content-desc and text), with bounds - WebView / dialog content can
+    // expose either one.
+    async getAllLabels() {
+        return [
+            ...(await this.getDescribedElements()).map(n => ({ ...n, label: n.desc.trim() })),
+            ...(await this.getTextElements()).map(n => ({ ...n, label: n.text.trim() })),
+        ].filter(n => n.label);
+    }
+
+    // A Close control (content-desc or text "Close..." / "...Double tap to close..." / "X"), or null.
+    async findCloseControl() {
+        const labels = await this.getAllLabels();
+        return labels.find(n => /^close\b/i.test(n.label))
+            || labels.find(n => /double tap to close/i.test(n.label))
+            || labels.find(n => /^(x|✕|×)$/i.test(n.label))
+            || null;
+    }
+
+    // Taps Close (back when no Close control is found). Returns 'close' / 'back'.
+    async tapCloseOrBack() {
+        const close = await this.findCloseControl();
+        if (close) await this.tapNode(close); else await this.driver.back();
+        await this.pause(1500);
+        return close ? `close ("${close.label.split('\n')[0]}")` : 'back (no Close control found)';
+    }
+
+    // ---- Price Breakdown ----
+    // Live (ui_dumps/portfolio_price_breakdown.xml, 2026-11-23): title "Price Breakdown - B2BSOFT",
+    // header cells "Date" / "Qty" / "Price", and each row ONE merged label across the full width,
+    // its cells separated by newlines: "18/11/2026\n1\n17.76". Close is an unlabelled clickable
+    // ImageView left of the title ([48,219][84,255]). A per-cell table form is still handled.
+    async isPriceBreakdownOpen(timeout = 6000) {
+        try {
+            await this.driver.waitUntil(async () => !!(await this.readPriceBreakdown()).headers.date, { timeout, interval: 500 });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    async readPriceBreakdown() {
+        const labels = await this.getAllLabels();
+        const header = re => labels.find(n => re.test(n.label));
+        const title = labels.find(n => /^Price Breakdown\s*-/i.test(n.label));
+        const headers = {
+            date: header(/^date$/i),
+            qty: header(/^(qty|quantity)\.?$/i),
+            price: header(/^(price|avg\.? price|average price|buy price)$/i),
+        };
+        const headerY2 = Math.max(...Object.values(headers).filter(Boolean).map(n => n.y2), 0);
+        const rows = [];
+        // Merged row: "date\nqty\nprice" below the header row.
+        for (const n of labels) {
+            if (n.y1 < headerY2 - 2) continue;
+            const parts = n.label.split('\n').map(p => p.trim()).filter(Boolean);
+            if (parts.length === 3 && /\d/.test(parts[0]) && /^\d+$/.test(parts[1])) rows.push({ date: parts[0], qty: parts[1], price: parts[2] });
+        }
+        // Per-cell table: cells grouped into rows by y, mapped by x to the nearest header column.
+        if (!rows.length && headers.date && headers.qty && headers.price) {
+            const cols = Object.entries(headers).map(([k, n]) => ({ k, cx: (n.x1 + n.x2) / 2 }));
+            const cells = labels.filter(n => n.y1 >= headerY2 - 2 && !Object.values(headers).includes(n));
+            const byRow = [];
+            for (const c of cells.sort((a, b) => a.y1 - b.y1)) {
+                const row = byRow.find(r => Math.abs(r.y - c.y1) <= 20);
+                if (row) row.cells.push(c); else byRow.push({ y: c.y1, cells: [c] });
+            }
+            for (const r of byRow) {
+                const row = {};
+                for (const c of r.cells) {
+                    const cx = (c.x1 + c.x2) / 2;
+                    const col = cols.reduce((best, col) => (Math.abs(col.cx - cx) < Math.abs(best.cx - cx) ? col : best));
+                    row[col.k] = row[col.k] ? `${row[col.k]} ${c.label}` : c.label;
+                }
+                if (row.date || row.qty || row.price) rows.push(row);
+            }
+        }
+        return {
+            title: title ? title.label : null,
+            headers: { date: !!headers.date, qty: !!headers.qty, price: !!headers.price },
+            rows,
+        };
+    }
+
+    // Every node in the page source - labelled or not - as { cls, desc, text, rid, clickable, x1..y2 }.
+    async getAllNodes() {
+        const src = await this.driver.getPageSource();
+        const dec = s => String(s || '').replace(/&#10;/g, '\n').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        return (src.match(/<[\w.]+[^>]*>/g) || []).map(tag => {
+            const b = tag.match(/bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"/);
+            if (!b) return null;
+            const attr = a => { const m = tag.match(new RegExp(`\\s${a}="([^"]*)"`)); return m ? dec(m[1]) : ''; };
+            return {
+                cls: (tag.match(/^<([\w.]+)/) || [])[1], desc: attr('content-desc'), text: attr('text'), rid: attr('resource-id'),
+                clickable: attr('clickable') === 'true', x1: +b[1], y1: +b[2], x2: +b[3], y2: +b[4],
+            };
+        }).filter(Boolean);
+    }
+
+    // Price Breakdown's Close: the clickable, unlabelled icon on the title's row, left of the title.
+    async tapPriceBreakdownClose() {
+        const nodes = await this.getAllNodes();
+        const title = nodes.find(n => /^Price Breakdown\s*-/i.test(n.desc));
+        const close = title && nodes.find(n => n.clickable && !n.desc && !n.text && n.x2 <= title.x1 && n.y1 < title.y2 && n.y2 > title.y1);
+        if (!close) return false;
+        await this.tapNode(close);
+        await this.pause(1500);
+        return true;
+    }
+
+    // ---- View Chart (web page) ----
+    // Live (ui_dumps/portfolio_view_chart.xml, 2026-11-23): an android.webkit.WebView from y=290 to
+    // the bottom, laid OVER the holding detail sheet (whose nodes stay in the tree behind it). Inside
+    // it the chart header is a TextView with the symbol and change ("VISL <zero-width spaces> ▲ 0.18")
+    // immediately followed by the company name, resource-id "sym-detail" ("B2B SOFTWARE
+    // TECHNOLOGIES LTD."). Above the WebView: an unlabelled clickable top-left ([0,136][154,290]) -
+    // the Close - then an unlabelled icon, and "B" / "S" (chart Buy / Sell, never tapped).
+    static get WEBVIEW() { return 'android=new UiSelector().className("android.webkit.WebView")'; }
+
+    // Waits `waitMs` for the chart to load, then reads it: { webView, headerSymbol, headerText, company }.
+    async readChartPage(waitMs = 10000) {
+        await this.pause(waitMs);
+        const webView = await this.isElementVisible(PortfolioPage.WEBVIEW, 2000);
+        const nodes = await this.getAllNodes();
+        const i = nodes.findIndex(n => n.rid === 'sym-detail');
+        const company = i >= 0 ? nodes[i].text.trim() : null;
+        const head = i > 0 ? nodes.slice(0, i).reverse().find(n => n.text.trim()) : null;
+        const headerText = head ? head.text.replace(/[​\s]+/g, ' ').trim() : null;
+        const headerSymbol = headerText ? headerText.split(/[\s▲▼]/)[0] : null;
+        return { webView, headerSymbol, headerText, company };
+    }
+
+    // The chart's Close: the clickable, unlabelled node at the top-left above the WebView.
+    async tapChartClose() {
+        const nodes = await this.getAllNodes();
+        const wv = nodes.find(n => n.cls === 'android.webkit.WebView');
+        const top = wv ? wv.y1 : 300;
+        const close = nodes.find(n => n.clickable && !n.desc && !n.text && n.x1 < 200 && n.y2 <= top + 2 && n.y1 > 100);
+        if (!close) return false;
+        await this.tapNode(close);
+        await this.pause(1500);
+        return true;
+    }
+
+    // ---- Set Alert screen (Regression log, 2026-11-19) ----
+    //   "Back, Double tap to go back" | "Set Alert" | "TCS" | "TATA CONSULTANCY SERV LT" |
+    //   "Last traded price for TCS: 2,354.70, change is -24.80 (-1.04 percent)., ..." |
+    //   "Alert me if" ... "Create Alert, Double tap to set alert" (never tapped here).
+    async readSetAlertScreen(timeout = 8000) {
+        try {
+            await this.driver.waitUntil(async () => (await this.getDescribedElements()).some(n => n.desc.trim() === 'Set Alert'), { timeout, interval: 500 });
+        } catch (_) {
+            return { open: false };
+        }
+        const descs = (await this.getDescribedElements()).map(n => n.desc.trim());
+        const ltp = descs.find(d => /^Last traded price for /i.test(d));
+        const ltpSymbol = ltp ? (ltp.match(/^Last traded price for\s+(.+?):/i) || [])[1] : null;
+        return {
+            open: true,
+            descs,
+            ltpSymbol: ltpSymbol ? ltpSymbol.trim() : null,
+            createAlertShown: descs.some(d => /^Create Alert\b/i.test(d)),
+        };
+    }
+
+    // Back from Set Alert: its own Back button, else the system back.
+    async leaveSetAlertScreen() {
+        const back = (await this.getDescribedElements()).find(n => /^Back, Double tap to go back/i.test(n.desc));
+        if (back) await this.tapNode(back); else await this.driver.back();
+        await this.pause(1500);
+    }
+
+    // ---- Holding -> Quote (half / full) ----
+    // Half quote: the Quote's summary card "Stock IDEA, NSE. Last traded price..." or its "Swipe up
+    // for Stock Details" handle, without the tab strip. Full quote: the "Overview\nTab 1 of N" tab
+    // strip (same signal as BasePage.isQuoteExpanded). Returns 'full' / 'half' / 'details' (the
+    // holding detail sheet) / null.
+    async getQuoteState(symbol) {
+        if (await this.isQuoteExpanded()) return 'full';
+        const descs = (await this.getDescribedElements()).map(n => n.desc.trim());
+        const sym = symbol.toUpperCase();
+        if (descs.some(d => d.toUpperCase().startsWith(`STOCK ${sym}`) || d === 'Swipe up for Stock Details' || /Swipe up to explore quote details/i.test(d))) return 'half';
+        if (descs.some(d => /^Stock details:/i.test(d))) return 'details';
+        return null;
+    }
+
+    // One upward drag on whatever sheet is showing: from its top-most content (the holding sheet's
+    // "Stock details", the Quote's handle / summary card) to near the top of the screen.
+    async swipeUpSheet() {
+        const { width, height } = await this.driver.getWindowSize();
+        const nodes = await this.getDescribedElements();
+        const grip = nodes.find(n => n.desc === 'Swipe up for Stock Details')
+            || nodes.find(n => /^Stock (details:|\S+, )/i.test(n.desc))
+            || null;
+        const x = grip ? Math.round((grip.x1 + grip.x2) / 2) : Math.floor(width / 2);
+        const startY = grip ? Math.round((grip.y1 + grip.y2) / 2) : Math.floor(height * 0.6);
+        await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
+            .move({ duration: 0, x, y: startY })
+            .down()
+            .pause(150)
+            .move({ duration: 600, x, y: Math.floor(height * 0.08) })
+            .up()
+            .perform();
+        await this.pause(1500);
+    }
+
+    // Holding popup -> half Quote. A full-height drag goes straight past half to the full Quote
+    // (live 2026-11-23), so this drags up in short steps (a quarter of the screen each, from the
+    // sheet's top content) until the state leaves 'details'. Returns the state reached:
+    // 'half' (wanted), 'full' (overshot), or whatever is left after `maxSteps`.
+    async swipeUpToHalfQuote(symbol, maxSteps = 3) {
+        const { width, height } = await this.driver.getWindowSize();
+        let state = await this.getQuoteState(symbol);
+        for (let i = 0; i < maxSteps && state !== 'half' && state !== 'full'; i++) {
+            const nodes = await this.getDescribedElements();
+            const grip = nodes.find(n => /^Stock details:/i.test(n.desc)) || nodes.find(n => n.desc === 'Swipe up for Stock Details');
+            const x = grip ? Math.round((grip.x1 + grip.x2) / 2) : Math.floor(width / 2);
+            const startY = grip ? Math.round((grip.y1 + grip.y2) / 2) : Math.floor(height * 0.65);
+            const endY = Math.max(startY - Math.floor(height * 0.25), Math.floor(height * 0.3));
+            await this.driver.action('pointer', { parameters: { pointerType: 'touch' } })
+                .move({ duration: 0, x, y: startY })
+                .down()
+                .pause(150)
+                .move({ duration: 500, x, y: endY })
+                .up()
+                .perform();
+            await this.pause(1500);
+            state = await this.getQuoteState(symbol);
+        }
+        return state;
+    }
+
+    // Back presses until the Holdings list (Portfolio tabs) is on screen.
+    async backToHoldings(maxPresses = 4) {
+        for (let i = 0; i < maxPresses; i++) {
+            if (await this.isOnPortfolio(1500)) return true;
+            await this.driver.back();
+            await this.pause(1000);
+        }
+        return this.isOnPortfolio(2000);
     }
 
     // Back out of the detail sheet to the Holdings list.

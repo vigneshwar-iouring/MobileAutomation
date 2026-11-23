@@ -1,6 +1,7 @@
 const DriverManager = require('../../driver/DriverManager');
 const SplashPage = require('../../pages/SplashPage');
 const PortfolioPage = require('../../pages/PortfolioPage');
+const OrderPadPage = require('../../pages/OrderPadPage');
 const permissionHandler = require('../../utils/permissionHandler');
 const { createLogger, getFailedTCs } = require('../../utils/logger');
 
@@ -21,13 +22,22 @@ console.log(`Logging this run to: ${logFile}`);
 // Holdings lists only equity symbols | TC 12 search for a listed symbol, then Cancel | TC 13 no symbol from
 // Positions -> Today is in Holdings (Holdings = equity held overnight; today's executions stay in
 // Positions until the next day).
-// Read-only also on the holding detail sheet: SQUARE OFF / BUY MORE are never tapped.
+// TC 14-18 the first holding's detail sheet: fields + buttons | Price Breakdown (Date / Qty /
+// Price) | Close | View Chart (10s, web page for the symbol) + Close | Add Alerts (Set Alert for
+// the symbol) + back | TC 19-20 SQUARE OFF -> SELL pad, BUY MORE -> BUY pad (opened only, never
+// submitted) | TC 21-22 tap the holding, swipe up -> half Quote, swipe up -> full Quote - see
+// checkFirstHoldingScreens / checkOrderPadsAndQuote | TC 23 Option Chain (on the first holding that shows it) |
+// TC 24-25 MTF holding: NRML Square Off -> normal SELL pad, MTF Square Off -> SELL pad with MTF -
+// see checkOptionChainAndMtf.
+// No order is ever placed: SQUARE OFF / BUY MORE only open the pad, whose SELL / BUY is never tapped.
 
 const tc = (no, text) => console.log(`\nTC ${no}: ${text}`);
 
 // SEARCH_ONLY=1 runs just TC 1-2 and the Holdings search + Cancel (TC 12) - no Positions, no
 // holding details, no P&L checks.
 const SEARCH_ONLY = process.env.SEARCH_ONLY === '1';
+// DETAILS_ONLY=1 runs just TC 1-2 and the first holding's detail screens, order pads, Quote, Option Chain and MTF (TC 14-25).
+const DETAILS_ONLY = process.env.DETAILS_ONLY === '1';
 
 // Symbols are compared case-insensitively, ignoring spaces and an exchange / series suffix
 // ("RTNPOWER-EQ", "IDEA BSE").
@@ -179,6 +189,25 @@ async function checkHoldingsSummary(portfolio) {
     return parsed;
 }
 
+// While a holding's sheet is open for its P&L: is its MTF quantity listed, and do the Square Off
+// buttons match it - MTF qty > 0 -> BUY MORE + NRML Square Off + MTF Square Off; otherwise the plain
+// SQUARE OFF + BUY MORE. Option Chain (only some symbols) is logged when shown. Buttons are only
+// looked at here - TC 23-25 click through them.
+function checkHoldingMtfAndButtons(symbol, qty, mtfQty, b) {
+    console.log(`${symbol} MTF qty listed (${mtfQty}): ${verdict(mtfQty != null)}`);
+    if (mtfQty == null) return;
+    if (qty != null) console.log(`${symbol} MTF qty ${mtfQty} within Qty ${qty}: ${verdict(mtfQty <= qty)}`);
+    if (mtfQty > 0) {
+        console.log(`${symbol} is an MTF holding - NRML Square Off shown: ${verdict(b.nrmlSquareOff)}`);
+        console.log(`${symbol} MTF Square Off shown: ${verdict(b.mtfSquareOff)}`);
+    } else {
+        console.log(`${symbol} SQUARE OFF shown: ${verdict(b.squareOff)}`);
+        if (b.nrmlSquareOff || b.mtfSquareOff) console.error(`FAIL: ${symbol} has no MTF qty but shows NRML / MTF Square Off`);
+    }
+    console.log(`${symbol} BUY MORE shown: ${verdict(b.buyMore)}`);
+    console.log(`${symbol} Option Chain ${b.optionChain ? 'shown' : 'not shown (not applicable for this symbol)'}`);
+}
+
 // One holding: name / Qty / Avg from its row, then its detail sheet (Current Value = Market Value,
 // P&L value and percent, Avg, LTP and change percent, Day's P&L), closed with back - SQUARE OFF /
 // BUY MORE are never tapped. The P&L and Today's P&L are recomputed with the formulas above.
@@ -195,8 +224,11 @@ async function checkHolding(portfolio, h) {
         return null;
     }
     const d = await portfolio.readHoldingDetails();
+    const mtfQty = await portfolio.readHoldingMtfQuantity();
+    const buttons = await portfolio.getHoldingDetailButtons();
     await portfolio.closeHoldingDetails();
     console.log(`${h.symbol} details: Exchange ${d.exchange}, Qty ${d.quantity}, Current Value ${fmt(d.marketValue)}, P&L ${fmt(d.pnl)} (${fmt(d.pnlPercent)}%), Avg ${fmt(d.avgPrice)}, LTP ${fmt(d.ltp)} (${fmt(d.changePercent)}%), Invested ${fmt(d.invested)}, Day's P&L ${fmt(d.daysPnl)}`);
+    checkHoldingMtfAndButtons(h.symbol, d.quantity, mtfQty, buttons);
 
     console.log(`${h.symbol} name on details: ${d.symbol} ${verdict(d.symbol && d.symbol.toUpperCase() === h.symbol.toUpperCase())}`);
     console.log(`${h.symbol} Current Value shown: ${verdict(d.marketValue != null)}`);
@@ -229,7 +261,7 @@ async function checkHolding(portfolio, h) {
         if (d.daysPnl != null)
             console.log(`${h.symbol} Day's P&L ${fmt(d.daysPnl)} vs Qty x LTP - Qty x Prev.close = ${fmt(dayPnl)}: ${valueVerdict(d.daysPnl, dayPnl, d.changePercent, 0.01 + Q * L * 0.0001)}`);
     }
-    return { ...d, quantity: Q, avgPrice: A, prevClose };
+    return { ...d, quantity: Q, avgPrice: A, prevClose, raw: h.raw, mtfQty, buttons };
 }
 
 // Header totals vs the holdings, by the formulas above. The header is read again here (right after
@@ -346,6 +378,349 @@ async function checkHoldingsSearch(portfolio, holdings) {
     }
 }
 
+// TC 8 (continued): each Holdings control opens its page - Filter -> filter options -> back;
+// Pledge -> web page -> its close Button; Alerts -> Alerts screen -> back. Each ends back on Holdings.
+async function checkHoldingsControls(portfolio, controls) {
+    const backOnHoldings = async () => {
+        const ok = await portfolio.backToHoldings();
+        console.log(`Back on Holdings: ${verdict(ok)}`);
+    };
+
+    if (controls.filter) {
+        console.log('Clicking Filter...');
+        await portfolio.tapHoldingsControl('filter');
+        const open = await portfolio.isHoldingsFilterOpen();
+        await portfolio.dumpPageSource('portfolio_holdings_filter');
+        console.log(`Filter opened: ${verdict(open)}`);
+        await portfolio.driver.back();
+        await portfolio.pause(1000);
+        await backOnHoldings();
+    }
+
+    if (controls.pledge) {
+        console.log('Clicking Pledge...');
+        await portfolio.tapHoldingsControl('pledge');
+        const open = await portfolio.isPledgePageOpen();
+        await portfolio.dumpPageSource('portfolio_pledge');
+        console.log(`Pledge web page opened: ${verdict(open)}`);
+        console.log('Closing the web page...');
+        // Only look for its close Button while the page is up - never tap a stray Button on Holdings.
+        const closed = open ? await portfolio.closePledgePage() : null;
+        if (closed === null) {
+            console.error('FAIL: no close Button (android.widget.Button) on the Pledge page - closing with back');
+            await portfolio.driver.back();
+            await portfolio.pause(1500);
+        } else {
+            console.log(`Tapped the close Button${closed ? ` "${closed}"` : ''}`);
+        }
+        console.log(`Pledge web page closed: ${verdict(!(await portfolio.isElementVisible(PortfolioPage.WEBVIEW, 1500)))}`);
+        await backOnHoldings();
+    }
+
+    if (controls.alerts) {
+        console.log('Clicking Alerts...');
+        await portfolio.tapHoldingsControl('alerts');
+        const open = await portfolio.isAlertsScreenOpen();
+        await portfolio.dumpPageSource('portfolio_alerts');
+        console.log(`Alerts screen opened: ${verdict(open)}`);
+        await backOnHoldings();
+    }
+}
+
+// The first holding's detail sheet and the screens it opens. Read-only: SQUARE OFF / BUY MORE and
+// Set Alert's Create Alert are never tapped.
+// TC n   first holding -> detail sheet: name, LTP + change %, Invested, Market value, Qty, MTF,
+//        P&L + %, Day's P&L; Price Breakdown / View Chart / Add Alerts / SQUARE OFF / BUY MORE shown
+// TC n+1 Price Breakdown: Date / Qty / Price columns with values in every row
+// TC n+2 Close -> back on the detail sheet
+// TC n+3 View Chart -> wait 10s -> web page with the symbol's chart -> Close
+// TC n+4 Add Alerts -> Set Alert for the same symbol -> back -> detail sheet closed
+async function checkFirstHoldingScreens(portfolio, n, known = null) {
+    tc(n, 'Clicking the first holding and verifying its detail sheet...');
+    await portfolio.scrollHoldingsToTop();
+    const first = (await portfolio.getHoldingRows())[0];
+    if (!first) {
+        console.error('FAIL: no holding row on screen to open');
+        return;
+    }
+    const h = PortfolioPage.parseHoldingRow(first);
+    console.log(`First holding: ${h.symbol}`);
+    if (!(await portfolio.openHoldingDetails(first))) {
+        await portfolio.dumpPageSource('portfolio_first_holding_no_details');
+        console.error(`FAIL: the detail sheet of ${h.symbol} did not open`);
+        return;
+    }
+    await portfolio.dumpPageSource('portfolio_holding_details');
+    const d = await portfolio.readHoldingDetails();
+    const mtf = await portfolio.readHoldingMtfQuantity();
+    console.log(`Details: ${d.symbol} | LTP ${fmt(d.ltp)} (${fmt(d.changePercent)}%) | Invested ${fmt(d.invested)} | Market value ${fmt(d.marketValue)} | Qty ${d.quantity} | MTF ${mtf} | P&L ${fmt(d.pnl)} (${fmt(d.pnlPercent)}%) | Day's P&L ${fmt(d.daysPnl)}`);
+    const fields = [
+        ['Symbol name', d.symbol && d.symbol.toUpperCase() === h.symbol.toUpperCase()],
+        ['LTP', d.ltp != null],
+        ['Change percent', d.changePercent != null],
+        ['Invested value', d.invested != null],
+        ['Market value', d.marketValue != null],
+        ['Qty', d.quantity != null],
+        ['MTF quantity', mtf != null],
+        ['P&L value', d.pnl != null],
+        ['P&L percent', d.pnlPercent != null],
+        ["Day's P&L", d.daysPnl != null],
+    ];
+    fields.forEach(([name, ok]) => console.log(`${name} shown: ${verdict(ok)}`));
+    const buttons = await portfolio.getHoldingDetailButtons();
+    console.log(`Price Breakdown shown: ${verdict(buttons.priceBreakdown)}`);
+    console.log(`View Chart shown: ${verdict(buttons.viewChart)}`);
+    console.log(`Add Alerts shown: ${verdict(buttons.addAlerts)}`);
+    console.log(`SQUARE OFF shown: ${verdict(buttons.squareOff)}`);
+    console.log(`BUY MORE shown: ${verdict(buttons.buyMore)}`);
+
+    tc(n + 1, 'Clicking Price Breakdown and verifying the Date, Qty and Price columns...');
+    if (!(await portfolio.tapHoldingDetailButton('priceBreakdown'))) {
+        console.error('FAIL: Price Breakdown button not found on the detail sheet');
+    } else {
+        const open = await portfolio.isPriceBreakdownOpen();
+        await portfolio.dumpPageSource('portfolio_price_breakdown');
+        const pb = await portfolio.readPriceBreakdown();
+        console.log(`Price Breakdown opened: ${verdict(open)}`);
+        console.log(`Date column shown: ${verdict(pb.headers.date)}`);
+        console.log(`Qty column shown: ${verdict(pb.headers.qty)}`);
+        console.log(`Price column shown: ${verdict(pb.headers.price)}`);
+        console.log(`Price Breakdown is for ${h.symbol} (title "${pb.title}"): ${verdict(!!pb.title && pb.title.toUpperCase().endsWith(h.symbol.toUpperCase()))}`);
+        console.log(`Rows (${pb.rows.length}):`);
+        pb.rows.forEach((r, i) => console.log(`  [${i}] Date ${r.date} | Qty ${r.qty} | Price ${r.price}`));
+        if (!pb.rows.length) console.error('FAIL: no Price Breakdown rows found');
+        pb.rows.forEach((r, i) => {
+            const dateOk = !!r.date && /\d/.test(r.date);
+            const qtyOk = /^\d+$/.test(String(r.qty || '').trim()) && Number(r.qty) > 0;
+            const priceOk = num(r.price) > 0;
+            console.log(`Row ${i} Date / Qty / Price values: ${verdict(dateOk && qtyOk && priceOk)}`);
+        });
+        if (pb.rows.length && pb.rows.every(r => num(r.qty) > 0)) {
+            const qtySum = pb.rows.reduce((t, r) => t + num(r.qty), 0);
+            console.log(`Breakdown Qty total ${qtySum} vs holding Qty ${d.quantity} (reference)`);
+        }
+
+        tc(n + 2, 'Clicking Close on Price Breakdown...');
+        if (!(await portfolio.tapPriceBreakdownClose())) {
+            console.error('FAIL: Close button not found on Price Breakdown - closing with back');
+            await portfolio.driver.back();
+            await portfolio.pause(1500);
+        }
+        const pbGone = !(await portfolio.readPriceBreakdown()).title;
+        console.log(`Price Breakdown closed: ${verdict(pbGone)}`);
+        console.log(`Back on the detail sheet: ${verdict(await portfolio.isHoldingDetailsOpen(4000))}`);
+    }
+
+    tc(n + 3, 'Clicking View Chart, waiting 10s and verifying the chart web page...');
+    if (!(await portfolio.isHoldingDetailsOpen(2000)) && !(await portfolio.openHoldingDetails(first))) {
+        console.error(`FAIL: could not get back to the detail sheet of ${h.symbol}`);
+        return;
+    }
+    if (!(await portfolio.tapHoldingDetailButton('viewChart'))) {
+        console.error('FAIL: View Chart button not found on the detail sheet');
+    } else {
+        console.log('Waiting 10s for the chart to load...');
+        const chart = await portfolio.readChartPage(10000);
+        await portfolio.dumpPageSource('portfolio_view_chart');
+        // The chart WebView is laid over the detail sheet, whose nodes stay in the tree behind it -
+        // so the symbol is read from the chart's own header, not from anywhere on screen.
+        console.log(`Chart web page (WebView) shown: ${verdict(chart.webView)}`);
+        console.log(`Chart header: "${chart.headerText}" | company: "${chart.company}"`);
+        console.log(`Chart is for ${h.symbol} (header symbol ${chart.headerSymbol}): ${verdict(!!chart.headerSymbol && chart.headerSymbol.toUpperCase() === h.symbol.toUpperCase())}`);
+
+        console.log('Clicking Close on the chart...');
+        if (!(await portfolio.tapChartClose())) {
+            console.error('FAIL: Close button not found on the chart - closing with back');
+            await portfolio.driver.back();
+            await portfolio.pause(1500);
+        }
+        const chartGone = !(await portfolio.isElementVisible(PortfolioPage.WEBVIEW, 1500));
+        console.log(`Chart closed: ${verdict(chartGone)}`);
+        console.log(`Back on the detail sheet: ${verdict(await portfolio.isHoldingDetailsOpen(4000))}`);
+    }
+
+    tc(n + 4, 'Clicking Add Alerts and verifying the alert screen opens for the symbol...');
+    if (!(await portfolio.isHoldingDetailsOpen(2000)) && !(await portfolio.openHoldingDetails(first))) {
+        console.error(`FAIL: could not get back to the detail sheet of ${h.symbol}`);
+        return;
+    }
+    if (!(await portfolio.tapHoldingDetailButton('addAlerts'))) {
+        console.error('FAIL: Add Alerts button not found on the detail sheet');
+    } else {
+        const alert = await portfolio.readSetAlertScreen();
+        await portfolio.dumpPageSource('portfolio_add_alert');
+        console.log(`Set Alert screen opened: ${verdict(alert.open)}`);
+        if (alert.open) {
+            const named = alert.descs.some(x => x.toUpperCase() === h.symbol.toUpperCase());
+            console.log(`Set Alert is for ${h.symbol} (symbol shown${alert.ltpSymbol ? `, LTP line for ${alert.ltpSymbol}` : ''}): ${verdict(named || (alert.ltpSymbol || '').toUpperCase() === h.symbol.toUpperCase())}`);
+            console.log(`Create Alert button shown: ${verdict(alert.createAlertShown)}`);
+        }
+        console.log('Navigating back...');
+        await portfolio.leaveSetAlertScreen();
+    }
+    // Back to the Holdings list (Set Alert may return to the detail sheet or to the list).
+    if (await portfolio.isHoldingDetailsOpen(2000)) await portfolio.closeHoldingDetails();
+    console.log(`Back on Holdings: ${verdict(await portfolio.isOnPortfolio(4000))}`);
+
+    await checkOrderPadsAndQuote(portfolio, first, h.symbol, n + 5);
+    await checkOptionChainAndMtf(portfolio, n + 9, known);
+}
+
+// Option Chain shows only for some symbols, and NRML / MTF Square Off only for an MTF holding - so
+// the holdings are opened one by one (detail sheet read, then closed) until one of each is found.
+// TC n   Option Chain -> Option Chain screen ("Strike Price") -> back
+// TC n+1 MTF holding: BUY MORE + NRML Square Off + MTF Square Off shown; NRML Square Off -> normal
+//        SELL Order Pad (no "MTF") -> back
+// TC n+2 MTF Square Off -> SELL Order Pad with "MTF" -> back
+// Order Pads are only opened - their SELL is never tapped.
+async function checkOptionChainAndMtf(portfolio, n, known = null) {
+    await portfolio.backToHoldings();
+    await portfolio.scrollHoldingsToTop();
+    let optionChain = null, mtf = null;
+    // Full run: TC 9 already read every holding's MTF qty and buttons - reuse that.
+    if (known && known.length && known.every(Boolean)) {
+        const oc = known.find(d => d.buttons.optionChain);
+        const m = known.find(d => d.mtfQty > 0 || d.buttons.nrmlSquareOff || d.buttons.mtfSquareOff);
+        if (oc) optionChain = { raw: oc.raw, symbol: oc.symbol };
+        if (m) mtf = { raw: m.raw, symbol: m.symbol, mtfQty: m.mtfQty, buttons: m.buttons };
+    }
+    const rows = known && known.length && known.every(Boolean) ? [] : await portfolio.collectAllHoldingRows();
+    for (const raw of rows) {
+        if (optionChain && mtf) break;
+        const symbol = PortfolioPage.parseHoldingRow(raw).symbol;
+        if (!(await portfolio.openHoldingDetails(raw))) continue;
+        const buttons = await portfolio.getHoldingDetailButtons();
+        const mtfQty = await portfolio.readHoldingMtfQuantity();
+        console.log(`${symbol}: Option Chain ${buttons.optionChain ? 'shown' : 'not shown'} | MTF qty ${mtfQty} | NRML Square Off ${buttons.nrmlSquareOff ? 'shown' : 'not shown'} | MTF Square Off ${buttons.mtfSquareOff ? 'shown' : 'not shown'}`);
+        if (!optionChain && buttons.optionChain) optionChain = { raw, symbol };
+        if (!mtf && (mtfQty > 0 || buttons.nrmlSquareOff || buttons.mtfSquareOff)) mtf = { raw, symbol, mtfQty, buttons };
+        await portfolio.closeHoldingDetails();
+    }
+    const pad = new OrderPadPage(portfolio.driver);
+    const mtfTag = 'android=new UiSelector().description("MTF")';
+
+    tc(n, 'Clicking Option Chain (where shown) and verifying the option chain...');
+    if (!optionChain) {
+        console.log('No holding shows Option Chain - not applicable for these symbols');
+    } else if (await ensureDetailsOpen(portfolio, optionChain.raw, optionChain.symbol)) {
+        console.log(`Option Chain shown for ${optionChain.symbol}`);
+        await portfolio.tapHoldingDetailButton('optionChain');
+        const open = await portfolio.isOptionChainOpen();
+        await portfolio.dumpPageSource('portfolio_option_chain');
+        console.log(`Option Chain displayed for ${optionChain.symbol} ("Strike Price" column): ${verdict(open)}`);
+        console.log('Navigating back...');
+        await portfolio.driver.back();
+        await portfolio.pause(1500);
+        console.log(`Option Chain closed: ${verdict(!(await portfolio.isOptionChainOpen(1500)))}`);
+        await portfolio.backToHoldings();
+    }
+
+    tc(n + 1, 'MTF holding: verifying BUY MORE, NRML Square Off and MTF Square Off, then NRML Square Off -> normal SELL Order Pad...');
+    if (!mtf) {
+        console.log('No holding has an MTF quantity - NRML / MTF Square Off not applicable');
+        return;
+    }
+    console.log(`MTF holding: ${mtf.symbol} (MTF qty ${mtf.mtfQty})`);
+    console.log(`BUY MORE shown: ${verdict(mtf.buttons.buyMore)}`);
+    console.log(`NRML Square Off shown: ${verdict(mtf.buttons.nrmlSquareOff)}`);
+    console.log(`MTF Square Off shown: ${verdict(mtf.buttons.mtfSquareOff)}`);
+
+    const squareOff = async (key, label, expectMtf) => {
+        if (!mtf.buttons[key]) {
+            console.error(`FAIL: ${label} not on the detail sheet of ${mtf.symbol}`);
+            return;
+        }
+        if (!(await ensureDetailsOpen(portfolio, mtf.raw, mtf.symbol))) return;
+        await portfolio.tapHoldingDetailButton(key, { opensOrderPad: true });
+        const sellPad = await pad.verifyOpenedFor('Sell');
+        await portfolio.dumpPageSource(`portfolio_${key}_orderpad`);
+        const mtfShown = await portfolio.isElementVisible(mtfTag, 1500);
+        console.log(expectMtf
+            ? `MTF shown on the SELL Order Pad: ${verdict(mtfShown)}`
+            : `Normal SELL Order Pad (no MTF shown): ${verdict(sellPad && !mtfShown)}`);
+        if (sellPad) {
+            const shown = await pad.getDisplayedSymbol();
+            console.log(`Order Pad is for ${mtf.symbol} (header "${shown}"): ${verdict(!!shown && shown.toUpperCase().includes(mtf.symbol.toUpperCase()))}`);
+        }
+        console.log('Navigating back (SELL is never tapped)...');
+        await portfolio.driver.back();
+        await portfolio.pause(1500);
+        console.log(`Order Pad closed: ${verdict(!(await pad.isDisplayed(1500)))}`);
+    };
+    await squareOff('nrmlSquareOff', 'NRML Square Off', false);
+
+    tc(n + 2, 'MTF Square Off -> SELL Order Pad with MTF...');
+    await squareOff('mtfSquareOff', 'MTF Square Off', true);
+    await portfolio.backToHoldings();
+}
+
+// The detail sheet must be open before tapping one of its buttons - reopen the holding if the
+// previous step left the app on the Holdings list.
+async function ensureDetailsOpen(portfolio, raw, symbol) {
+    if (await portfolio.isHoldingDetailsOpen(2000)) return true;
+    await portfolio.backToHoldings();
+    if (await portfolio.openHoldingDetails(raw)) return true;
+    console.error(`FAIL: could not open the detail sheet of ${symbol}`);
+    return false;
+}
+
+// SQUARE OFF / BUY MORE only OPEN the SELL / BUY Order Pad: its own SELL / BUY (and CONFIRM) are
+// never tapped, so no order is placed - each pad is left with back.
+// TC n   SQUARE OFF -> SELL Order Pad for the symbol -> back
+// TC n+1 BUY MORE   -> BUY Order Pad for the symbol -> back
+// TC n+2 tap the holding again -> swipe up -> half Quote
+// TC n+3 swipe up again -> full Quote -> back to Holdings
+async function checkOrderPadsAndQuote(portfolio, raw, symbol, n) {
+    const pad = new OrderPadPage(portfolio.driver);
+    const padFor = async (key, label, expected, no) => {
+        tc(no, `Clicking ${label} and verifying the ${expected.toUpperCase()} Order Pad...`);
+        if (!(await ensureDetailsOpen(portfolio, raw, symbol))) return;
+        if (!(await portfolio.tapHoldingDetailButton(key, { opensOrderPad: true }))) {
+            const b = await portfolio.getHoldingDetailButtons();
+            // An MTF holding shows NRML / MTF Square Off instead of the plain SQUARE OFF.
+            if (key === 'squareOff' && (b.nrmlSquareOff || b.mtfSquareOff)) console.log(`${symbol} is an MTF holding - NRML / MTF Square Off shown instead of SQUARE OFF (checked in the MTF steps)`);
+            else console.error(`FAIL: ${label} button not found on the detail sheet`);
+            return;
+        }
+        const ok = await pad.verifyOpenedFor(expected);
+        await portfolio.dumpPageSource(`portfolio_${key}_orderpad`);
+        if (ok) {
+            const shown = await pad.getDisplayedSymbol();
+            console.log(`Order Pad is for ${symbol} (header "${shown}"): ${verdict(!!shown && shown.toUpperCase().includes(symbol.toUpperCase()))}`);
+        }
+        console.log('Navigating back (the pad\'s own button is never tapped)...');
+        await portfolio.driver.back();
+        await portfolio.pause(1500);
+        const left = !(await pad.isDisplayed(1500));
+        console.log(`Order Pad closed: ${verdict(left)}`);
+    };
+    await padFor('squareOff', 'SQUARE OFF', 'Sell', n);
+    await padFor('buyMore', 'BUY MORE', 'Buy', n + 1);
+
+    tc(n + 2, `Clicking ${symbol} again and scrolling the Quote up to half...`);
+    await portfolio.backToHoldings();
+    if (!(await portfolio.openHoldingDetails(raw))) {
+        await portfolio.dumpPageSource('portfolio_quote_no_sheet');
+        console.error(`FAIL: tapping ${symbol} did not open its sheet`);
+        return;
+    }
+    const popup = await portfolio.getQuoteState(symbol);
+    const buyMore = (await portfolio.getHoldingDetailButtons()).buyMore;
+    console.log(`Popup with BUY MORE displayed after tapping ${symbol} (state: ${popup}): ${verdict(popup === 'details' && buyMore)}`);
+    // Short steps - one full-height drag goes straight past half to the full Quote.
+    const half = await portfolio.swipeUpToHalfQuote(symbol);
+    await portfolio.dumpPageSource('portfolio_quote_half');
+    console.log(`Half Quote displayed after the first swipe up (state: ${half}): ${verdict(half === 'half')}`);
+
+    tc(n + 3, 'Scrolling the Quote up again to full...');
+    await portfolio.swipeUpSheet();
+    const full = await portfolio.getQuoteState(symbol);
+    await portfolio.dumpPageSource('portfolio_quote_full');
+    console.log(`Full Quote displayed after the second swipe up (state: ${full}): ${verdict(full === 'full')}`);
+
+    console.log(`Back on Holdings: ${verdict(await portfolio.backToHoldings())}`);
+}
+
 async function run() {
     const driver = await DriverManager.getDriver();
     try {
@@ -379,6 +754,18 @@ async function run() {
             console.log(`Selected tab on the resumed Portfolio: ${defaultTab} (default-tab check applies only after navigating here)`);
         } else {
             console.log(`Holdings selected by default: ${defaultTab === 'Holdings' ? 'PASS' : `FAIL (selected: ${defaultTab})`}`);
+        }
+
+        if (DETAILS_ONLY) {
+            if ((await portfolio.getSelectedTopTab()) !== 'Holdings') await portfolio.tapTopTab('Holdings');
+            if (!(await portfolio.getHoldingRows()).length) {
+                const emptyMsg = await portfolio.getHoldingsEmptyMessage();
+                console.log(`No symbols in the holdings${emptyMsg ? ` - app shows: "${emptyMsg}"` : ''} - no holding to open`);
+                return;
+            }
+            await checkFirstHoldingScreens(portfolio, 14);
+            console.log('\nPortfolio Holdings detail screens completed (DETAILS_ONLY)');
+            return;
         }
 
         if (SEARCH_ONLY) {
@@ -449,6 +836,7 @@ async function run() {
         console.log(`Filter button shown: ${controls.filter ? 'PASS' : 'FAIL'}`);
         console.log(`Pledge button shown: ${controls.pledge ? 'PASS' : 'FAIL'}`);
         console.log(`Alerts button shown: ${controls.alerts ? 'PASS' : 'FAIL'}`);
+        await checkHoldingsControls(portfolio, controls);
 
         tc(9, 'Verifying every holding shows its name, Current Value, Qty, P&L (value and percent), Avg, LTP and change percent...');
         const details = [];
@@ -482,6 +870,8 @@ async function run() {
         } else {
             console.log(`None of today's ${todaySymbols.length} position symbol(s) (${todaySymbols.join(', ')}) are in Holdings: PASS`);
         }
+
+        await checkFirstHoldingScreens(portfolio, 14, details);
 
         console.log('\nPortfolio Holdings flow completed');
     } catch (err) {
