@@ -271,24 +271,184 @@ class PortfolioPage extends BasePage {
         }
     }
 
-    // Pledge opens a web page - an android.webkit.WebView.
+    // Pledge opens an in-app browser (ui_dumps/portfolio_pledge.xml: an android.webkit.WebView on
+    // myglobe.globecapital.com inside a browser tab - "Close tab" / "Share" / "Minimize tab"). It is
+    // closed with the device back button.
     async isPledgePageOpen(timeout = 10000) {
         return this.isElementVisible(PortfolioPage.WEBVIEW, timeout);
     }
 
-    // Closes the Pledge web page with its close button - an android.widget.Button (per the user:
-    // new UiSelector().className("android.widget.Button")). The Holdings' own Buttons can stay in
-    // the tree behind the page, so those are skipped and the top-most remaining Button is tapped.
-    // Returns the tapped Button's label ('' when unlabelled), or null when none was found.
+    // Back from the Pledge in-app browser; true once its WebView is gone.
     async closePledgePage() {
-        const own = /^(Pledge,|Filter Holdings|Alerts,|Hamburger menu|Index |Back, Double tap)/i;
-        const buttons = (await this.getAllNodes())
-            .filter(n => n.cls === 'android.widget.Button' && !own.test(n.desc) && n.y2 > n.y1)
-            .sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1);
-        if (!buttons.length) return null;
-        await this.tapNode(buttons[0]);
+        await this.driver.back();
         await this.pause(1500);
-        return buttons[0].desc || buttons[0].text || '';
+        return !(await this.isElementVisible(PortfolioPage.WEBVIEW, 1500));
+    }
+
+    // ---- Discrepancy holdings (floating message on Holdings) ----
+    // Live (ui_dumps/portfolio_holding_GATECHDVR_no_details.xml, 2026-11-24): one android.widget.Button
+    // whose merged content-desc is "You have 1 discrepancy holdings.\nUpdate discrepancy holdings now,
+    // Displays count of discrepancy holdings.\nDouble tap to update discrepancy holdings". Its bounds
+    // span the whole list ([0,488][1080,2208]) so they don't locate the floating message itself, and
+    // in that dump its Update Now / Cancel were not separate nodes - they are looked up by label
+    // (content-desc or text) and never tapped blind.
+    static get DISCREPANCY_RE() { return /You have\s+(\d+)\s+discrepancy holding/i; }
+    static get DISCREPANCY_UPDATE_NOW() { return 'android=new UiSelector().descriptionMatches("Update Now")'; }
+    // The message's close (X) icon: an unlabelled ImageView, the 2nd ImageView on Holdings while the
+    // message is shown (ui_dumps/portfolio_discrepancy_banner.xml: [932,1916][989,1972]). Positional,
+    // so it is only tapped while the message is on screen and only if it has no content-desc (the
+    // bottom-nav icons are ImageViews too, all labelled).
+    static get DISCREPANCY_CANCEL() { return 'android=new UiSelector().className("android.widget.ImageView").instance(1)'; }
+
+    // { node, count } for the floating message, or null when it isn't shown.
+    async getDiscrepancyBanner() {
+        const node = (await this.getDescribedElements()).find(n => PortfolioPage.DISCREPANCY_RE.test(n.desc));
+        return node ? { node, count: Number(node.desc.match(PortfolioPage.DISCREPANCY_RE)[1]) } : null;
+    }
+
+    // Polls until the floating message is gone; true when it is.
+    async waitForDiscrepancyBannerGone(timeout = 5000) {
+        try {
+            await this.driver.waitUntil(async () => !(await this.getDiscrepancyBanner()), { timeout, interval: 500 });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    // A labelled control of the floating message (never the message's own merged label).
+    async findDiscrepancyControl(re) {
+        return (await this.getAllLabels()).find(n => re.test(n.label) && !PortfolioPage.DISCREPANCY_RE.test(n.label)) || null;
+    }
+
+    // Taps "Update Now". Returns its label, or null when no such control is on screen.
+    async tapDiscrepancyUpdateNow() {
+        if (await this.isElementVisible(PortfolioPage.DISCREPANCY_UPDATE_NOW, 3000)) {
+            await this.driver.$(PortfolioPage.DISCREPANCY_UPDATE_NOW).click();
+            await this.pause(2500);
+            return 'Update Now';
+        }
+        const node = await this.findDiscrepancyControl(/^Update\s*Now\b/i);
+        if (node) {
+            await this.tapNode(node);
+            await this.pause(2500);
+            return node.label.split('\n')[0];
+        }
+        // Live (2026-11-24, Pixel 4a): "Update Now" is drawn inside the floating bar but has no node of
+        // its own - the bar is merged into the one big "You have N discrepancy holdings" Button. It sits
+        // on the same row as the close (X) ImageView, just left of it (X [932,1916][989,1972], "Update
+        // Now" text ~x 661-899), so it is tapped relative to the X - only while the message is shown.
+        const icon = await this.getDiscrepancyCloseIcon();
+        if (!icon) return null;
+        const { x, y } = await icon.getLocation();
+        const { height } = await icon.getSize();
+        await this.tapNode({ x1: x - 150, x2: x - 150, y1: y + height / 2, y2: y + height / 2 });
+        await this.pause(2500);
+        return 'Update Now (tapped left of the X)';
+    }
+
+    // The floating message's close (X) icon element, or null when the message / icon isn't shown.
+    async getDiscrepancyCloseIcon() {
+        if (!(await this.getDiscrepancyBanner())) return null;
+        const icon = await this.driver.$(PortfolioPage.DISCREPANCY_CANCEL);
+        const desc = await icon.getAttribute('content-desc').catch(() => null);
+        return (await icon.isDisplayed().catch(() => false)) && !desc ? icon : null;
+    }
+
+    // Taps the message's "Cancel". Returns its label, or null when no such control is on screen.
+    async tapDiscrepancyCancel() {
+        const icon = await this.getDiscrepancyCloseIcon();
+        if (icon) {
+            await icon.click();
+            await this.pause(1500);
+            return 'Cancel (X)';
+        }
+        const node = await this.findDiscrepancyControl(/^Cancel\b(?!\s*Search)/i);
+        if (!node) return null;
+        await this.tapNode(node);
+        await this.pause(1500);
+        return node.label.split('\n')[0];
+    }
+
+    // The screen Update Now opens: open once an "Add Trade" button or a discrepancy title (other
+    // than the Holdings floating message) is shown. Not captured yet - dumped by the test.
+    async isDiscrepancyScreenOpen(timeout = 10000) {
+        try {
+            await this.driver.waitUntil(async () => (await this.getAllLabels()).some(n =>
+                /^Add Trade\b/i.test(n.label) || (/discrepan/i.test(n.label) && !PortfolioPage.DISCREPANCY_RE.test(n.label))), { timeout, interval: 500 });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    // A count the discrepancy screen shows itself ("2 discrepancy holdings", "Discrepancy (2)"), or null.
+    async getDiscrepancyScreenCount() {
+        for (const n of await this.getAllLabels()) {
+            if (PortfolioPage.DISCREPANCY_RE.test(n.label)) continue;
+            const m = n.label.match(/(\d+)\s+discrepan/i) || n.label.match(/discrepan\w*[^\d\n]{0,20}\(?\s*(\d+)\s*\)?/i);
+            if (m) return Number(m[1]);
+        }
+        return null;
+    }
+
+    // Rows on the discrepancy screen, one per "Add Trade" button: { symbol, qty, raw }. A row is the
+    // labels between the previous Add Trade and this one (the first row: up to 400px above it).
+    // Symbol: a "Stock:/Symbol:" value or the first ticker-like label (uppercase, no spaces);
+    // qty: a "(Disclosed) Qty/Quantity: N" label, or the value beside / below a "Qty" label.
+    async readDiscrepancyRows() {
+        const labels = await this.getAllLabels();
+        const buttons = labels.filter(n => /^Add Trade\b/i.test(n.label)).sort((a, b) => a.y1 - b.y1);
+        const rows = [];
+        buttons.forEach((btn, i) => {
+            // Live (ui_dumps/portfolio_discrepancy_screen.xml, 2026-11-24): each row is one View
+            // enclosing its ADD TRADE button, content-desc "IDEA\nDISC.QTY\n7\nRESLVD.QTY\nNA".
+            const box = labels.find(n => n !== btn && /DISC\.?\s*QTY/i.test(n.label) &&
+                n.x1 <= btn.x1 && n.x2 >= btn.x2 && n.y1 <= btn.y1 && n.y2 >= btn.y2);
+            if (box) {
+                const parts = box.label.split('\n').map(s => s.trim());
+                const at = parts.findIndex(p => /^DISC\.?\s*QTY$/i.test(p));
+                const resolved = parts.findIndex(p => /^RESLVD\.?\s*QTY$/i.test(p));
+                rows.push({
+                    symbol: parts[0] || null,
+                    qty: at >= 0 && /^-?[\d,]+$/.test(parts[at + 1] || '') ? parts[at + 1] : null,
+                    resolvedQty: resolved >= 0 ? parts[resolved + 1] || null : null,
+                    raw: parts.join(' | '),
+                });
+                return;
+            }
+            const top = i ? buttons[i - 1].y2 : btn.y1 - 400;
+            const inRow = labels
+                .filter(n => !/^Add Trade\b/i.test(n.label) && n.y1 >= top && n.y2 <= btn.y2 + 5)
+                .sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1);
+            const raw = inRow.map(n => n.label.replace(/\n/g, ' ')).join(' | ');
+            const sym = raw.match(/(?:Stock|Symbol)\s*:\s*([A-Z0-9&.-]+)/i);
+            const ticker = inRow.find(n => /^[A-Z][A-Z0-9&.-]{1,19}$/.test(n.label) && !/^(QTY|NSE|BSE)$/.test(n.label));
+            let qty = (raw.match(/(?:disclosed\s*)?(?:qty|quantity)\.?\s*:?\s*(-?[\d,]+)/i) || [])[1] || null;
+            if (!qty) {
+                const qLabel = inRow.find(n => /^(disclosed\s*)?(qty|quantity)\.?$/i.test(n.label));
+                const beside = qLabel && inRow.find(n => n !== qLabel && Math.abs(n.y1 - qLabel.y1) <= 15 && n.x1 > qLabel.x1 && /^-?[\d,]+$/.test(n.label));
+                const below = qLabel && inRow.filter(n => n.y1 >= qLabel.y2 && n.x1 < qLabel.x2 && n.x2 > qLabel.x1 && /^-?[\d,]+$/.test(n.label)).sort((a, b) => a.y1 - b.y1)[0];
+                qty = (beside || below || {}).label || null;
+            }
+            rows.push({ symbol: sym ? sym[1] : (ticker ? ticker.label : null), qty, raw });
+        });
+        return rows;
+    }
+
+    // All discrepancy rows, scrolling down while new ones appear (deduplicated on symbol / raw text).
+    async collectDiscrepancyRows(maxScrolls = 5) {
+        const seen = new Map();
+        const add = rows => rows.forEach(r => { const k = r.symbol || r.raw; if (!seen.has(k)) seen.set(k, r); });
+        add(await this.readDiscrepancyRows());
+        for (let i = 0; i < maxScrolls; i++) {
+            const before = seen.size;
+            await this.swipe('down');
+            await this.pause(700);
+            add(await this.readDiscrepancyRows());
+            if (seen.size === before) break;
+        }
+        return [...seen.values()];
     }
 
     // Alerts screen: its "Search Alerts" search box (hint, seen in the Regression run) or title.

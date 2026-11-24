@@ -17,7 +17,8 @@ console.log(`Logging this run to: ${logFile}`);
 // Derivatives, then Positions count vs the sub-tabs (Regression R58's rule) | TC 6 back to Holdings;
 // with no holdings, logs "No symbols in the holdings" + the app's own message and stops there |
 // TC 7 cumulative P&L: Current, Invested, Overall P&L and Today's P&L (value + percent) | TC 8
-// search bar, Filter, Pledge, Alerts | TC 9 each holding: name, Current Value, Qty, P&L + percent,
+// search bar, Filter, Pledge (in-app browser, closed with back), Alerts | TC 8a discrepancy holdings:
+// Update Now -> count + symbols with disclosed qty and Add Trade -> back -> Cancel hides the message | TC 9 each holding: name, Current Value, Qty, P&L + percent,
 // Avg, LTP + change percent (row + detail sheet) | TC 10 header totals vs the holdings | TC 11
 // Holdings lists only equity symbols | TC 12 search for a listed symbol, then Cancel | TC 13 no symbol from
 // Positions -> Today is in Holdings (Holdings = equity held overnight; today's executions stay in
@@ -38,6 +39,8 @@ const tc = (no, text) => console.log(`\nTC ${no}: ${text}`);
 const SEARCH_ONLY = process.env.SEARCH_ONLY === '1';
 // DETAILS_ONLY=1 runs just TC 1-2 and the first holding's detail screens, order pads, Quote, Option Chain and MTF (TC 14-25).
 const DETAILS_ONLY = process.env.DETAILS_ONLY === '1';
+// DISCREPANCY_ONLY=1 runs just TC 1-2 and the discrepancy holdings message (TC 8a).
+const DISCREPANCY_ONLY = process.env.DISCREPANCY_ONLY === '1';
 
 // Symbols are compared case-insensitively, ignoring spaces and an exchange / series suffix
 // ("RTNPOWER-EQ", "IDEA BSE").
@@ -378,8 +381,61 @@ async function checkHoldingsSearch(portfolio, holdings) {
     }
 }
 
+// TC 8a: the discrepancy holdings floating message ("You have N discrepancy holdings"). When shown:
+// Update Now -> the discrepancy screen lists N symbols, each with its disclosed qty and an Add Trade
+// button (never tapped) -> back to Holdings -> Cancel on the message -> the message is gone.
+async function checkDiscrepancyHoldings(portfolio) {
+    const banner = await portfolio.getDiscrepancyBanner();
+    if (!banner) {
+        console.log('No discrepancy holdings message shown - no discrepancy stock(s) for this user');
+        return;
+    }
+    console.log(`Discrepancy holdings message shown - count on Holdings: ${banner.count}`);
+    // The message's Update Now / Cancel haven't been captured as separate nodes yet - keep a record.
+    await portfolio.dumpPageSource('portfolio_discrepancy_banner');
+    await portfolio.saveScreenshot('portfolio_discrepancy_banner');
+
+    console.log('Clicking Update Now...');
+    const updated = await portfolio.tapDiscrepancyUpdateNow();
+    if (!updated) {
+        console.error('FAIL: "Update Now" not found on the discrepancy holdings message (see ui_dumps/portfolio_discrepancy_banner.xml / .png)');
+    } else {
+        const open = await portfolio.isDiscrepancyScreenOpen();
+        await portfolio.dumpPageSource('portfolio_discrepancy_screen');
+        console.log(`Discrepancy screen opened: ${verdict(open)}`);
+        if (open) {
+            const rows = await portfolio.collectDiscrepancyRows();
+            const screenCount = await portfolio.getDiscrepancyScreenCount();
+            console.log(`Discrepancy symbols listed: ${rows.map(r => `${r.symbol || '?'} (qty ${r.qty ?? '?'})`).join(', ') || 'none'}`);
+            console.log(`Count on Holdings (${banner.count}) vs symbols listed after Update Now (${rows.length}): ${verdict(banner.count === rows.length)}`);
+            if (screenCount != null) console.log(`Count on Holdings (${banner.count}) vs count shown on the discrepancy screen (${screenCount}): ${verdict(banner.count === screenCount)}`);
+            rows.forEach((r, i) => {
+                const label = r.symbol || `row ${i + 1}`;
+                console.log(`${label}: symbol shown ${verdict(!!r.symbol)} | disclosed qty shown${r.qty != null ? ` (${r.qty})` : ''} ${verdict(r.qty != null)} | Add Trade button shown PASS${r.symbol && r.qty != null ? '' : ` - row: ${r.raw}`}`);
+            });
+        }
+        console.log('Navigating back to Holdings...');
+        await portfolio.driver.back();
+        await portfolio.pause(1500);
+        console.log(`Back on Holdings: ${verdict(await portfolio.backToHoldings())}`);
+    }
+
+    if (!(await portfolio.getDiscrepancyBanner())) {
+        console.error('FAIL: the discrepancy holdings message is no longer shown after coming back - Cancel could not be checked');
+        return;
+    }
+    console.log('Clicking Cancel on the discrepancy holdings message...');
+    const cancelled = await portfolio.tapDiscrepancyCancel();
+    if (!cancelled) {
+        await portfolio.dumpPageSource('portfolio_discrepancy_banner_no_cancel');
+        console.error('FAIL: "Cancel" not found on the discrepancy holdings message (see ui_dumps/portfolio_discrepancy_banner_no_cancel.xml)');
+        return;
+    }
+    console.log(`Discrepancy holdings message disappeared after Cancel: ${verdict(await portfolio.waitForDiscrepancyBannerGone())}`);
+}
+
 // TC 8 (continued): each Holdings control opens its page - Filter -> filter options -> back;
-// Pledge -> web page -> its close Button; Alerts -> Alerts screen -> back. Each ends back on Holdings.
+// Pledge -> in-app browser -> back; Alerts -> Alerts screen -> back. Each ends back on Holdings.
 async function checkHoldingsControls(portfolio, controls) {
     const backOnHoldings = async () => {
         const ok = await portfolio.backToHoldings();
@@ -402,18 +458,11 @@ async function checkHoldingsControls(portfolio, controls) {
         await portfolio.tapHoldingsControl('pledge');
         const open = await portfolio.isPledgePageOpen();
         await portfolio.dumpPageSource('portfolio_pledge');
-        console.log(`Pledge web page opened: ${verdict(open)}`);
-        console.log('Closing the web page...');
-        // Only look for its close Button while the page is up - never tap a stray Button on Holdings.
-        const closed = open ? await portfolio.closePledgePage() : null;
-        if (closed === null) {
-            console.error('FAIL: no close Button (android.widget.Button) on the Pledge page - closing with back');
-            await portfolio.driver.back();
-            await portfolio.pause(1500);
-        } else {
-            console.log(`Tapped the close Button${closed ? ` "${closed}"` : ''}`);
+        console.log(`Pledge in-app browser opened: ${verdict(open)}`);
+        if (open) {
+            console.log('Clicking back to close the Pledge screen...');
+            console.log(`Pledge in-app browser closed: ${verdict(await portfolio.closePledgePage())}`);
         }
-        console.log(`Pledge web page closed: ${verdict(!(await portfolio.isElementVisible(PortfolioPage.WEBVIEW, 1500)))}`);
         await backOnHoldings();
     }
 
@@ -772,6 +821,14 @@ async function run() {
             return;
         }
 
+        if (DISCREPANCY_ONLY) {
+            if ((await portfolio.getSelectedTopTab()) !== 'Holdings') await portfolio.tapTopTab('Holdings');
+            tc('8a', 'Checking for discrepancy holdings: Update Now, symbols with disclosed qty and Add Trade, back, Cancel (DISCREPANCY_ONLY)...');
+            await checkDiscrepancyHoldings(portfolio);
+            console.log('\nPortfolio Holdings discrepancy check completed (DISCREPANCY_ONLY)');
+            return;
+        }
+
         if (SEARCH_ONLY) {
             if ((await portfolio.getSelectedTopTab()) !== 'Holdings') await portfolio.tapTopTab('Holdings');
             const rows = (await portfolio.getHoldingRows()).map(r => PortfolioPage.parseHoldingRow(r));
@@ -841,6 +898,9 @@ async function run() {
         console.log(`Pledge button shown: ${controls.pledge ? 'PASS' : 'FAIL'}`);
         console.log(`Alerts button shown: ${controls.alerts ? 'PASS' : 'FAIL'}`);
         await checkHoldingsControls(portfolio, controls);
+
+        tc('8a', 'Checking for discrepancy holdings: Update Now, symbols with disclosed qty and Add Trade, back, Cancel...');
+        await checkDiscrepancyHoldings(portfolio);
 
         tc(9, 'Verifying every holding shows its name, Current Value, Qty, P&L (value and percent), Avg, LTP and change percent...');
         const details = [];
