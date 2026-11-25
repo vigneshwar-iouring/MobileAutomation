@@ -1,41 +1,65 @@
 const DriverManager = require('../../driver/DriverManager');
 const SplashPage = require('../../pages/SplashPage');
 const PortfolioPage = require('../../pages/PortfolioPage');
+const OrderPadPage = require('../../pages/OrderPadPage');
 const permissionHandler = require('../../utils/permissionHandler');
 const { createLogger, getFailedTCs } = require('../../utils/logger');
 
 const { logFile, entries } = createLogger('Portfolio_Positions');
 console.log(`Logging this run to: ${logFile}`);
 
-// Read-only: only the Portfolio bottom-nav button, the Positions tab and the Today / Derivatives
-// sub-tabs are tapped - no row, SQUARE OFF or Exit Positions.
+// Nothing is placed or converted. Tapped: the Portfolio bottom-nav button, the Positions tab, the
+// Today / Derivatives sub-tabs, each position row (its detail sheet) and the sheet's View Chart,
+// Add Alert, Option Chain, BUY MORE / SELL, SQUARE OFF and CONVERT - each only OPENS a screen,
+// which is checked and left with back / Close. On an Order Pad its BUY / SELL is never tapped; on
+// the Convert screen its Convert button is never tapped (only the Convert to dropdown and the Qty
+// box, set back to the original). Exit Positions is never tapped.
 //
 // Sub-tabs:
-//   Today       - every buy and sell executed today, ALL segments (equity, F&O, currency, commodity).
+//   Today       - every buy and sell executed today, ALL segments (equity and derivatives).
 //                 Nothing stays on Today for more than one day: an equity position moves to
 //                 Holdings the next day, so no Today equity symbol is in Holdings yet.
-//   Derivatives - only F&O positions (NFO / BFO futures and options): every F&O executed today AND
-//                 every open F&O executed earlier (carried forward) - the "Holdings" of F&O. So
-//                 each Today F&O row is also on Derivatives; Derivatives rows not on Today are the
-//                 carried-forward ones.
+//   Derivatives - only derivative positions - NFO / BFO (F&O), CDS (currency) and MCX (commodity):
+//                 every derivative executed today AND every open derivative executed earlier
+//                 (carried forward) - the "Holdings" of derivatives. So each Today derivative row is
+//                 also on Derivatives; Derivatives rows not on Today are the carried-forward ones.
 //
 // TC 1 launch | TC 2 on Portfolio (Portfolio in the bottom navigation if not) | TC 3 Positions tab,
 // its count, Today the default sub-tab | TC 4 Today sub-tab: rows vs its own count | TC 5 the same
-// on Derivatives, every Derivatives row is F&O, every Today F&O row is on Derivatives (the rest are
+// on Derivatives, every Derivatives row is NFO / BFO / CDS / MCX, every Today derivative row is on Derivatives (the rest are
 // carried forward), then the Positions count vs the sub-tabs (same rule
-// as Holdings.test.js / R58) | TC 6 Holdings tab: no Today equity symbol is listed in Holdings.
+// as Holdings.test.js / R58) | TC 6 click every Today symbol: row (name, expiry for derivatives, P&L value
+// and %, LTP, change value and %, Qty, Avg, order tag) and detail sheet (the same plus Buy / Sell
+// Qty, Avg, Value, Market Value, Open Value, View Chart, Add Alert, Option Chain if applicable, BUY
+// MORE for a buy / SELL for a sell position, SQUARE OFF, CONVERT), each executed today, P&L
+// recalculated | TC 6a Today's cumulative P&L vs its symbols | per symbol: TC 6b View Chart, 6c Add
+// Alert, 6d Option Chain (if shown), 6e BUY MORE -> Buy Order Pad / SELL -> Sell Order Pad (pad
+// side, symbol, products: Delivery / Intraday equity, Carryforward / Intraday derivatives), 6f SQUARE
+// OFF -> opposite-side Order Pad with the position's product, 6g CONVERT -> name (expiry),
+// Existing product = executed product, Convert to + its dropdown = the alternatives (equity
+// Intraday <-> Delivery (+ MTF on applicable NSE), derivatives Intraday <-> C.Fwd, no C.Fwd on
+// BFO), Qty modified and restored, Convert button shown | TC 7 / 7a-g the same on Derivatives -
+// CONVERT only on derivatives executed today (also on Today), never on carried-forward ones | TC 8 Holdings
+// tab: no Today equity symbol is listed in Holdings.
+//
+// The position row and detail sheet grammar has not been captured yet: the first sheet of each
+// sub-tab is saved to ui_dumps/portfolio_position_details_<subtab>.xml.
 
 const tc = (no, text) => console.log(`\nTC ${no}: ${text}`);
 
-// F&O contract markers: option / future type, an expiry date ("25NOV", "27 NOV 2025"), or an F&O
-// exchange. Non-F&O markers: a cash-equity series / exchange, or a currency / commodity exchange.
-const FNO_MARKERS = [
-    /\b(CE|PE|FUT|FUTIDX|FUTSTK|OPTIDX|OPTSTK)\b/i,
+// Derivatives = NFO, BFO (F&O), CDS (currency) and MCX (commodity). Derivative markers: option /
+// future type, an expiry date ("25NOV", "27 NOV 2025"), or one of those exchanges. Non-derivative
+// markers: a cash-equity series / exchange.
+const DERIV_EXCHANGE_RE = /\b(NFO|BFO|CDS|MCX)\b/;
+
+// A row as logged: without its ", Double tap to view position details" hint, lines joined by " | ".
+const showRow = r => String(r || '').replace(/,?\s*Double tap to view position details\.?\s*$/i, '').replace(/\n/g, ' | ').trim();
+const DERIV_MARKERS = [
+    /\b(CE|PE|FUT|FUTIDX|FUTSTK|OPTIDX|OPTSTK|FUTCUR|OPTCUR|FUTCOM|OPTFUT)\b/i,
     /\b\d{1,2}\s?(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\s?\d{2,4})?\b/i,
-    /\b(NFO|BFO)\b/,
+    DERIV_EXCHANGE_RE,
 ];
-const NON_FNO_MARKERS = [
-    /\b(MCX|CDS|NCDEX)\b/,
+const NON_DERIV_MARKERS = [
     /-(EQ|BE)\b/i,
     /Exchange:\s*(NSE|BSE)\b/i,
 ];
@@ -46,34 +70,34 @@ const firstHit = (raw, res) => res.map(re => raw.match(re)).find(Boolean);
 const normSymbol = s => String(s || '').toUpperCase().replace(/[-\s](EQ|BE|NSE|BSE)$/, '').replace(/\s+/g, '');
 
 // Rows are matched across sub-tabs on everything before "Quantity:" (symbol, contract, exchange,
-// product) - the quantity can differ when today's trade adds to a carried-forward F&O position.
+// product) - the quantity can differ when today's trade adds to a carried-forward derivative position.
 const rowKey = r => r.split(/\s*Quantity:/)[0].trim();
 
-// Derivatives = today's F&O + carried-forward F&O: every Today F&O row must be on Derivatives, and
+// Derivatives = today's derivatives + carried-forward derivatives: every Today derivative row must be on Derivatives, and
 // the Derivatives rows not on Today are the ones executed earlier. Only checked when every row on
 // both sub-tabs was read.
-function checkTodayFnoOnDerivatives(today, deriv) {
+function checkTodayDerivOnDerivatives(today, deriv) {
     if (today.rows.length !== today.count || deriv.rows.length !== deriv.count) {
-        console.log(`Not every row was read (Today ${today.rows.length}/${today.count}, Derivatives ${deriv.rows.length}/${deriv.count}) - Today F&O vs Derivatives not compared`);
+        console.log(`Not every row was read (Today ${today.rows.length}/${today.count}, Derivatives ${deriv.rows.length}/${deriv.count}) - Today derivative vs Derivatives not compared`);
         return;
     }
-    const todayFno = today.rows.filter(r => firstHit(r, FNO_MARKERS));
+    const todayDeriv = today.rows.filter(r => firstHit(r, DERIV_MARKERS));
     const derivKeys = new Set(deriv.rows.map(rowKey));
-    const missing = todayFno.filter(r => !derivKeys.has(rowKey(r)));
-    if (!todayFno.length) console.log('No F&O executed today - nothing to find on Derivatives: PASS');
-    else if (missing.length) console.error(`FAIL: F&O executed today but not on Derivatives: ${missing.map(r => PortfolioPage.positionSymbol(r)).join(', ')}`);
-    else console.log(`All ${todayFno.length} F&O row(s) executed today are on Derivatives: PASS`);
+    const missing = todayDeriv.filter(r => !derivKeys.has(rowKey(r)));
+    if (!todayDeriv.length) console.log('No derivative executed today - nothing to find on Derivatives: PASS');
+    else if (missing.length) console.error(`FAIL: derivative executed today but not on Derivatives: ${missing.map(r => PortfolioPage.positionSymbol(r)).join(', ')}`);
+    else console.log(`All ${todayDeriv.length} derivative row(s) executed today are on Derivatives: PASS`);
 
     const todayKeys = new Set(today.rows.map(rowKey));
     const carried = deriv.rows.filter(r => !todayKeys.has(rowKey(r)));
     console.log(`Derivatives carried forward (executed before today): ${carried.length}${carried.length ? ` - ${carried.map(r => PortfolioPage.positionSymbol(r)).join(', ')}` : ''}`);
     const todayOnDeriv = deriv.rows.length - carried.length;
-    console.log(`Derivatives ${deriv.count} = today's F&O ${todayFno.length} + carried forward ${carried.length}: ${todayOnDeriv === todayFno.length ? 'PASS' : `FAIL (${todayOnDeriv} Derivatives row(s) are also on Today, Today has ${todayFno.length} F&O row(s))`}`);
+    console.log(`Derivatives ${deriv.count} = today's derivative ${todayDeriv.length} + carried forward ${carried.length}: ${todayOnDeriv === todayDeriv.length ? 'PASS' : `FAIL (${todayOnDeriv} Derivatives row(s) are also on Today, Today has ${todayDeriv.length} derivative row(s))`}`);
 }
 
-// Today's equity rows: not F&O and not currency / commodity. These are the ones that move to
+// Today's equity rows: not a derivative (NFO / BFO / CDS / MCX). These are the ones that move to
 // Holdings the next day.
-const isTodayEquityRow = r => !firstHit(r, FNO_MARKERS) && !/\b(MCX|CDS|NCDEX)\b/.test(r);
+const isTodayEquityRow = r => !firstHit(r, DERIV_MARKERS);
 
 // Today's equity executions only reach Holdings the next day, so none of them may already be
 // listed in Holdings. Taps the Holdings tab (read-only).
@@ -100,26 +124,554 @@ async function checkTodayNotInHoldings(portfolio, todayRows) {
     }
 }
 
-// Derivatives lists only F&O: a row with a non-F&O marker is a FAIL; a row with no marker either
-// way (row format not confirmed yet) is reported and the screen dumped, not passed silently.
-async function checkDerivativesAreFno(portfolio, rows) {
+// Derivatives lists only NFO / BFO / CDS / MCX positions: a row with a cash-equity marker is a FAIL;
+// a row with no marker either way (row format not confirmed yet) is reported and the screen dumped,
+// not passed silently.
+async function checkDerivativesSegments(portfolio, rows) {
     if (!rows.length) return;
     let bad = 0, unknown = 0;
     for (const r of rows) {
         const sym = PortfolioPage.positionSymbol(r);
-        const nonFno = firstHit(r, NON_FNO_MARKERS);
-        const fno = firstHit(r, FNO_MARKERS);
-        if (nonFno && !/\b(NFO|BFO)\b/.test(r)) {
+        const nonDeriv = firstHit(r, NON_DERIV_MARKERS);
+        const deriv = firstHit(r, DERIV_MARKERS);
+        if (nonDeriv && !DERIV_EXCHANGE_RE.test(r)) {
             bad++;
-            console.error(`FAIL: Derivatives lists a non-F&O position ${sym} ("${nonFno[0]}"): ${r.replace(/\n/g, ' | ')}`);
-        } else if (!fno) {
+            console.error(`FAIL: Derivatives lists a non-derivative position ${sym} ("${nonDeriv[0]}"): ${showRow(r)}`);
+        } else if (!deriv) {
             unknown++;
-            console.log(`Derivatives row ${sym}: no F&O marker found - segment not confirmed: ${r.replace(/\n/g, ' | ')}`);
+            console.log(`Derivatives row ${sym}: no derivative marker found - segment not confirmed: ${showRow(r)}`);
         }
     }
     if (unknown) await portfolio.dumpPageSource('portfolio_positions_derivatives_segment');
-    if (!bad && !unknown) console.log(`All ${rows.length} Derivatives row(s) are F&O: PASS`);
-    else if (!bad) console.log(`No non-F&O row on Derivatives, ${unknown} row(s) unconfirmed - see the dump`);
+    if (!bad && !unknown) console.log(`All ${rows.length} Derivatives row(s) are NFO / BFO / CDS / MCX: PASS`);
+    else if (!bad) console.log(`No non-derivative row on Derivatives, ${unknown} row(s) unconfirmed - see the dump`);
+}
+
+// ---- Position details and P&L ----
+const num = s => (s == null || s === '' ? null : Number(String(s).replace(/,/g, '')));
+const fmt = n => (n == null || Number.isNaN(n) ? 'n/a' : Number(n).toFixed(2));
+const verdict = ok => (ok ? 'PASS' : 'FAIL');
+const round2 = n => Math.round((n + Math.sign(n) * 1e-9) * 100) / 100;
+const near = (a, b, tol = 0.01) => a != null && b != null && !Number.isNaN(a) && !Number.isNaN(b) && Math.abs(round2(a) - round2(b)) <= tol + 1e-9;
+// A negative P&L must carry its minus sign - an unsigned loss is a FAIL, named as such (same rule
+// as Holdings.test.js).
+const valueVerdict = (shown, expected, tol = 0.01) => {
+    if (near(shown, expected, tol)) return 'PASS';
+    if (shown != null && expected != null && expected < 0 && shown > 0 && near(-shown, expected, tol))
+        return `FAIL (minus sign missing: app shows ${fmt(shown)} - expected ${fmt(expected)})`;
+    return 'FAIL';
+};
+
+// Prices tick while positions are opened one by one: Mon-Fri 09:00-23:30 IST (equity, F&O,
+// currency and commodity sessions together) - outside that only rounding tolerances apply.
+function pricesMayTick() {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Kolkata', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date()).map(p => [p.type, p.value]));
+    const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+    return !['Sat', 'Sun'].includes(parts.weekday) && minutes >= 9 * 60 && minutes < 23 * 60 + 30;
+}
+
+// The year is 2 or 4 digits not followed by another digit, so "23DEC 500 CE" reads "23DEC", not the strike.
+const EXPIRY_RE = /\b\d{1,2}\s?(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\s?(\d{4}|\d{2}))?(?!\d)\b/i;
+const ROW_FIELDS = [['pnl', 'P&L'], ['ltp', 'LTP'], ['change', 'Change'], ['qty', 'Qty'], ['avg', 'Avg']];
+const SHEET_FIELDS = [
+    ['pnl', 'P&L'], ['ltp', 'LTP'], ['change', 'Change'], ['qty', 'Qty'], ['avg', 'Avg'],
+    ['buyQty', 'Buy Qty'], ['buyAvg', 'Buy Avg'], ['buyValue', 'Buy Value'],
+    ['sellQty', 'Sell Qty'], ['sellAvg', 'Sell Avg'], ['sellValue', 'Sell Value'],
+    ['marketValue', 'Market Value'], ['openValue', 'Open Value'],
+];
+
+// One position: its row (name, expiry for derivatives, P&L value / %, LTP, change value / %, Qty, Avg, tag),
+// then its detail sheet (the same plus Buy / Sell Qty / Avg / Value, Market Value, Open Value and
+// the buttons), the P&L recalculated, closed with back. No button on the sheet is tapped.
+//   `executedToday` - the position was executed today (every Today row; a Derivatives row that is
+//                     also on Today): it must show buy / sell activity, and CONVERT must be shown.
+//                     A carried-forward Derivatives position must NOT show CONVERT.
+// Returns { symbol, pnl, computedPnl, marketValue } or null when the sheet couldn't be read.
+async function checkPosition(portfolio, subTab, raw, { executedToday, dumpName }) {
+    const symbol = PortfolioPage.positionSymbol(raw);
+    const isDeriv = !!firstHit(raw, DERIV_MARKERS);
+    const row = PortfolioPage.readPositionFields([{ label: raw }]);
+    const rowTags = PortfolioPage.positionTags([raw]);
+    console.log(`\n${subTab} -> ${symbol}${isDeriv ? ' (derivative)' : ''}${executedToday ? ' - executed today' : ' - carried forward'}: ${showRow(raw)}`);
+
+    const baseline = await portfolio.openPositionDetails(raw);
+    if (!baseline) {
+        await portfolio.dumpPageSource(`portfolio_position_${normSymbol(symbol)}_no_details`);
+        console.error(`FAIL: could not open the details of ${symbol}`);
+        await portfolio.closePositionDetails();
+        return null;
+    }
+    if (dumpName) await portfolio.dumpPageSource(dumpName);
+    const d = await portfolio.readPositionDetails(baseline);
+    const closed = await portfolio.closePositionDetails();
+    const f = d.fields;
+    const v = k => (f[k] ? f[k].value : null);
+
+    // Row: what the row's accessibility text carries. Values drawn on the row but not in its
+    // accessibility text (as on Holdings) are reported and verified on the detail sheet instead.
+    console.log(`${symbol} name on the row: ${verdict(!!symbol)}`);
+    if (isDeriv) console.log(`${symbol} expiry on the row: ${verdict(EXPIRY_RE.test(raw) || EXPIRY_RE.test(symbol))}${EXPIRY_RE.test(raw) ? ` (${raw.match(EXPIRY_RE)[0]})` : ''}`);
+    // Change percent comes with the LTP ("Last traded price is 3.10 (-18.42 percent)" - live
+    // 2026-11-25); the sheet has no separate Change label.
+    const changePct = f.change && f.change.percent != null ? f.change.percent : (f.ltp ? f.ltp.percent : null);
+    const onSheet = k => (k === 'change' ? changePct != null : !!f[k]);
+    for (const [k, name] of ROW_FIELDS) {
+        const r = row[k];
+        const pct = k === 'pnl' || k === 'change';
+        if (r && (!pct || r.percent != null)) console.log(`${symbol} row ${name}${pct ? ' value and percent' : ''} (${r.raw.replace(/\n/g, ' ')}): PASS`);
+        // P&L / LTP / Change aren't in the row's accessibility text - they're verified on the sheet.
+        else if (onSheet(k)) continue;
+        else console.error(`FAIL: ${symbol} ${name} not shown on the row or the detail sheet`);
+    }
+    if (rowTags.length) console.log(`${symbol} order tag on the row (${rowTags.join(', ')}): PASS`);
+    if (row.qty && f.qty) console.log(`${symbol} row Qty ${row.qty.value} matches the sheet (${f.qty.value}): ${verdict(row.qty.value === f.qty.value)}`);
+    if (row.avg && f.avg) console.log(`${symbol} row Avg ${fmt(row.avg.value)} matches the sheet (${fmt(f.avg.value)}): ${verdict(near(row.avg.value, f.avg.value))}`);
+
+    // Detail sheet: every field shown.
+    console.log(`${symbol} sheet: ${SHEET_FIELDS.map(([k, n]) => `${n} ${f[k] ? f[k].raw.replace(/\n/g, ' ') : 'n/a'}`).join(' | ')}`);
+    const baseSym = normSymbol(symbol).match(/^[A-Z&-]+/);
+    const named = !!baseSym && d.labels.some(t => normSymbol(t).includes(baseSym[0]));
+    console.log(`${symbol} name on the detail sheet: ${verdict(named)}`);
+    if (isDeriv) console.log(`${symbol} expiry on the detail sheet${d.expiry ? ` (${d.expiry})` : ''}: ${verdict(!!d.expiry)}`);
+    for (const [k, name] of SHEET_FIELDS) {
+        if (k === 'change') continue;
+        const pct = k === 'pnl';
+        console.log(`${symbol} ${name}${pct ? ' value and percent' : ''} shown: ${verdict(!!f[k] && (!pct || f[k].percent != null))}`);
+    }
+    console.log(`${symbol} Change percent shown${changePct != null ? ` (${fmt(changePct)}%)` : ''}: ${verdict(changePct != null)}`);
+    if (f.change && f.change.value != null) {
+        console.log(`${symbol} Change value shown (${fmt(f.change.value)}): PASS`);
+    } else if (f.ltp && changePct != null && changePct > -100) {
+        // Not in the accessibility text - derived from LTP and change %: LTP - LTP / (1 + % / 100).
+        const derived = round2(f.ltp.value - f.ltp.value / (1 + changePct / 100));
+        console.log(`${symbol} Change value: not in the sheet's accessibility text (only the percent is) - derived from LTP ${fmt(f.ltp.value)} and ${fmt(changePct)}% = ${fmt(derived)}`);
+    }
+    const tags = [...new Set([...rowTags, ...d.tags])];
+    console.log(`${symbol} order tag shown (${tags.join(', ') || 'none'}): ${verdict(tags.length > 0)}`);
+    if (!SHEET_FIELDS.every(([k]) => k === 'change' || f[k]) && !dumpName) await portfolio.dumpPageSource(`portfolio_position_${normSymbol(symbol)}_details`);
+
+    // Buy / sell order, from the sheet's Buy Qty and Sell Qty:
+    //   Buy Qty > Sell Qty -> buy order;  Sell Qty > Buy Qty -> sell order;
+    //   equal              -> closed position - it may show either BUY MORE or SELL.
+    // Only when Buy / Sell Qty weren't read does the sign of the shown Qty decide.
+    const buyQ = v('buyQty'), sellQ = v('sellQty'), qty = v('qty');
+    const bothRead = buyQ != null && sellQ != null;
+    const side = bothRead
+        ? (buyQ > sellQ ? 'buy' : sellQ > buyQ ? 'sell' : 'closed')
+        : (qty == null ? 'unknown' : qty > 0 ? 'buy' : qty < 0 ? 'sell' : 'closed');
+    console.log(`${symbol} order: Buy Qty ${buyQ ?? 'n/a'} vs Sell Qty ${sellQ ?? 'n/a'} -> ${side === 'buy' ? 'buy order' : side === 'sell' ? 'sell order' : side === 'closed' ? 'closed (Buy Qty = Sell Qty)' : 'unknown'}${bothRead ? '' : ` (from the sign of Qty ${qty ?? 'n/a'})`}`);
+    // Net quantity for the P&L: Buy Qty - Sell Qty when it agrees with the shown Qty, else the shown
+    // Qty signed by the order side (a carried-forward position's Qty includes earlier days).
+    const net = bothRead && (qty == null || Math.abs(qty) === Math.abs(buyQ - sellQ))
+        ? buyQ - sellQ
+        : qty == null ? null : side === 'sell' ? -Math.abs(qty) : side === 'buy' ? Math.abs(qty) : qty;
+    console.log(`${symbol} net position: ${net == null ? 'n/a' : net}`);
+
+    // Executed today: Today lists only positions executed today, so each shows a buy or sell today.
+    if (executedToday) {
+        const traded = (buyQ || 0) > 0 || (sellQ || 0) > 0;
+        console.log(`${symbol} executed today (Buy Qty ${buyQ ?? 'n/a'} / Sell Qty ${sellQ ?? 'n/a'}): ${verdict(traded)}`);
+    }
+
+    // Buttons (looked at, never tapped).
+    const b = d.buttons;
+    console.log(`${symbol} View Chart shown: ${verdict(b.viewChart)}`);
+    console.log(`${symbol} Add Alert shown: ${verdict(b.addAlert)}`);
+    console.log(`${symbol} Option Chain ${b.optionChain ? 'shown' : 'not shown (not applicable for this symbol)'}`);
+    if (side === 'buy') {
+        console.log(`${symbol} BUY MORE shown (buy order): ${verdict(b.buyMore)}`);
+        if (b.sell) console.error(`FAIL: ${symbol} is a buy order but shows SELL instead of BUY MORE`);
+    } else if (side === 'sell') {
+        console.log(`${symbol} SELL shown (sell order): ${verdict(b.sell)}`);
+        if (b.buyMore) console.error(`FAIL: ${symbol} is a sell order but shows BUY MORE instead of SELL`);
+    } else if (side === 'closed') {
+        // A closed position (Buy Qty = Sell Qty) still shows its Qty and a BUY MORE or SELL button.
+        const shown = [b.buyMore && 'BUY MORE', b.sell && 'SELL'].filter(Boolean);
+        console.log(`${symbol} closed (Buy Qty = Sell Qty) - Qty shown (${qty ?? 'n/a'}): ${verdict(qty != null)}`);
+        console.log(`${symbol} closed (Buy Qty = Sell Qty) - BUY MORE or SELL shown (${shown.join(' / ') || 'neither'}): ${verdict(shown.length > 0)}`);
+    } else {
+        console.error(`FAIL: ${symbol} buy / sell order not determined - Buy Qty, Sell Qty and Qty not read`);
+    }
+    if (side !== 'closed') console.log(`${symbol} SQUARE OFF shown: ${verdict(b.squareOff)}`);
+    else console.log(`${symbol} SQUARE OFF ${b.squareOff ? 'shown' : 'not shown'} (position closed)`);
+    if (executedToday) console.log(`${symbol} CONVERT shown (executed today): ${verdict(b.convert)}`);
+    else console.log(`${symbol} CONVERT not shown (carried forward, not executed today): ${verdict(!b.convert)}`);
+    console.log(`Back on Positions: ${verdict(closed)}`);
+
+    // P&L, rounded to two decimals. Derivative (F&O, currency, commodity) values can be per lot: the multiplier is read
+    // from Buy (or Sell) Value / (Qty x Avg) when it comes out a whole number above 1.
+    //   Executed today (no carried quantity): P&L = (Sell Value - Buy Value) + Net Qty x LTP
+    //   Carried forward:                       P&L = (LTP - Avg) x Net Qty
+    //   P&L % (open position) = ((LTP - Avg) / Avg) x 100 x sign(Net Qty); (closed) = P&L / Buy Value x 100
+    //   Market Value = |Net Qty| x LTP;  Open Value = |Net Qty| x Avg
+    const L = v('ltp'), A = v('avg');
+    const ratio = (val, q, a) => (val && q && a ? val / (q * a) : null);
+    const r = ratio(v('buyValue'), buyQ, v('buyAvg')) || ratio(v('sellValue'), sellQ, v('sellAvg'));
+    const mult = r && Math.abs(r - Math.round(r)) < 0.01 && Math.round(r) > 1 ? Math.round(r) : 1;
+    if (mult > 1) console.log(`${symbol} values are per lot: Value / (Qty x Avg) = ${mult}`);
+    if (buyQ != null && v('buyAvg') != null && v('buyValue') != null)
+        console.log(`${symbol} Buy Value ${fmt(v('buyValue'))} vs Buy Qty x Buy Avg = ${fmt(round2(buyQ * v('buyAvg') * mult))}: ${verdict(near(v('buyValue'), buyQ * v('buyAvg') * mult, 0.01 + buyQ * mult * 0.005))}`);
+    if (sellQ != null && v('sellAvg') != null && v('sellValue') != null)
+        console.log(`${symbol} Sell Value ${fmt(v('sellValue'))} vs Sell Qty x Sell Avg = ${fmt(round2(sellQ * v('sellAvg') * mult))}: ${verdict(near(v('sellValue'), sellQ * v('sellAvg') * mult, 0.01 + sellQ * mult * 0.005))}`);
+
+    let computed = null;
+    const sameDay = executedToday && buyQ != null && sellQ != null && v('buyValue') != null && v('sellValue') != null && (qty == null || Math.abs(qty) === Math.abs(buyQ - sellQ));
+    if (L != null && net != null) {
+        if (sameDay) {
+            computed = round2((v('sellValue') - v('buyValue')) + net * L * mult);
+            console.log(`${symbol} P&L ${fmt(v('pnl'))} vs (Sell Value - Buy Value) + Net Qty x LTP = (${fmt(v('sellValue'))} - ${fmt(v('buyValue'))}) + ${net} x ${fmt(L)}${mult > 1 ? ` x ${mult}` : ''} = ${fmt(computed)}: ${valueVerdict(v('pnl'), computed, 0.01 + Math.abs(net) * mult * 0.005)}`);
+        } else if (A != null) {
+            computed = round2((L - A) * net * mult);
+            console.log(`${symbol} P&L ${fmt(v('pnl'))} vs (LTP - Avg) x Net Qty = (${fmt(L)} - ${fmt(A)}) x ${net}${mult > 1 ? ` x ${mult}` : ''} = ${fmt(computed)}: ${valueVerdict(v('pnl'), computed, 0.01 + Math.abs(net) * mult * 0.005)}`);
+        }
+        const pnlPct = f.pnl ? f.pnl.percent : null;
+        if (net !== 0 && A) {
+            const pct = round2(((L - A) / A) * 100 * Math.sign(net));
+            console.log(`${symbol} P&L % ${fmt(pnlPct)} vs ((LTP - Avg) / Avg) x 100 = ${fmt(pct)}: ${valueVerdict(pnlPct, pct, 0.01 + (0.005 / A) * 100)}`);
+        } else if (net === 0 && computed != null && v('buyValue')) {
+            const pct = round2((computed / v('buyValue')) * 100);
+            console.log(`${symbol} P&L % ${fmt(pnlPct)} vs P&L / Buy Value x 100 = ${fmt(pct)}: ${valueVerdict(pnlPct, pct, 0.02)}`);
+        }
+        if (v('marketValue') != null)
+            console.log(`${symbol} Market Value ${fmt(v('marketValue'))} vs |Net Qty| x LTP = ${fmt(round2(Math.abs(net) * L * mult))}: ${verdict(near(Math.abs(v('marketValue')), Math.abs(net) * L * mult))}`);
+    } else {
+        console.error(`FAIL: ${symbol} P&L not recalculated - LTP ${fmt(L)} / Net Qty ${net ?? 'n/a'} not read`);
+    }
+    if (A != null && net != null && v('openValue') != null)
+        console.log(`${symbol} Open Value ${fmt(v('openValue'))} vs |Net Qty| x Avg = ${fmt(round2(Math.abs(net) * A * mult))}: ${verdict(near(Math.abs(v('openValue')), Math.abs(net) * A * mult, 0.01 + Math.abs(net) * mult * 0.005))}`);
+    // Change value vs change percent: % = change / (LTP - change) x 100 (Prev.close = LTP - change).
+    if (L != null && f.change && f.change.value != null && changePct != null && L - f.change.value) {
+        const pct = round2((f.change.value / (L - f.change.value)) * 100);
+        console.log(`${symbol} Change % ${fmt(changePct)} vs Change / (LTP - Change) x 100 = ${fmt(pct)}: ${verdict(near(changePct, pct, 0.02))}`);
+    }
+    return {
+        symbol, pnl: v('pnl'), computedPnl: computed, marketValue: L != null && net != null ? Math.abs(net) * L * mult : 0,
+        raw, isDeriv, side, executedToday, buttons: b,
+        exchange: (raw.match(/Exchange:\s*([A-Z]+)/i) || [])[1] || null,
+        product: PortfolioPage.normProduct((raw.match(/Product:\s*([^.]+)/i) || [])[1] || tags[0]),
+    };
+}
+
+// ---- Position sheet buttons: View Chart, Add Alert, Option Chain, BUY MORE / SELL, SQUARE OFF,
+// CONVERT. Each opens its screen, which is checked and left with back / Close. On an Order Pad
+// nothing is ever tapped (its BUY / SELL never); on the Convert screen its Convert never.
+
+// Order Pad product chip names for a normalised product.
+const PAD_PRODUCT = { Intraday: 'Intraday', Delivery: 'Delivery', CarryForward: 'Carryforward' };
+const PRODUCT_LABEL = { Intraday: 'Intraday', Delivery: 'Delivery', CarryForward: 'C.Fwd', MTF: 'MTF' };
+
+// Calendar days to a contract's expiry from its name ("NIFTY 01DEC 28250 CE"); null for equity.
+// Same rule as tests/Orders/Orderpad.test.js (no year in the name - a past date is next year's).
+const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
+function daysToExpiry(symbol) {
+    const m = (symbol || '').toUpperCase().match(/\b(\d{1,2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/);
+    if (!m) return null;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    let expiry = new Date(today.getFullYear(), MONTHS[m[2]], Number(m[1]));
+    if (expiry < today) expiry = new Date(today.getFullYear() + 1, MONTHS[m[2]], Number(m[1]));
+    return Math.round((expiry - today) / 86400000);
+}
+
+// The ticker part of a position's name ("NIFTY 01DEC 28250 CE" -> "NIFTY").
+const baseSymbol = s => (String(s || '').toUpperCase().match(/^[A-Z&-]+/) || [''])[0];
+
+// Back to Positions -> `subTab` with nothing on top: back while a sheet / chart / other screen is
+// shown (only while the bottom navigation isn't the plain list), then Portfolio / Positions /
+// the sub-tab are tapped as needed. True when the sub-tabs are on screen.
+async function backToPositions(portfolio, subTab) {
+    await portfolio.hideKeyboardIfShown();
+    for (let i = 0; i < 5; i++) {
+        const labels = await portfolio.getAllLabels();
+        const sheet = labels.some(n => PortfolioPage.POSITION_SHEET_RE.test(n.label) || PortfolioPage.CONVERT_SCREEN_RE.test(n.label));
+        const web = await portfolio.isElementVisible(PortfolioPage.WEBVIEW, 300);
+        const nav = await portfolio.isElementVisible(portfolio.portfolioNavButton, 500);
+        if (!sheet && !web && nav) break;
+        await portfolio.driver.back();
+        await portfolio.pause(1000);
+    }
+    if (!(await portfolio.isOnPortfolio(2000))) {
+        await portfolio.clickPortfolioNav().catch(() => {});
+        await portfolio.isOnPortfolio(8000);
+    }
+    if ((await portfolio.getSelectedTopTab()) !== 'Positions') await portfolio.tapTopTab('Positions').catch(() => {});
+    const tabs = await portfolio.getPositionSubTabs();
+    if (tabs && !tabs[subTab].selected) await portfolio.tapPositionSubTab(subTab);
+    return !!(await portfolio.getPositionSubTabs());
+}
+
+// Back to the list, then the position's sheet opened afresh. True when it's open.
+async function reopenSheet(portfolio, p, subTab) {
+    if (!(await backToPositions(portfolio, subTab))) {
+        console.error(`FAIL: could not get back to Positions -> ${subTab}`);
+        return false;
+    }
+    if (await portfolio.openPositionDetails(p.raw)) return true;
+    await portfolio.dumpPageSource(`portfolio_position_${normSymbol(p.symbol)}_no_sheet`);
+    console.error(`FAIL: could not reopen the details of ${p.symbol}`);
+    return false;
+}
+
+// Order Pad opened from a position: the pad side, the symbol and the product types only -
+// Delivery / Intraday on equity, Carryforward / Intraday on derivatives (Intraday not offered
+// on a contract expiring today / tomorrow - as in tests/Orders/Orderpad.test.js).
+//   'more'      (BUY MORE / SELL): the segment's product options.
+//   'squareOff' : the position's own product (its order tag) is the product on the pad.
+// Nothing on the pad is tapped; it is left with back.
+async function checkPositionOrderPad(portfolio, pad, p, padSide, kind, dumped) {
+    const ok = await pad.verifyOpenedFor(padSide);
+    const dumpName = `portfolio_position_${kind}_orderpad_${(p.exchange || 'x').toLowerCase()}`;
+    if (!dumped.has(dumpName)) { dumped.add(dumpName); await portfolio.dumpPageSource(dumpName); }
+    if (ok) {
+        const shown = await pad.getDisplayedSymbol();
+        const same = !!shown && normSymbol(shown).includes(normSymbol(baseSymbol(p.symbol)));
+        console.log(`Order Pad is for ${p.symbol} (header "${shown}"): ${verdict(same)}`);
+        const equity = ['NSE', 'BSE'].includes(p.exchange);
+        const days = daysToExpiry(p.symbol);
+        if (kind === 'more') {
+            if (p.exchange) await pad.verifyProductOptions(p.exchange, { nearExpiry: !equity && days !== null && days <= 1 });
+            else console.error(`FAIL: exchange of ${p.symbol} not read from its row - product options not checked`);
+        }
+        const want = PAD_PRODUCT[p.product];
+        const labels = await pad.getProductLabels();
+        if (!want) {
+            console.log(`${p.symbol} product "${p.product}" has no Order Pad chip to compare - products shown: ${labels.join(', ') || 'none'}`);
+        } else {
+            const has = labels.some(l => l.replace(/\s/g, '').toLowerCase() === want.toLowerCase());
+            console.log(`Order Pad shows the position's order tag ${want} (products shown: ${labels.join(', ') || 'none'}): ${verdict(has)}`);
+            if (has) await pad.verifyProductSelected(want);
+        }
+    }
+    console.log('Navigating back (the pad\'s own BUY / SELL is never tapped)...');
+    await pad.hideKeyboardIfShown();
+    await portfolio.driver.back();
+    await portfolio.pause(1500);
+    console.log(`Order Pad closed: ${verdict(!(await pad.isDisplayed(1500)))}`);
+}
+
+// Convert targets per segment for an existing product: equity Intraday <-> Delivery (+ MTF, only
+// for applicable NSE symbols - optional); derivatives Intraday <-> C.Fwd, but C.Fwd conversion is
+// not applicable on BFO.
+function convertTargets(exchange, existing) {
+    const equity = ['NSE', 'BSE'].includes(exchange);
+    const all = equity ? ['Intraday', 'Delivery'] : exchange === 'BFO' ? ['Intraday'] : ['Intraday', 'CarryForward'];
+    return {
+        required: all.filter(x => x !== existing),
+        optional: exchange === 'NSE' && existing !== 'MTF' ? ['MTF'] : [],
+    };
+}
+
+// Convert screen: name (expiry for derivatives), Existing product type = the executed order's
+// product, Convert to = an alternative product, its dropdown's options, Qty and the Convert button
+// shown; the Qty changed and set back. The screen's Convert button is NEVER tapped.
+async function checkConvert(portfolio, p, no) {
+    tc(no, `${p.symbol}: clicking CONVERT and verifying the Convert screen (its Convert button is never tapped)...`);
+    const sheetLabels = await portfolio.getAllLabels();
+    try {
+        if (!(await portfolio.tapPositionButton('convert', { opensConvert: true }))) {
+            console.error(`FAIL: CONVERT not found on the sheet of ${p.symbol}`);
+            return;
+        }
+    } catch (e) {
+        console.error(`FAIL: ${e.message}`);
+        return;
+    }
+    const open = await portfolio.isConvertScreenOpen();
+    await portfolio.dumpPageSource(`portfolio_position_convert_${(p.exchange || 'x').toLowerCase()}`);
+    console.log(`Convert screen displayed: ${verdict(open)}`);
+    if (!open) return;
+
+    const c = await portfolio.readConvertScreen(sheetLabels);
+    console.log(`Convert screen: ${c.labels.map(t => t.replace(/\n/g, ' ')).join(' | ')}`);
+    const named = c.labels.some(t => normSymbol(t).includes(normSymbol(baseSymbol(p.symbol))));
+    console.log(`${p.symbol} name on the Convert screen: ${verdict(named)}`);
+    if (p.isDeriv) console.log(`${p.symbol} expiry on the Convert screen${c.expiry ? ` (${c.expiry})` : ''}: ${verdict(!!c.expiry)}`);
+
+    const existing = PortfolioPage.normProduct(c.existing);
+    console.log(`Existing product type "${c.existing}" is the executed order's product ${PRODUCT_LABEL[p.product] || p.product}: ${verdict(!!existing && existing === p.product)}`);
+    const { required, optional } = convertTargets(p.exchange, existing || p.product);
+    const allowed = [...required, ...optional];
+    const convertTo = PortfolioPage.normProduct(c.convertTo);
+    console.log(`Expected Convert to options for ${PRODUCT_LABEL[existing || p.product]} on ${p.exchange}: ${required.map(x => PRODUCT_LABEL[x]).join(' / ') || 'none'}${optional.length ? ` (+ ${optional.map(x => PRODUCT_LABEL[x]).join(', ')} if applicable)` : ''}${p.exchange === 'BFO' ? ' - C.Fwd not applicable on BFO' : ''}`);
+    console.log(`Convert to "${c.convertTo}" is an alternative product type: ${verdict(!!convertTo && convertTo !== existing && allowed.includes(convertTo))}`);
+
+    console.log('Clicking the Convert to dropdown...');
+    const before = await portfolio.getAllLabels();
+    const dd = await portfolio.openConvertToDropdown(sheetLabels);
+    await portfolio.dumpPageSource(`portfolio_position_convert_dropdown_${(p.exchange || 'x').toLowerCase()}`);
+    console.log(`Convert to dropdown opened: ${verdict(dd.opened)}`);
+    if (dd.opened) {
+        // The current selection may be listed again or only shown in the box - count it as listed.
+        const listed = [...new Set([...dd.options, ...(convertTo ? [convertTo] : [])])];
+        console.log(`Dropdown options: ${listed.map(x => PRODUCT_LABEL[x]).join(', ') || 'none'} (raw: ${dd.labels.map(t => t.replace(/\n/g, ' ')).join(' | ')})`);
+        for (const x of required) console.log(`${PRODUCT_LABEL[x]} offered: ${verdict(listed.includes(x))}`);
+        for (const x of optional) console.log(`${PRODUCT_LABEL[x]} ${listed.includes(x) ? 'offered' : 'not offered'} (only for applicable symbols)`);
+        const wrong = listed.filter(x => !allowed.includes(x));
+        console.log(`No option outside ${allowed.map(x => PRODUCT_LABEL[x]).join(' / ') || 'none'} (existing ${PRODUCT_LABEL[existing || p.product]}${p.exchange === 'BFO' ? ', C.Fwd on BFO' : ''} not offered): ${verdict(!wrong.length)}${wrong.length ? ` - offered: ${wrong.map(x => PRODUCT_LABEL[x]).join(', ')}` : ''}`);
+        const still = await portfolio.closeConvertToDropdown(c.convertTo, before);
+        console.log(`Dropdown closed with ${c.convertTo} kept, Convert screen still open: ${verdict(still)}`);
+        if (!still) return;
+    }
+
+    console.log(`Qty shown ("${c.qty}"): ${verdict(c.qty != null && c.qty !== '')}`);
+    console.log(`Convert button shown (never tapped): ${verdict(c.convertButton)}`);
+    const orig = num(c.qty);
+    // Field accessibility only (every segment, derivatives too): the displayed Qty - 1 is entered,
+    // then the Qty displayed at first is entered back. Convert is never tapped, so the edited value
+    // is never submitted.
+    if (orig != null && !Number.isNaN(orig)) {
+        const changed = orig - 1;
+        const r1 = await portfolio.setConvertQty(changed, sheetLabels);
+        console.log(`Qty modified to ${changed} - box reads "${r1}": ${verdict(num(r1) === changed)}`);
+        const r2 = await portfolio.setConvertQty(orig, sheetLabels);
+        console.log(`Qty set back to the original ${c.qty} - box reads "${r2}": ${verdict(num(r2) === orig)}`);
+    }
+    console.log('Navigating back (Convert is never tapped)...');
+    console.log(`Convert screen closed: ${verdict(await portfolio.closeConvertScreen())}`);
+}
+
+// Every button on the position's sheet, each from a freshly opened sheet.
+async function checkPositionButtons(portfolio, pad, p, subTab, no, dumped) {
+    const b = p.buttons;
+    const sym = p.symbol;
+
+    tc(`${no}b`, `${sym}: clicking View Chart and verifying the chart...`);
+    if (!b.viewChart) console.log('View Chart not on the sheet - already reported');
+    else if (await reopenSheet(portfolio, p, subTab)) {
+        await portfolio.tapPositionButton('viewChart');
+        console.log('Waiting 10s for the chart to load...');
+        const chart = await portfolio.readChartPage(10000);
+        console.log(`Chart web page (WebView) shown: ${verdict(chart.webView)}`);
+        // Equity: the company line belongs to the symbol. Derivatives: the chart may be named for
+        // the underlying / contract - logged, not judged.
+        if (p.isDeriv) console.log(`Chart company line: "${chart.company}" (derivative - not compared)`);
+        else console.log(`Chart is for ${sym} (company "${chart.company}"): ${verdict(PortfolioPage.symbolMatchesCompany(baseSymbol(sym), chart.company))}`);
+        if (!(await portfolio.tapChartClose())) {
+            await portfolio.driver.back();
+            await portfolio.pause(1500);
+        }
+        console.log(`Chart closed: ${verdict(!(await portfolio.isElementVisible(PortfolioPage.WEBVIEW, 1500)))}`);
+    }
+
+    tc(`${no}c`, `${sym}: clicking Add Alert and verifying the alert screen...`);
+    if (!b.addAlert) console.log('Add Alert not on the sheet - already reported');
+    else if (await reopenSheet(portfolio, p, subTab)) {
+        await portfolio.tapPositionButton('addAlert');
+        const alert = await portfolio.readSetAlertScreen();
+        console.log(`Set Alert screen opened: ${verdict(alert.open)}`);
+        if (alert.open) {
+            const named = alert.descs.some(x => normSymbol(x).includes(normSymbol(baseSymbol(sym))));
+            console.log(`Set Alert is for ${sym}: ${verdict(named)}`);
+            console.log(`Create Alert button shown (never tapped): ${verdict(alert.createAlertShown)}`);
+            await portfolio.leaveSetAlertScreen();
+        } else {
+            await portfolio.dumpPageSource(`portfolio_position_${normSymbol(sym)}_add_alert`);
+        }
+    }
+
+    tc(`${no}d`, `${sym}: clicking Option Chain (if applicable) and verifying the option chain...`);
+    if (!b.optionChain) console.log(`Option Chain not shown for ${sym} - not applicable`);
+    else if (await reopenSheet(portfolio, p, subTab)) {
+        await portfolio.tapPositionButton('optionChain');
+        const open = await portfolio.isOptionChainOpen();
+        if (!open) await portfolio.dumpPageSource(`portfolio_position_${normSymbol(sym)}_option_chain`);
+        console.log(`Option Chain displayed ("Strike Price" column): ${verdict(open)}`);
+        await portfolio.driver.back();
+        await portfolio.pause(1500);
+    }
+
+    // Buy order -> BUY MORE -> Buy Order Pad; sell order -> SELL -> Sell Order Pad; a closed
+    // position shows either.
+    const moreKey = p.side === 'buy' ? 'buyMore' : p.side === 'sell' ? 'sell' : b.buyMore ? 'buyMore' : b.sell ? 'sell' : null;
+    const moreSide = moreKey === 'sell' ? 'Sell' : 'Buy';
+    tc(`${no}e`, `${sym}: clicking ${moreKey === 'sell' ? 'SELL' : 'BUY MORE'} and verifying the ${moreSide} Order Pad...`);
+    if (!moreKey || !b[moreKey]) console.log(`${moreKey === 'sell' ? 'SELL' : 'BUY MORE'} not on the sheet - already reported`);
+    else if (await reopenSheet(portfolio, p, subTab)) {
+        await portfolio.tapPositionButton(moreKey, { opensOrderPad: true });
+        await checkPositionOrderPad(portfolio, pad, p, moreSide, 'more', dumped);
+    }
+
+    // SQUARE OFF opens the opposite side: buy order -> Sell Order Pad, sell order -> Buy Order Pad.
+    const sqSide = p.side === 'sell' ? 'Buy' : 'Sell';
+    tc(`${no}f`, `${sym}: clicking SQUARE OFF and verifying the ${sqSide} Order Pad with the same order tag...`);
+    if (!b.squareOff) console.log(`SQUARE OFF not on the sheet${p.side === 'closed' ? ' (position closed)' : ' - already reported'}`);
+    else if (p.side === 'closed') console.log('Position closed - SQUARE OFF not opened');
+    else if (await reopenSheet(portfolio, p, subTab)) {
+        await portfolio.tapPositionButton('squareOff', { opensOrderPad: true });
+        await checkPositionOrderPad(portfolio, pad, p, sqSide, 'squareOff', dumped);
+    }
+
+    if (!b.convert) {
+        tc(`${no}g`, `${sym}: CONVERT not shown${p.executedToday ? ' - already reported' : ' (carried forward)'} - nothing to open`);
+    } else if (await reopenSheet(portfolio, p, subTab)) {
+        await checkConvert(portfolio, p, `${no}g`);
+    }
+    await backToPositions(portfolio, subTab);
+}
+
+// Clicks every listed position of `name` (its rows are those read in TC 4 / 5) and checks its
+// details, then the cumulative P&L below the sub-tabs (read right after, so prices have little
+// time to move), then each position's buttons. A position whose buttons were already clicked on
+// Today (`doneKeys`) isn't clicked through again on Derivatives.
+async function checkSubTabPositions(portfolio, no, name, rows, isExecutedToday, doneKeys = new Set(), dumped = new Set()) {
+    tc(no, `Positions -> ${name}: clicking every listed symbol and verifying its details and P&L...`);
+    if (!rows.length) {
+        console.log(`No ${name} positions listed - nothing to open`);
+        return [];
+    }
+    await portfolio.tapPositionSubTab(name);
+    const results = [];
+    for (let i = 0; i < rows.length; i++) {
+        results.push(await checkPosition(portfolio, name, rows[i], {
+            executedToday: isExecutedToday(rows[i]),
+            dumpName: i === 0 ? `portfolio_position_details_${name.toLowerCase()}` : null,
+        }));
+    }
+    await checkCumulativePnl(portfolio, no, name, rows, results);
+
+    const pad = new OrderPadPage(portfolio.driver);
+    for (const p of results.filter(Boolean)) {
+        if (doneKeys.has(rowKey(p.raw))) {
+            console.log(`\n${p.symbol}: buttons already clicked through on Today - not repeated on ${name}`);
+            continue;
+        }
+        doneKeys.add(rowKey(p.raw));
+        await checkPositionButtons(portfolio, pad, p, name, no, dumped);
+    }
+    return results;
+}
+
+async function checkCumulativePnl(portfolio, no, name, rows, results) {
+    tc(`${no}a`, `Verifying the cumulative P&L below the ${name} tab against the listed symbols...`);
+    // Opening lower rows can scroll the list - bring the P&L under the sub-tabs back into view.
+    let shown = await portfolio.getPositionsPnl();
+    for (let i = 0; shown == null && i < 4; i++) {
+        await portfolio.swipe('up');
+        await portfolio.pause(500);
+        shown = await portfolio.getPositionsPnl();
+    }
+    const header = PortfolioPage.parseValuePercent(shown).value ?? num((String(shown || '').match(/[+-]?[\d,]+(?:\.\d+)?/) || [])[0]);
+    console.log(`Cumulative P&L shown: ${shown ?? 'not found'}`);
+    if (header == null) {
+        await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}_pnl`);
+        console.error(`FAIL: cumulative P&L not found below the ${name} tab`);
+        return results;
+    }
+    const read = results.filter(Boolean);
+    if (read.length !== rows.length || read.some(r => r.pnl == null)) {
+        console.error(`FAIL: P&L read for ${read.filter(r => r.pnl != null).length} of ${rows.length} position(s) - cumulative P&L not compared`);
+        return results;
+    }
+    const sum = round2(read.reduce((t, r) => t + r.pnl, 0));
+    const tol = pricesMayTick() ? Math.max(1, read.reduce((t, r) => t + r.marketValue, 0) * 0.01) : 0.01 * read.length;
+    console.log(`Cumulative P&L ${fmt(header)} vs sum of the symbols' P&L (${read.map(r => `${r.symbol} ${fmt(r.pnl)}`).join(' + ')}) = ${fmt(sum)}: ${valueVerdict(header, sum, tol)}${tol > 0.01 * read.length ? ` (tolerance ${fmt(tol)} - prices may tick)` : ''}`);
+    if (read.every(r => r.computedPnl != null)) {
+        const calc = round2(read.reduce((t, r) => t + r.computedPnl, 0));
+        console.log(`Cumulative P&L ${fmt(header)} vs sum of the calculated P&L = ${fmt(calc)}: ${valueVerdict(header, calc, tol)}`);
+    }
+    return results;
 }
 
 // Search / Quote / Order Pad -> a screen with the bottom navigation. Back presses only.
@@ -155,7 +707,7 @@ async function checkPositionSubTab(portfolio, no, name) {
     }
 
     console.log(`${name} positions listed (${rows.length}):`);
-    rows.forEach((r, i) => console.log(`  [${i}] ${PortfolioPage.positionSymbol(r)} - ${r.replace(/\n/g, ' | ')}`));
+    rows.forEach((r, i) => console.log(`  [${i}] ${PortfolioPage.positionSymbol(r)} - ${showRow(r)}`));
     if (!rows.length) {
         await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}`);
         console.error(`FAIL: ${name} shows ${sub.count} item(s) but no position rows were found`);
@@ -166,8 +718,8 @@ async function checkPositionSubTab(portfolio, no, name) {
 }
 
 // Positions count vs the sub-tabs, same rule as Holdings.test.js / Regression R58: Today = every buy
-// and sell executed today (all segments), Derivatives = F&O only (today's and carried forward), so
-// today's F&O position is on BOTH tabs and Positions = Derivatives + Today's non-F&O rows - not
+// and sell executed today (all segments), Derivatives = NFO / BFO / CDS / MCX only (today's and carried forward), so
+// today's derivative position is on BOTH tabs and Positions = Derivatives + Today's non-derivative rows - not
 // Today + Derivatives. When not every row could be read, only the bounds are checked.
 function checkPositionsCount(positionsCount, today, deriv) {
     console.log(`Positions count check: Positions ${positionsCount}, Today ${today.count}, Derivatives ${deriv.count}`);
@@ -177,7 +729,7 @@ function checkPositionsCount(positionsCount, today, deriv) {
     if (today.rows.length === today.count && deriv.rows.length === deriv.count) {
         const derivKeys = new Set(deriv.rows.map(rowKey));
         const todayOnly = today.rows.filter(r => !derivKeys.has(rowKey(r)));
-        console.log(`Today rows also on Derivatives (today's F&O): ${today.rows.length - todayOnly.length} | Today-only (non-F&O): ${todayOnly.length}`);
+        console.log(`Today rows also on Derivatives (today's derivative): ${today.rows.length - todayOnly.length} | Today-only (non-derivative): ${todayOnly.length}`);
         const expected = deriv.count + todayOnly.length;
         console.log(`Positions ${positionsCount} vs Derivatives ${deriv.count} + Today-only ${todayOnly.length} = ${expected}: ${expected === positionsCount ? 'PASS' : 'FAIL'}`);
     } else {
@@ -232,11 +784,18 @@ async function run() {
 
         const today = await checkPositionSubTab(portfolio, 4, 'Today');
         const deriv = await checkPositionSubTab(portfolio, 5, 'Derivatives');
-        await checkDerivativesAreFno(portfolio, deriv.rows);
-        checkTodayFnoOnDerivatives(today, deriv);
+        await checkDerivativesSegments(portfolio, deriv.rows);
+        checkTodayDerivOnDerivatives(today, deriv);
         checkPositionsCount(positionsCount, today, deriv);
 
-        tc(6, "Verifying no equity symbol from Positions -> Today is listed in Holdings (it moves there the next day)...");
+        // Today: every row was executed today. Derivatives: a row also on Today was executed today,
+        // the rest are carried forward.
+        const doneKeys = new Set(), dumped = new Set();
+        await checkSubTabPositions(portfolio, 6, 'Today', today.rows, () => true, doneKeys, dumped);
+        const todayKeys = new Set(today.rows.map(rowKey));
+        await checkSubTabPositions(portfolio, 7, 'Derivatives', deriv.rows, r => todayKeys.has(rowKey(r)), doneKeys, dumped);
+
+        tc(8, "Verifying no equity symbol from Positions -> Today is listed in Holdings (it moves there the next day)...");
         await checkTodayNotInHoldings(portfolio, today.rows);
 
         console.log('\nPortfolio Positions flow completed');

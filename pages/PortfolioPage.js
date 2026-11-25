@@ -153,6 +153,323 @@ class PortfolioPage extends BasePage {
         return raw.split(/\n|\.\s|,\s/)[0].trim();
     }
 
+    // ---- Positions: cumulative P&L and the position detail sheet ----
+    // The cumulative P&L under the sub-tabs is the "P&L\n0.00" node (r58 dump, empty account). A
+    // position's ROW and DETAIL SHEET have not been captured yet, so fields are found by label in
+    // whatever form the sheet uses - "Buy Qty: 10" / "Buy Qty\n10" / a "Buy Qty" label with its value
+    // beside or below it - and the test dumps the first sheet of each sub-tab so the grammar can be
+    // pinned down. Nothing here taps SQUARE OFF / CONVERT / BUY MORE / SELL.
+
+    // Raw value of the cumulative P&L under the sub-tabs ("0.00", "-12.30 (1.20%)"), or null.
+    async getPositionsPnl() {
+        const node = (await this.getDescribedElements()).find(n => /^P&L\n/i.test(n.desc));
+        return node ? node.desc.replace(/^P&L\n/i, '').replace(/\n/g, ' ').trim() : null;
+    }
+
+    // Field name patterns (regex source, matched case-insensitively). Lookbehinds keep the plain
+    // Qty / Avg / P&L from matching "Buy Qty", "Sell Avg", "Day's P&L".
+    static get POSITION_FIELDS() {
+        return {
+            pnl: "(?<!Day'?s\\s*)(?:P\\s*&\\s*L|Profit (?:and|&) loss)",
+            ltp: '(?:LTP|Last traded price)',
+            change: '(?:Change|Chg\\.?)',
+            qty: '(?<!(?:Buy|Sell|Disclosed|MTF|facility)\\s*)(?:Net\\s*)?(?:Qty|Quantity)',
+            avg: '(?<!(?:Buy|Sell)\\s*)(?:Avg\\.?|Average)(?:\\s*Price)?',
+            buyQty: 'Buy\\s*(?:Qty|Quantity)',
+            buyAvg: 'Buy\\s*(?:Avg\\.?|Average)(?:\\s*Price)?',
+            buyValue: 'Buy\\s*Value',
+            sellQty: 'Sell\\s*(?:Qty|Quantity)',
+            sellAvg: 'Sell\\s*(?:Avg\\.?|Average)(?:\\s*Price)?',
+            sellValue: 'Sell\\s*Value',
+            marketValue: 'Market\\s*Value',
+            openValue: 'Open\\s*Value',
+        };
+    }
+
+    // One field from labels ({label, x1..y2}; bounds optional): { raw, value, percent } or null.
+    // Inline first ("Buy Qty: 10", "P&L\n-12.30 (1.2%)", "Last traded price is 17.87 (1.76 percent)"),
+    // then a label node on its own with the value in the nearest node to its right / below it.
+    static readField(labels, nameSrc) {
+        const NUM = '[+-]?[\\d,]+(?:\\.\\d+)?';
+        const VP = `(?:₹\\s*)?(${NUM})(?:\\s*\\(\\s*(${NUM})\\s*(?:%|percent)\\s*\\))?`;
+        const toNum = s => (s == null ? null : Number(String(s).replace(/,/g, '')));
+        const out = m => ({ raw: m[0].trim(), value: toNum(m[1]), percent: m[2] != null ? toNum(m[2]) : null });
+        const inline = new RegExp(`(?:^|[\\n.,:;|]\\s*|\\s)${nameSrc}\\s*(?:is\\s*|:\\s*|\\.\\s*|-\\s+)?\\n?\\s*${VP}`, 'i');
+        for (const n of labels) {
+            const m = n.label.match(inline);
+            if (m) return out(m);
+        }
+        const only = new RegExp(`^${nameSrc}\\s*:?$`, 'i');
+        const valueRe = new RegExp(`^${VP}`);
+        for (const l of labels.filter(n => only.test(n.label) && n.x1 != null)) {
+            const cy = (l.y1 + l.y2) / 2;
+            const near = labels
+                .filter(n => n !== l && n.x1 != null && valueRe.test(n.label) && (
+                    (Math.abs((n.y1 + n.y2) / 2 - cy) <= 20 && n.x1 >= l.x2 - 5) ||
+                    (n.y1 >= l.y2 - 5 && n.y1 - l.y2 < 120 && n.x1 <= l.x2 && n.x2 >= l.x1)))
+                .sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1);
+            if (near.length) return out(near[0].label.match(valueRe));
+        }
+        return null;
+    }
+
+    // Every field of POSITION_FIELDS found in `labels`: { pnl: {raw, value, percent} | null, ... }.
+    static readPositionFields(labels) {
+        const out = {};
+        for (const [k, src] of Object.entries(PortfolioPage.POSITION_FIELDS)) out[k] = PortfolioPage.readField(labels, src);
+        return out;
+    }
+
+    // Product / order tags (MIS, NRML, CNC, MTF, Intraday, Delivery, Carry Forward) in `texts`,
+    // upper-cased and de-duplicated. Button labels ("MTF Square Off") are skipped.
+    static positionTags(texts) {
+        const tags = new Set();
+        for (const t of texts) {
+            if (/SQUARE ?OFF/i.test(t) || Object.values(PortfolioPage.POSITION_BUTTONS).some(re => re.test(t.trim()))) continue;
+            for (const m of String(t).matchAll(/\b(MIS|NRML|CNC|MTF|INTRADAY|DELIVERY|CARRY\s?FORWARD|NORMAL|MARGIN)\b/gi)) tags.add(m[1].toUpperCase().replace(/\s+/g, ' '));
+        }
+        return [...tags];
+    }
+
+    // Position detail sheet buttons. Never tapped here. Live (ui_dumps/portfolio_position_details_today.xml,
+    // 2026-11-25): "View Chart, Double tap to ..." / "Add Alerts, ..." / "Option Chain, ..." /
+    // "Buy More, Double tap to buy more shares for this position" / "Square Off, ..." / "Convert, ...".
+    // Each is matched on the whole name before its ", Double tap" hint, so a field label such as
+    // "Sell Qty: 0" is never taken for a button. A sell position's button isn't captured yet -
+    // "Sell" / "Sell More".
+    static get POSITION_BUTTONS() {
+        return {
+            viewChart: /^View Chart(?:,|$)/i,
+            addAlert: /^Add Alerts?(?:,|$)/i,
+            optionChain: /^Option chains?(?:,|$)/i,
+            buyMore: /^BUY MORE(?:,|$)/i,
+            sell: /^SELL(?: MORE)?(?:,|$)/i,
+            squareOff: /^SQUARE ?OFF(?:,|$)/i,
+            convert: /^CONVERT(?:,|$)/i,
+        };
+    }
+
+    // Labels only a position detail sheet has.
+    static get POSITION_SHEET_RE() {
+        return /\b(?:Buy|Sell)\s*(?:Qty|Quantity|Avg|Average|Value)\b|^CONVERT\b|^SQUARE ?OFF\b|^View Chart\b|^Add Alerts?\b/i;
+    }
+
+    // Labels on screen that weren't in `baseline` (same bounds and same first line) - i.e. the sheet's
+    // own labels, not the Positions list / header still in the tree behind it.
+    async getNewLabels(baseline = []) {
+        const key = n => `${n.x1},${n.y1},${n.x2},${n.y2}|${n.label.split('\n')[0]}`;
+        const seen = new Set(baseline.map(key));
+        return (await this.getAllLabels()).filter(n => !seen.has(key(n)));
+    }
+
+    async isPositionDetailsOpen(baseline = [], timeout = 5000) {
+        try {
+            await this.driver.waitUntil(async () => (await this.getNewLabels(baseline)).some(n => PortfolioPage.POSITION_SHEET_RE.test(n.label)), { timeout, interval: 400 });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    // Taps the position row whose content-desc is `raw` and waits for its detail sheet. Returns the
+    // labels on screen just before the tap (the baseline readPositionDetails filters out), or null
+    // when the row couldn't be found or no sheet opened.
+    async openPositionDetails(raw) {
+        const node = await this.findHoldingRowNode(raw);
+        if (!node) return null;
+        const baseline = await this.getAllLabels();
+        await this.tapNode(node);
+        return (await this.isPositionDetailsOpen(baseline)) ? baseline : null;
+    }
+
+    // { labels, fields, tags, expiry, buttons } from the open sheet (labels = the sheet's own).
+    async readPositionDetails(baseline = []) {
+        const labels = await this.getNewLabels(baseline);
+        const texts = labels.map(n => n.label);
+        const expiry = texts.map(t => t.match(/\b\d{1,2}\s?(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(?:\s?(?:\d{4}|\d{2}))?(?!\d)\b/i)).find(Boolean);
+        const buttons = {};
+        for (const [k, re] of Object.entries(PortfolioPage.POSITION_BUTTONS)) buttons[k] = texts.some(t => re.test(t.trim()));
+        return {
+            labels: texts,
+            fields: PortfolioPage.readPositionFields(labels),
+            tags: PortfolioPage.positionTags(texts),
+            expiry: expiry ? expiry[0] : null,
+            buttons,
+        };
+    }
+
+    // Back out of a position sheet to the Positions list. Back is pressed only while a sheet label is
+    // on screen, so it never navigates away from Portfolio. True when the sub-tabs are shown.
+    async closePositionDetails(maxPresses = 3) {
+        for (let i = 0; i < maxPresses; i++) {
+            const labels = await this.getAllLabels();
+            const sheet = labels.some(n => PortfolioPage.POSITION_SHEET_RE.test(n.label));
+            if (!sheet && (await this.getPositionSubTabs())) return true;
+            if (!sheet) break;
+            await this.driver.back();
+            await this.pause(1000);
+        }
+        return !!(await this.getPositionSubTabs());
+    }
+
+    // ---- Position sheet buttons -> screens ----
+
+    // Product type names -> 'Intraday' / 'Delivery' / 'CarryForward' / 'MTF' (null when not one).
+    // "INTRADAY", "MIS", "CARRY FORWARD", "C.Fwd", "NRML", "Carryforward", "DELIVERY", "CNC", "MTF".
+    static normProduct(s) {
+        const t = String(s || '').toUpperCase().replace(/[^A-Z]/g, '');
+        if (/^(INTRADAY|MIS)/.test(t)) return 'Intraday';
+        if (/^(DELIVERY|CNC)/.test(t)) return 'Delivery';
+        if (/^(CARRYFORWARD|CFWD|NRML|NORMAL)/.test(t)) return 'CarryForward';
+        if (/^MTF/.test(t)) return 'MTF';
+        return null;
+    }
+
+    // The sheet's own CONVERT, exactly as captured (ui_dumps/portfolio_position_details_today.xml).
+    // Only this label is ever tapped for Convert - the Convert screen's own Convert button (which
+    // converts the position) has a different label and is never tapped.
+    static get SHEET_CONVERT_RE() { return /^Convert, Double tap to convert this position type/i; }
+    // The Convert screen (not captured yet): its "Existing product type" / "Convert to" labels.
+    static get CONVERT_SCREEN_RE() { return /Existing\s*product|Convert\s*to\b/i; }
+
+    // Taps a position sheet button by key. buyMore / sell / squareOff only OPEN an Order Pad and need
+    // { opensOrderPad: true }; convert only OPENS the Convert screen and needs { opensConvert: true },
+    // and is refused unless exactly one node carries the sheet's own Convert label and no Convert
+    // screen is on top.
+    async tapPositionButton(key, { opensOrderPad = false, opensConvert = false } = {}) {
+        if (['buyMore', 'sell', 'squareOff'].includes(key) && !opensOrderPad) throw new Error(`Refusing to tap ${key} without opensOrderPad: true`);
+        const nodes = await this.getDescribedElements();
+        let node;
+        if (key === 'convert') {
+            if (!opensConvert) throw new Error('Refusing to tap convert without opensConvert: true');
+            if (nodes.some(n => PortfolioPage.CONVERT_SCREEN_RE.test(n.desc))) throw new Error('Refusing to tap Convert: a Convert screen is already on screen');
+            const hits = nodes.filter(n => PortfolioPage.SHEET_CONVERT_RE.test(n.desc.trim()));
+            if (hits.length !== 1) throw new Error(`Refusing to tap Convert: ${hits.length} sheet Convert buttons found`);
+            node = hits[0];
+        } else {
+            node = nodes.find(n => PortfolioPage.POSITION_BUTTONS[key].test(n.desc.trim()));
+        }
+        if (!node) return false;
+        await this.tapNode(node);
+        await this.pause(1500);
+        return true;
+    }
+
+    // A text field from labels: inline ("Existing product type: Intraday", "Convert to\nDelivery")
+    // or a label node alone with its value in the nearest node to its right / below.
+    // { value, node } or null. `nameSrc` is a regex source.
+    static textField(labels, nameSrc) {
+        const inline = new RegExp(`^${nameSrc}\\s*(?::|\\n)\\s*([^\\n,]+)`, 'i');
+        for (const n of labels) {
+            const m = n.label.match(inline);
+            if (m && m[1].trim()) return { value: m[1].trim(), node: n };
+        }
+        const only = new RegExp(`^${nameSrc}\\s*:?$`, 'i');
+        for (const l of labels.filter(n => only.test(n.label) && n.x1 != null)) {
+            const cy = (l.y1 + l.y2) / 2;
+            const near = labels
+                .filter(n => n !== l && n.x1 != null && !only.test(n.label) && !PortfolioPage.CONVERT_SCREEN_RE.test(n.label) && (
+                    (Math.abs((n.y1 + n.y2) / 2 - cy) <= 20 && n.x1 >= l.x2 - 5) ||
+                    (n.y1 >= l.y2 - 5 && n.y1 - l.y2 < 150 && n.x1 <= l.x2 + 200 && n.x2 >= l.x1)))
+                .sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1);
+            if (near.length) return { value: near[0].label.split('\n')[0].trim(), node: near[0] };
+        }
+        return null;
+    }
+
+    async isConvertScreenOpen(timeout = 6000) {
+        try {
+            await this.driver.waitUntil(async () => (await this.getAllLabels()).some(n => PortfolioPage.CONVERT_SCREEN_RE.test(n.label)), { timeout, interval: 400 });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    // The quantity box on the Convert screen: an EditText not in `baseline` (the sheet behind it).
+    async getConvertQtyInput(baseline = []) {
+        const key = n => `${n.x1},${n.y1},${n.x2},${n.y2}`;
+        const old = new Set(baseline.map(key));
+        const inputs = (await this.getAllNodes()).filter(n => n.cls === 'android.widget.EditText' && !old.has(key(n)));
+        return inputs[0] || null;
+    }
+
+    // { labels, existing, convertTo, convertToNode, qtyLabel, qty, convertButton, expiry } -
+    // `baseline` is the position sheet's labels just before Convert was tapped.
+    async readConvertScreen(baseline = []) {
+        const labels = await this.getNewLabels(baseline);
+        const texts = labels.map(n => n.label);
+        const existing = PortfolioPage.textField(labels, 'Existing\\s*product(?:\\s*type)?');
+        const convertTo = PortfolioPage.textField(labels, 'Convert\\s*to');
+        const input = await this.getConvertQtyInput(baseline);
+        const expiry = texts.map(t => t.match(/\b\d{1,2}\s?(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(?:\s?(?:\d{4}|\d{2}))?(?!\d)\b/i)).find(Boolean);
+        return {
+            labels: texts,
+            existing: existing ? existing.value : null,
+            convertTo: convertTo ? convertTo.value : null,
+            convertToNode: convertTo ? convertTo.node : null,
+            qtyLabel: texts.some(t => /^(Qty|Quantity|Lot)\b/i.test(t)),
+            qty: input ? input.text.trim() : null,
+            // The screen's own Convert button - looked at, never tapped.
+            convertButton: texts.some(t => /^CONVERT\b(?!\s*to)/i.test(t)),
+            expiry: expiry ? expiry[0] : null,
+        };
+    }
+
+    // Opens the "Convert to" dropdown by tapping its current value. Returns { opened, options } -
+    // the product types (normalised) that appeared. Never taps anything labelled Convert.
+    async openConvertToDropdown(baseline = []) {
+        const before = await this.getAllLabels();
+        const c = await this.readConvertScreen(baseline);
+        const node = c.convertToNode;
+        if (!node || /^CONVERT\b(?!\s*to)/i.test(node.label)) return { opened: false, options: [] };
+        await this.tapNode(node);
+        await this.pause(1200);
+        const added = await this.getNewLabels(before);
+        const options = [...new Set(added.map(n => PortfolioPage.normProduct(n.label.split('\n')[0])).filter(Boolean))];
+        return { opened: added.length > 0, options, labels: added.map(n => n.label) };
+    }
+
+    // Closes the open dropdown by re-selecting `current` (so the selection is unchanged); back if
+    // that option isn't found. True when the Convert screen is still open afterwards.
+    async closeConvertToDropdown(current, before = []) {
+        const want = PortfolioPage.normProduct(current);
+        const opt = (await this.getNewLabels(before)).find(n => want && PortfolioPage.normProduct(n.label.split('\n')[0]) === want && !/^CONVERT\b(?!\s*to)/i.test(n.label));
+        if (opt) await this.tapNode(opt); else await this.driver.back();
+        await this.pause(1000);
+        return this.isConvertScreenOpen(1500);
+    }
+
+    // Types `value` into the Convert screen's quantity box with real key events (Compose fields can
+    // accept setValue() without the app seeing it) and returns what the box then reads - read with
+    // the keyboard still up: hiding it acts as a back press and closes the Convert sheet (live
+    // 2026-11-25, NATGASMINI - the box then read null). closeConvertScreen takes the keyboard down.
+    async setConvertQty(value, baseline = []) {
+        const input = await this.getConvertQtyInput(baseline);
+        if (!input) return null;
+        await this.tapNode(input);
+        await this.pause(400);
+        await this.driver.pressKeyCode(123); // KEYCODE_MOVE_END
+        for (let i = 0; i < 12; i++) await this.driver.pressKeyCode(67); // KEYCODE_DEL
+        for (const ch of String(value)) {
+            await this.driver.keys(ch);
+            await this.pause(60);
+        }
+        await this.pause(500);
+        const after = await this.getConvertQtyInput(baseline);
+        return after ? after.text.trim() : null;
+    }
+
+    // Leaves the Convert screen with back (its Convert button is never tapped) - the first back may
+    // only take the keyboard down. True once the screen is gone.
+    async closeConvertScreen() {
+        for (let i = 0; i < 2 && (await this.isConvertScreenOpen(500)); i++) {
+            await this.driver.back();
+            await this.pause(1200);
+        }
+        return !(await this.isConvertScreenOpen(1500));
+    }
+
     // ---- Holdings ----
     // From a real dump (Regression log, 2026-11-19, 5 holdings):
     //   - summary: label nodes "Current" / "Overall P&L" / "Invested" / "Today's P&L", each value a
