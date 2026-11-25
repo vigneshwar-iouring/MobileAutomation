@@ -588,6 +588,232 @@ class PortfolioPage extends BasePage {
         }
     }
 
+    // ---- Positions controls: Search / Filter / Alerts / Exit Positions ----
+    // The bar under the Today / Derivatives sub-tabs, beside the cumulative P&L (ui_dumps/
+    // portfolio_position_SIMBHALS_details.xml, live 2026-11-25), tapped on bounds like Holdings':
+    //   "Search Positions, Double tap to search positions" | "Filter Positions, Double tap to open
+    //   position filters" | "Alerts, Double tap to view alerts" | "Exit Positions mode, Double tap to
+    //   enter exit positions mode". Exit Positions is only looked for - never tapped.
+    static get POSITIONS_CONTROLS() {
+        return { search: /^Search Positions\b/i, filter: /^Filter Positions\b/i, alerts: /^Alerts,/i, exit: /^Exit Positions\b/i };
+    }
+
+    // { search, filter, alerts, exit } -> shown on screen.
+    async getPositionsControls() {
+        const descs = (await this.getDescribedElements()).map(n => n.desc.trim());
+        const out = {};
+        for (const [k, re] of Object.entries(PortfolioPage.POSITIONS_CONTROLS)) out[k] = descs.some(d => re.test(d));
+        return out;
+    }
+
+    async tapPositionsControl(key) {
+        if (key === 'exit') throw new Error('Refusing to tap Exit Positions');
+        const node = (await this.getDescribedElements()).find(n => PortfolioPage.POSITIONS_CONTROLS[key].test(n.desc.trim()));
+        if (!node) return false;
+        await this.tapNode(node);
+        await this.pause(2000);
+        return true;
+    }
+
+    // ---- Positions search (ui_dumps/portfolio_positions_today_search_not_opened.xml, live 2026-11-25) ----
+    // The search icon swaps the sub-tabs and the P&L / Filter / Alerts / Exit Positions bar for a
+    // search row: the box is an android.widget.Button (not an EditText) with hint "Search for Stocks",
+    // focused, and beside it "Exit Search, Double tap to close search mode". The list stays below,
+    // filtered as you type. A clear (x) is looked for as "Clear Search, ..." once there's text.
+    static get POSITIONS_SEARCH() {
+        return { box: '//*[@hint="Search for Stocks"]', exit: /^Exit Search\b/i, clear: /^Clear Search\b/i };
+    }
+
+    async findPositionsSearchBox() {
+        const el = await this.driver.$(PortfolioPage.POSITIONS_SEARCH.box);
+        return (await el.isExisting()) ? el : null;
+    }
+
+    async isPositionsSearchOpen() {
+        return (await this.getDescribedElements()).some(n => PortfolioPage.POSITIONS_SEARCH.exit.test(n.desc.trim()));
+    }
+
+    // The box's text ('' while it shows only its hint), or null when search isn't open. Once text is
+    // typed the box loses its hint attribute (ui_dumps/portfolio_positions_today_search.xml:
+    // Button text="NATGASMINI", no hint), so it's found by position: the text node on the Exit Search
+    // row, left of it.
+    async getPositionsSearchText() {
+        const exit = (await this.getDescribedElements()).find(n => PortfolioPage.POSITIONS_SEARCH.exit.test(n.desc.trim()));
+        if (!exit) return null;
+        const midY = (exit.y1 + exit.y2) / 2;
+        const box = (await this.getTextElements()).find(n => n.y1 <= midY && n.y2 >= midY && n.x2 <= exit.x1 + 1);
+        const text = box ? String(box.text).trim() : '';
+        return /^search for stocks$/i.test(text) ? '' : text;
+    }
+
+    // Types `query` key by key into the focused box (tapped first if it lost focus).
+    async typePositionsSearch(query) {
+        const el = await this.findPositionsSearchBox();
+        if (el && (await el.getAttribute('focused')) !== 'true') {
+            const { x, y } = await el.getLocation();
+            const { width, height } = await el.getSize();
+            await this.tapNode({ x1: x, y1: y, x2: x + width, y2: y + height });
+            await this.pause(600);
+        }
+        for (const ch of query) {
+            await this.driver.keys(ch);
+            await this.pause(60);
+        }
+        await this.pause(1200);
+        return this.getPositionsSearchText();
+    }
+
+    // Taps the search row's Clear / Exit button ('clear' | 'exit'); false when it isn't shown.
+    async tapPositionsSearchButton(key) {
+        const node = (await this.getDescribedElements()).find(n => PortfolioPage.POSITIONS_SEARCH[key].test(n.desc.trim()));
+        if (!node) return false;
+        await this.tapNode(node);
+        await this.pause(1200);
+        return true;
+    }
+
+    // ---- Exit Positions mode (ui_dumps/portfolio_exit_positions_mode.xml, live 2026-11-25) ----
+    // Entered with the "Exit Positions mode" icon. Lists only OPEN positions, each
+    //   "Unselected. Position for stock: PULSRIN. Exchange: BSE. ..., Double tap to toggle selection"
+    //   ("Selected. ..." once ticked); the P&L bar reads "P&L\n-13.11\n0/4 Positions will be closed at
+    //   Market Price"; "Select All, Double tap to select all positions" (Clear All once all are
+    //   selected); bottom: "Cancel Exit Positions, ..." and "Confirm Exit Positions, Double tap to
+    //   close selected positions at market price".
+    // CONFIRM SQUARES OFF THE SELECTED POSITIONS AT MARKET PRICE ON A LIVE ACCOUNT. It is tapped only
+    // through tapConfirmExitPositions(), which needs EXIT_POSITIONS_POPUP_TEST=1, and the popup it
+    // raises is only ever answered with No (tapExitConfirmNo) - nothing here taps Yes.
+    static get EXIT_MODE() {
+        return {
+            row: /^(Selected|Unselected)\.\s*Position for stock:/i,
+            counter: /(\d+)\s*\/\s*(\d+)\s*Positions? will be closed/i,
+            selectAll: /^Select All\b/i,
+            clearAll: /^(Clear All|Deselect All|Unselect All)\b/i,
+            cancel: /^Cancel Exit Positions\b/i,
+            confirm: /^Confirm Exit Positions\b/i,
+        };
+    }
+
+    async enterExitPositionsMode() {
+        const node = (await this.getDescribedElements()).find(n => PortfolioPage.POSITIONS_CONTROLS.exit.test(n.desc.trim()));
+        if (!node) return false;
+        await this.tapNode(node);
+        await this.pause(2000);
+        return this.isExitPositionsModeOpen(5000);
+    }
+
+    async isExitPositionsModeOpen(timeout = 0) {
+        const check = async () => (await this.getDescribedElements()).some(n => PortfolioPage.EXIT_MODE.cancel.test(n.desc.trim()));
+        if (!timeout) return check();
+        try {
+            await this.driver.waitUntil(check, { timeout, interval: 500 });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    // On-screen state: { rows: [{ desc, selected, node }], counter: { selected, total } | null,
+    // selectAll, clearAll, cancel, confirm } (the last four are nodes or undefined).
+    async getExitModeState() {
+        const nodes = await this.getDescribedElements();
+        const E = PortfolioPage.EXIT_MODE;
+        const find = re => nodes.find(n => re.test(n.desc.trim()));
+        const counterNode = nodes.find(n => E.counter.test(n.desc));
+        const m = counterNode ? counterNode.desc.match(E.counter) : null;
+        return {
+            rows: nodes.filter(n => E.row.test(n.desc.trim())).map(n => ({ desc: n.desc.trim(), selected: /^Selected\./i.test(n.desc.trim()), node: n })),
+            counter: m ? { selected: Number(m[1]), total: Number(m[2]) } : null,
+            selectAll: find(E.selectAll), clearAll: find(E.clearAll), cancel: find(E.cancel), confirm: find(E.confirm),
+        };
+    }
+
+    // Every exit-mode row, scrolled through: [{ desc, selected }], then scrolled back to the top.
+    async collectExitModeRows(maxScrolls = 6) {
+        const seen = new Map();
+        const key = d => d.replace(/^(Selected|Unselected)\.\s*/i, '').split(/\s*Quantity:/)[0];
+        const add = s => s.rows.forEach(r => seen.set(key(r.desc), { desc: r.desc, selected: r.selected }));
+        add(await this.getExitModeState());
+        for (let i = 0; i < maxScrolls; i++) {
+            const before = seen.size;
+            await this.swipe('down');
+            await this.pause(700);
+            add(await this.getExitModeState());
+            if (seen.size === before) break;
+        }
+        for (let i = 0; i < maxScrolls; i++) { await this.swipe('up'); await this.pause(400); }
+        return [...seen.values()];
+    }
+
+    // Taps one exit-mode button by its EXIT_MODE key ('selectAll' / 'clearAll' / 'cancel', or a row
+    // node via tapExitModeRow). 'confirm' is refused here.
+    async tapExitModeButton(key) {
+        if (key === 'confirm') throw new Error('Refusing to tap Confirm Exit Positions here - use tapConfirmExitPositions()');
+        const node = (await this.getExitModeState())[key];
+        if (!node) return false;
+        await this.tapNode(node);
+        await this.pause(1500);
+        return true;
+    }
+
+    async tapExitModeRow(row) {
+        await this.tapNode(row.node);
+        await this.pause(1200);
+    }
+
+    // Confirm Exit Positions - only to see its Yes / No popup, which is then answered No. Gated:
+    // without EXIT_POSITIONS_POPUP_TEST=1 it refuses, because if the app ever skips the popup this
+    // tap squares off every selected position at market price.
+    async tapConfirmExitPositions() {
+        if (process.env.EXIT_POSITIONS_POPUP_TEST !== '1') throw new Error('Refusing to tap Confirm Exit Positions without EXIT_POSITIONS_POPUP_TEST=1');
+        const hits = (await this.getDescribedElements()).filter(n => PortfolioPage.EXIT_MODE.confirm.test(n.desc.trim()));
+        if (hits.length !== 1) throw new Error(`Refusing to tap Confirm Exit Positions: ${hits.length} such buttons found`);
+        await this.tapNode(hits[0]);
+        await this.pause(1500);
+        return true;
+    }
+
+    // The Yes / No confirmation popup (not captured yet - content-desc or text, either case):
+    // { yes, no, message } nodes / text, or null when there is no No button on screen.
+    async readExitConfirmPopup(timeout = 5000) {
+        const deadline = Date.now() + timeout;
+        do {
+            const nodes = [
+                ...(await this.getDescribedElements()).map(n => ({ ...n, label: n.desc.trim() })),
+                ...(await this.getTextElements()).map(n => ({ ...n, label: String(n.text).trim() })),
+            ];
+            // Exact button labels only ("No", "NO", "No, Double tap ...") - not a sentence starting "No ...".
+            const no = nodes.find(n => /^no(\s*[,.]|$)/i.test(n.label));
+            if (no) {
+                const yes = nodes.find(n => /^yes(\s*[,.]|$)/i.test(n.label));
+                const message = nodes.map(n => n.label).find(l => /exit|close|square/i.test(l) && !PortfolioPage.EXIT_MODE.confirm.test(l) && !PortfolioPage.EXIT_MODE.cancel.test(l) && !PortfolioPage.EXIT_MODE.counter.test(l) && !/^Exit Positions mode/i.test(l)) || null;
+                return { yes, no, message };
+            }
+            await this.pause(500);
+        } while (Date.now() < deadline);
+        return null;
+    }
+
+    // Answers the popup No - the only answer this code ever gives.
+    async tapExitConfirmNo(popup) {
+        if (!popup || !popup.no || !/^no(\s*[,.]|$)/i.test(popup.no.label)) throw new Error('Refusing to tap: no clear No button');
+        await this.tapNode(popup.no);
+        await this.pause(1500);
+    }
+
+    // Position filter: not captured yet - open when a filter sheet's own controls appear (Apply /
+    // Reset / Clear / Sort / a "Filter(s)" title) that the Positions list doesn't have. The list's own
+    // "Filter Positions, ..." icon is excluded (it starts with "Filter").
+    async isPositionsFilterOpen(timeout = 5000) {
+        const re = /^(apply|reset|clear( all)?|sort( by)?|filters?|filter by)\b/i;
+        try {
+            await this.driver.waitUntil(async () => (await this.getAllLabels())
+                .some(n => re.test(n.label.trim()) && !/^Filter Positions\b/i.test(n.label.trim()) && !/^Clear Search\b/i.test(n.label.trim())), { timeout, interval: 500 });
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
     // Pledge opens an in-app browser (ui_dumps/portfolio_pledge.xml: an android.webkit.WebView on
     // myglobe.globecapital.com inside a browser tab - "Close tab" / "Share" / "Minimize tab"). It is
     // closed with the device back button.

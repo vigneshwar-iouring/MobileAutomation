@@ -13,7 +13,9 @@ console.log(`Logging this run to: ${logFile}`);
 // Add Alert, Option Chain, BUY MORE / SELL, SQUARE OFF and CONVERT - each only OPENS a screen,
 // which is checked and left with back / Close. On an Order Pad its BUY / SELL is never tapped; on
 // the Convert screen its Convert button is never tapped (only the Convert to dropdown and the Qty
-// box, set back to the original). Exit Positions is never tapped.
+// box, set back to the original). Exit Positions mode is entered (rows ticked, Select All / Clear
+// All) and left with Cancel; its Confirm Exit Positions - which squares off the selected positions at
+// market price - is tapped ONLY with EXIT_POSITIONS_POPUP_TEST=1, and its popup is only answered No.
 //
 // Sub-tabs:
 //   Today       - every buy and sell executed today, ALL segments (equity and derivatives).
@@ -26,7 +28,10 @@ console.log(`Logging this run to: ${logFile}`);
 //
 // TC 1 launch | TC 2 on Portfolio (Portfolio in the bottom navigation if not) | TC 3 Positions tab,
 // its count, Today the default sub-tab | TC 4 Today sub-tab: rows vs its own count | TC 5 the same
-// on Derivatives, every Derivatives row is NFO / BFO / CDS / MCX, every Today derivative row is on Derivatives (the rest are
+// on Derivatives | TC 4a-d / 5a-d per sub-tab: Exit Positions shown only when positions are listed (never
+// tapped), search a listed symbol + Clear + Cancel, Filter opens, Alerts opens | TC 4e-h Today's Exit
+// Positions screen: open positions listed, tick / untick, Select All / Clear All / Select All, Confirm
+// -> Yes / No popup -> No (only with EXIT_POSITIONS_POPUP_TEST=1), Cancel, nothing exited | TC 5 also: every Derivatives row is NFO / BFO / CDS / MCX, every Today derivative row is on Derivatives (the rest are
 // carried forward), then the Positions count vs the sub-tabs (same rule
 // as Holdings.test.js / R58) | TC 6 click every Today symbol: row (name, expiry for derivatives, P&L value
 // and %, LTP, change value and %, Qty, Avg, order tag) and detail sheet (the same plus Buy / Sell
@@ -46,6 +51,13 @@ console.log(`Logging this run to: ${logFile}`);
 // sub-tab is saved to ui_dumps/portfolio_position_details_<subtab>.xml.
 
 const tc = (no, text) => console.log(`\nTC ${no}: ${text}`);
+
+// PNL_ONLY=1: TC 1-7 with each symbol's details / P&L and the cumulative P&L, but none of the sheet
+// buttons clicked through (TC 6b-g / 7b-g) and no TC 8.
+const PNL_ONLY = process.env.PNL_ONLY === '1';
+// CONTROLS_ONLY=1: TC 1-5 with the Search / Filter / Alerts / Exit Positions checks (4a-h, 5a-d),
+// without clicking through each symbol (TC 6 / 7) or TC 8.
+const CONTROLS_ONLY = process.env.CONTROLS_ONLY === '1';
 
 // Derivatives = NFO, BFO (F&O), CDS (currency) and MCX (commodity). Derivative markers: option /
 // future type, an expiry date ("25NOV", "27 NOV 2025"), or one of those exchanges. Non-derivative
@@ -208,6 +220,9 @@ async function checkPosition(portfolio, subTab, raw, { executedToday, dumpName }
     const closed = await portfolio.closePositionDetails();
     const f = d.fields;
     const v = k => (f[k] ? f[k].value : null);
+    // Change value as the app shows it - read from the Order Pad header (never calculated).
+    const exchange = (raw.match(/Exchange:\s*([A-Z]+)/i) || [])[1] || null;
+    const pad = await fetchChangeFromOrderPad(portfolio, raw, subTab, d.buttons, exchange);
 
     // Row: what the row's accessibility text carries. Values drawn on the row but not in its
     // accessibility text (as on Holdings) are reported and verified on the detail sheet instead.
@@ -229,8 +244,23 @@ async function checkPosition(portfolio, subTab, raw, { executedToday, dumpName }
     if (row.qty && f.qty) console.log(`${symbol} row Qty ${row.qty.value} matches the sheet (${f.qty.value}): ${verdict(row.qty.value === f.qty.value)}`);
     if (row.avg && f.avg) console.log(`${symbol} row Avg ${fmt(row.avg.value)} matches the sheet (${fmt(f.avg.value)}): ${verdict(near(row.avg.value, f.avg.value))}`);
 
-    // Detail sheet: every field shown.
-    console.log(`${symbol} sheet: ${SHEET_FIELDS.map(([k, n]) => `${n} ${f[k] ? f[k].raw.replace(/\n/g, ' ') : 'n/a'}`).join(' | ')}`);
+    // Change value: the sheet exposes only the percent (with the LTP); the value comes from the app's
+    // Order Pad header (fetched above), or from the sheet itself if it ever exposes one.
+    const changeVal = f.change && f.change.value != null ? f.change.value : (pad.value ?? null);
+    const changeSrc = f.change && f.change.value != null ? 'sheet' : pad.value != null ? `Order Pad, LTP ${fmt(pad.ltp)}` : null;
+
+    // Detail sheet: every field shown, once each as "Label: value".
+    const QTY_KEYS = ['qty', 'buyQty', 'sellQty'];
+    const showField = (k, n) => {
+        if (k === 'change') {
+            if (changePct == null && changeVal == null) return `${n}: n/a`;
+            return `${n}: ${changeVal != null ? fmt(changeVal) : 'n/a'} (${fmt(changePct)}%)${changeSrc ? ` [value from ${changeSrc}]` : ''}`;
+        }
+        if (!f[k] || f[k].value == null) return `${n}: n/a`;
+        const val = QTY_KEYS.includes(k) ? f[k].value : fmt(f[k].value);
+        return `${n}: ${val}${f[k].percent != null ? ` (${fmt(f[k].percent)}%)` : ''}`;
+    };
+    console.log(`${symbol} sheet: ${SHEET_FIELDS.map(([k, n]) => showField(k, n)).join(' | ')}`);
     const baseSym = normSymbol(symbol).match(/^[A-Z&-]+/);
     const named = !!baseSym && d.labels.some(t => normSymbol(t).includes(baseSym[0]));
     console.log(`${symbol} name on the detail sheet: ${verdict(named)}`);
@@ -242,11 +272,11 @@ async function checkPosition(portfolio, subTab, raw, { executedToday, dumpName }
     }
     console.log(`${symbol} Change percent shown${changePct != null ? ` (${fmt(changePct)}%)` : ''}: ${verdict(changePct != null)}`);
     if (f.change && f.change.value != null) {
-        console.log(`${symbol} Change value shown (${fmt(f.change.value)}): PASS`);
-    } else if (f.ltp && changePct != null && changePct > -100) {
-        // Not in the accessibility text - derived from LTP and change %: LTP - LTP / (1 + % / 100).
-        const derived = round2(f.ltp.value - f.ltp.value / (1 + changePct / 100));
-        console.log(`${symbol} Change value: not in the sheet's accessibility text (only the percent is) - derived from LTP ${fmt(f.ltp.value)} and ${fmt(changePct)}% = ${fmt(derived)}`);
+        console.log(`${symbol} Change value shown on the sheet (${fmt(f.change.value)}): PASS`);
+    } else if (pad.value != null) {
+        console.log(`${symbol} Change value from the app's Order Pad header (${pad.exchange}: LTP ${fmt(pad.ltp)}, Change ${fmt(pad.value)}, ${fmt(pad.percent)}%): PASS`);
+    } else {
+        console.error(`FAIL: ${symbol} Change value could not be fetched from the app - ${pad.error}`);
     }
     const tags = [...new Set([...rowTags, ...d.tags])];
     console.log(`${symbol} order tag shown (${tags.join(', ') || 'none'}): ${verdict(tags.length > 0)}`);
@@ -254,7 +284,7 @@ async function checkPosition(portfolio, subTab, raw, { executedToday, dumpName }
 
     // Buy / sell order, from the sheet's Buy Qty and Sell Qty:
     //   Buy Qty > Sell Qty -> buy order;  Sell Qty > Buy Qty -> sell order;
-    //   equal              -> closed position - it may show either BUY MORE or SELL.
+    //   equal              -> closed position - it shows only BUY MORE (never SELL).
     // Only when Buy / Sell Qty weren't read does the sign of the shown Qty decide.
     const buyQ = v('buyQty'), sellQ = v('sellQty'), qty = v('qty');
     const bothRead = buyQ != null && sellQ != null;
@@ -287,10 +317,10 @@ async function checkPosition(portfolio, subTab, raw, { executedToday, dumpName }
         console.log(`${symbol} SELL shown (sell order): ${verdict(b.sell)}`);
         if (b.buyMore) console.error(`FAIL: ${symbol} is a sell order but shows BUY MORE instead of SELL`);
     } else if (side === 'closed') {
-        // A closed position (Buy Qty = Sell Qty) still shows its Qty and a BUY MORE or SELL button.
-        const shown = [b.buyMore && 'BUY MORE', b.sell && 'SELL'].filter(Boolean);
+        // A closed position (Buy Qty = Sell Qty) still shows its Qty, and only BUY MORE - never SELL.
         console.log(`${symbol} closed (Buy Qty = Sell Qty) - Qty shown (${qty ?? 'n/a'}): ${verdict(qty != null)}`);
-        console.log(`${symbol} closed (Buy Qty = Sell Qty) - BUY MORE or SELL shown (${shown.join(' / ') || 'neither'}): ${verdict(shown.length > 0)}`);
+        console.log(`${symbol} closed (Buy Qty = Sell Qty) - BUY MORE shown: ${verdict(b.buyMore)}`);
+        if (b.sell) console.error(`FAIL: ${symbol} is closed (Buy Qty = Sell Qty) but shows SELL - only BUY MORE should be shown`);
     } else {
         console.error(`FAIL: ${symbol} buy / sell order not determined - Buy Qty, Sell Qty and Qty not read`);
     }
@@ -341,10 +371,22 @@ async function checkPosition(portfolio, subTab, raw, { executedToday, dumpName }
     }
     if (A != null && net != null && v('openValue') != null)
         console.log(`${symbol} Open Value ${fmt(v('openValue'))} vs |Net Qty| x Avg = ${fmt(round2(Math.abs(net) * A * mult))}: ${verdict(near(Math.abs(v('openValue')), Math.abs(net) * A * mult, 0.01 + Math.abs(net) * mult * 0.005))}`);
-    // Change value vs change percent: % = change / (LTP - change) x 100 (Prev.close = LTP - change).
-    if (L != null && f.change && f.change.value != null && changePct != null && L - f.change.value) {
-        const pct = round2((f.change.value / (L - f.change.value)) * 100);
-        console.log(`${symbol} Change % ${fmt(changePct)} vs Change / (LTP - Change) x 100 = ${fmt(pct)}: ${verdict(near(changePct, pct, 0.02))}`);
+    // Change value vs change percent, all three as the app shows them at one moment:
+    // % = Change / (LTP - Change) x 100 (Prev.close = LTP - Change).
+    //   Sheet change value (if ever exposed): with the sheet's own LTP and %.
+    //   Otherwise the Order Pad header's LTP / Change / % (read together, so prices can't tick between).
+    const cLtp = f.change && f.change.value != null ? L : pad.ltp;
+    const cPct = f.change && f.change.value != null ? changePct : pad.percent;
+    if (changeVal != null && cLtp != null && cPct != null && cLtp - changeVal) {
+        const pct = round2((changeVal / (cLtp - changeVal)) * 100);
+        console.log(`${symbol} Change % ${fmt(cPct)} vs Change / (LTP - Change) x 100 = ${fmt(changeVal)} / (${fmt(cLtp)} - ${fmt(changeVal)}) x 100 = ${fmt(pct)}: ${verdict(near(cPct, pct, 0.02))}`);
+        // A fall must carry its minus sign on the value as well as on the percent.
+        if (cPct !== 0 && changeVal !== 0) console.log(`${symbol} Change value sign matches its percent (${fmt(changeVal)} / ${fmt(cPct)}%): ${verdict(Math.sign(cPct) === Math.sign(changeVal))}`);
+    }
+    // The Order Pad's change % vs the sheet's, when both were read at the same LTP.
+    if (pad.percent != null && changePct != null && pad.ltp != null && L != null) {
+        if (near(pad.ltp, L, 0)) console.log(`${symbol} Change % on the sheet ${fmt(changePct)} vs on the Order Pad ${fmt(pad.percent)} (same LTP ${fmt(L)}): ${verdict(near(changePct, pad.percent, 0.01))}`);
+        else console.log(`${symbol} Change % on the sheet ${fmt(changePct)} (LTP ${fmt(L)}) vs on the Order Pad ${fmt(pad.percent)} (LTP ${fmt(pad.ltp)}) - LTP ticked between the two, not compared`);
     }
     return {
         symbol, pnl: v('pnl'), computedPnl: computed, marketValue: L != null && net != null ? Math.abs(net) * L * mult : 0,
@@ -383,6 +425,8 @@ const baseSymbol = s => (String(s || '').toUpperCase().match(/^[A-Z&-]+/) || [''
 // the sub-tab are tapped as needed. True when the sub-tabs are on screen.
 async function backToPositions(portfolio, subTab) {
     await portfolio.hideKeyboardIfShown();
+    // Search mode hides the sub-tabs but keeps the bottom navigation - leave it with Exit Search.
+    if (await portfolio.isPositionsSearchOpen()) await portfolio.tapPositionsSearchButton('exit');
     for (let i = 0; i < 5; i++) {
         const labels = await portfolio.getAllLabels();
         const sheet = labels.some(n => PortfolioPage.POSITION_SHEET_RE.test(n.label) || PortfolioPage.CONVERT_SCREEN_RE.test(n.label));
@@ -400,6 +444,38 @@ async function backToPositions(portfolio, subTab) {
     const tabs = await portfolio.getPositionSubTabs();
     if (tabs && !tabs[subTab].selected) await portfolio.tapPositionSubTab(subTab);
     return !!(await portfolio.getPositionSubTabs());
+}
+
+// The change value as the app itself shows it. The Positions row and sheet draw it next to the
+// percent but don't expose it (their accessibility text has only the LTP and percent - live
+// 2026-11-25); the Order Pad header does, signed:
+//   "MCX \nExchange is MCX and the last traded price is 3.00\nChange is -0.80\nChange percentage is -21.05 percent"
+// (ui_dumps/portfolio_position_more_orderpad_mcx.xml). The pad is opened from the sheet's BUY MORE /
+// SELL / SQUARE OFF and left with back - nothing on it is tapped. A stock listed on both NSE and BSE
+// shows only the LTP on each exchange chip (ui_dumps/portfolio_position_more_orderpad_nse.xml), so
+// for it there is no change value to fetch.
+// Returns { exchange, ltp, value, percent } or { error, ltp? }.
+const PAD_CHANGE_RE = /^(NSE|BSE|NFO|BFO|MCX|CDS)\s*\n\s*Exchange is \1 and the last traded price is ([-+]?[\d,]+(?:\.\d+)?)(?:\s*\n\s*Change is ([-+]?[\d,]+(?:\.\d+)?))?(?:\s*\n\s*Change percentage is ([-+]?[\d,]+(?:\.\d+)?) percent)?/i;
+async function fetchChangeFromOrderPad(portfolio, raw, subTab, buttons, exchange) {
+    const key = ['buyMore', 'sell', 'squareOff'].find(k => buttons[k]);
+    if (!key) return { error: 'no BUY MORE / SELL / SQUARE OFF on the sheet to open the Order Pad from' };
+    const baseline = await portfolio.openPositionDetails(raw);
+    if (!baseline) {
+        await backToPositions(portfolio, subTab);
+        return { error: 'the sheet did not reopen' };
+    }
+    let chips = [];
+    if (await portfolio.tapPositionButton(key, { opensOrderPad: true })) {
+        for (let i = 0; i < 4 && !chips.length; i++) {
+            chips = (await portfolio.getDescribedElements()).map(n => n.desc.trim().match(PAD_CHANGE_RE)).filter(Boolean);
+            if (!chips.length) await portfolio.pause(700);
+        }
+    }
+    await backToPositions(portfolio, subTab);
+    const chip = chips.find(m => exchange && m[1].toUpperCase() === exchange.toUpperCase()) || (chips.length === 1 ? chips[0] : null);
+    if (!chip) return { error: chips.length ? `no ${exchange} chip on the Order Pad (${chips.map(m => m[1]).join(', ')})` : 'the Order Pad header was not found' };
+    if (chip[3] == null) return { error: `the app's Order Pad shows only the LTP for ${chip[1]} (${chips.length > 1 ? 'listed on both NSE and BSE' : 'no change'}) - the change value isn't exposed anywhere on Positions`, ltp: num(chip[2]) };
+    return { exchange: chip[1].toUpperCase(), ltp: num(chip[2]), value: num(chip[3]), percent: chip[4] != null ? num(chip[4]) : null };
 }
 
 // Back to the list, then the position's sheet opened afresh. True when it's open.
@@ -583,8 +659,8 @@ async function checkPositionButtons(portfolio, pad, p, subTab, no, dumped) {
     }
 
     // Buy order -> BUY MORE -> Buy Order Pad; sell order -> SELL -> Sell Order Pad; a closed
-    // position shows either.
-    const moreKey = p.side === 'buy' ? 'buyMore' : p.side === 'sell' ? 'sell' : b.buyMore ? 'buyMore' : b.sell ? 'sell' : null;
+    // position (Buy Qty = Sell Qty) shows only BUY MORE.
+    const moreKey = p.side === 'sell' ? 'sell' : p.side === 'unknown' ? (b.buyMore ? 'buyMore' : b.sell ? 'sell' : null) : 'buyMore';
     const moreSide = moreKey === 'sell' ? 'Sell' : 'Buy';
     tc(`${no}e`, `${sym}: clicking ${moreKey === 'sell' ? 'SELL' : 'BUY MORE'} and verifying the ${moreSide} Order Pad...`);
     if (!moreKey || !b[moreKey]) console.log(`${moreKey === 'sell' ? 'SELL' : 'BUY MORE'} not on the sheet - already reported`);
@@ -630,6 +706,10 @@ async function checkSubTabPositions(portfolio, no, name, rows, isExecutedToday, 
         }));
     }
     await checkCumulativePnl(portfolio, no, name, rows, results);
+    if (PNL_ONLY) {
+        console.log(`\nPNL_ONLY: ${name} buttons (TC ${no}b-g) not clicked through`);
+        return results;
+    }
 
     const pad = new OrderPadPage(portfolio.driver);
     for (const p of results.filter(Boolean)) {
@@ -643,18 +723,43 @@ async function checkSubTabPositions(portfolio, no, name, rows, isExecutedToday, 
     return results;
 }
 
-async function checkCumulativePnl(portfolio, no, name, rows, results) {
-    tc(`${no}a`, `Verifying the cumulative P&L below the ${name} tab against the listed symbols...`);
-    // Opening lower rows can scroll the list - bring the P&L under the sub-tabs back into view.
+// The cumulative P&L under the sub-tabs: { shown, value } (value null when not found).
+// Opening lower rows can scroll the list - bring it back into view first.
+async function readCumulativePnl(portfolio) {
     let shown = await portfolio.getPositionsPnl();
     for (let i = 0; shown == null && i < 4; i++) {
         await portfolio.swipe('up');
         await portfolio.pause(500);
         shown = await portfolio.getPositionsPnl();
     }
-    const header = PortfolioPage.parseValuePercent(shown).value ?? num((String(shown || '').match(/[+-]?[\d,]+(?:\.\d+)?/) || [])[0]);
-    console.log(`Cumulative P&L shown: ${shown ?? 'not found'}`);
-    if (header == null) {
+    const value = shown == null ? null
+        : PortfolioPage.parseValuePercent(shown).value ?? num((String(shown).match(/[+-]?[\d,]+(?:\.\d+)?/) || [])[0]);
+    return { shown, value };
+}
+
+// Every row's P&L, read back-to-back from its sheet (nothing else checked, so it's quick).
+// Null when a sheet couldn't be opened or its P&L read.
+async function readAllPnl(portfolio, rows) {
+    const pnls = [];
+    for (const raw of rows) {
+        const baseline = await portfolio.openPositionDetails(raw);
+        const d = baseline ? await portfolio.readPositionDetails(baseline) : null;
+        await portfolio.closePositionDetails();
+        if (!d || !d.fields.pnl || d.fields.pnl.value == null) return null;
+        pnls.push(d.fields.pnl.value);
+    }
+    return pnls;
+}
+
+// Cumulative P&L vs the sum of the symbols' P&L. The symbols can only be read one sheet at a time
+// and prices stream meanwhile, so a mismatch while prices tick is re-checked on a snapshot:
+// cumulative -> every symbol's P&L -> cumulative again. Only a snapshot whose cumulative didn't
+// change during the reads is compared (to the rounding tolerance); a mismatch there is a FAIL.
+async function checkCumulativePnl(portfolio, no, name, rows, results) {
+    tc(`${no}a`, `Verifying the cumulative P&L below the ${name} tab against the listed symbols...`);
+    const first = await readCumulativePnl(portfolio);
+    console.log(`Cumulative P&L shown: ${first.shown ?? 'not found'}`);
+    if (first.value == null) {
         await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}_pnl`);
         console.error(`FAIL: cumulative P&L not found below the ${name} tab`);
         return results;
@@ -664,13 +769,37 @@ async function checkCumulativePnl(portfolio, no, name, rows, results) {
         console.error(`FAIL: P&L read for ${read.filter(r => r.pnl != null).length} of ${rows.length} position(s) - cumulative P&L not compared`);
         return results;
     }
+    const tol = 0.01 * read.length;
+    const symbols = pnls => read.map((r, i) => `${r.symbol} ${fmt(pnls[i])}`).join(' + ');
     const sum = round2(read.reduce((t, r) => t + r.pnl, 0));
-    const tol = pricesMayTick() ? Math.max(1, read.reduce((t, r) => t + r.marketValue, 0) * 0.01) : 0.01 * read.length;
-    console.log(`Cumulative P&L ${fmt(header)} vs sum of the symbols' P&L (${read.map(r => `${r.symbol} ${fmt(r.pnl)}`).join(' + ')}) = ${fmt(sum)}: ${valueVerdict(header, sum, tol)}${tol > 0.01 * read.length ? ` (tolerance ${fmt(tol)} - prices may tick)` : ''}`);
+    const matched = near(first.value, sum, tol);
+    console.log(`Cumulative P&L ${fmt(first.value)} vs sum of the symbols' P&L as read on their sheets (${symbols(read.map(r => r.pnl))}) = ${fmt(sum)}: ${matched ? valueVerdict(first.value, sum, tol) : pricesMayTick() ? `differs by ${fmt(round2(first.value - sum))} - prices streamed between the reads, re-checking on a snapshot` : valueVerdict(first.value, sum, tol)}`);
     if (read.every(r => r.computedPnl != null)) {
         const calc = round2(read.reduce((t, r) => t + r.computedPnl, 0));
-        console.log(`Cumulative P&L ${fmt(header)} vs sum of the calculated P&L = ${fmt(calc)}: ${valueVerdict(header, calc, tol)}`);
+        console.log(`Sum of the calculated P&L = ${fmt(calc)} (each symbol's own P&L check is reported on its sheet above)`);
     }
+    if (matched || !pricesMayTick()) return results;
+
+    // Prices tick: snapshot cumulative -> all symbols -> cumulative, up to 3 times.
+    let last = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        const before = await readCumulativePnl(portfolio);
+        const pnls = await readAllPnl(portfolio, rows);
+        const after = await readCumulativePnl(portfolio);
+        if (before.value == null || after.value == null || !pnls) {
+            console.error(`FAIL: snapshot ${attempt} - ${!pnls ? 'a symbol\'s P&L could not be read' : 'cumulative P&L not found'}`);
+            return results;
+        }
+        const snapSum = round2(pnls.reduce((t, p) => t + p, 0));
+        last = { before, after, snapSum };
+        if (before.value !== after.value) {
+            console.log(`Snapshot ${attempt}: cumulative moved ${fmt(before.value)} -> ${fmt(after.value)} while the symbols were read - not comparable, retrying`);
+            continue;
+        }
+        console.log(`Snapshot ${attempt} (cumulative steady at ${fmt(before.value)} during the reads): sum of the symbols' P&L (${symbols(pnls)}) = ${fmt(snapSum)}: ${valueVerdict(before.value, snapSum, tol)}`);
+        return results;
+    }
+    console.log(`Cumulative P&L not verified - prices kept streaming during all 3 snapshots (last: cumulative ${fmt(last.before.value)} -> ${fmt(last.after.value)}, symbols' sum ${fmt(last.snapSum)}). Re-run when the market is quieter or closed.`);
     return results;
 }
 
@@ -715,6 +844,243 @@ async function checkPositionSubTab(portfolio, no, name) {
         console.log(`Rows listed ${rows.length} vs ${name} count ${sub.count}: ${rows.length === sub.count ? 'PASS' : 'FAIL'}`);
     }
     return { count: sub.count, rows };
+}
+
+// The bar under the sub-tabs (Search / Filter / Alerts / Exit Positions) on `name`, whose rows were
+// read in TC `no`:
+//   a - Exit Positions shown when any position is listed, NOT shown when none is (never tapped);
+//   b - Search: a symbol from the list typed in, only matching rows listed and it among them,
+//       Clear empties the box, Cancel leaves search with the full list back;
+//   c - Filter opens the position filters (left with back);
+//   d - Alerts opens the Alerts screen (left with back).
+const visibleRows = async portfolio => (await portfolio.getDescribedElements()).map(n => n.desc).filter(d => /^Position for stock:/i.test(d));
+async function bringControlsIntoView(portfolio) {
+    for (let i = 0; i < 4; i++) {
+        const c = await portfolio.getPositionsControls();
+        if (c.search || c.filter || c.alerts || c.exit) return c;
+        await portfolio.swipe('up');
+        await portfolio.pause(500);
+    }
+    return portfolio.getPositionsControls();
+}
+
+async function checkPositionsControls(portfolio, no, name, rows) {
+    tc(`${no}a`, `Positions -> ${name}: verifying Exit Positions is ${rows.length ? '' : 'NOT '}displayed (${rows.length} position(s) listed)...`);
+    let c = await bringControlsIntoView(portfolio);
+    if (rows.length) console.log(`Exit Positions displayed on ${name} (positions listed): ${verdict(c.exit)}`);
+    else console.log(`Exit Positions NOT displayed on ${name} (no positions listed): ${verdict(!c.exit)}`);
+    if (!c.exit === !!rows.length) await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}_exit_positions`);
+
+    tc(`${no}b`, `Positions -> ${name}: searching a listed symbol with the search icon, then Clear and Cancel...`);
+    if (!rows.length) {
+        console.log(`No ${name} positions listed - nothing to search for (search icon ${c.search ? 'shown' : 'not shown'})`);
+    } else if (!c.search) {
+        await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}_no_search`);
+        console.error(`FAIL: search icon not displayed on ${name}`);
+    } else {
+        // Search by the first row's base symbol ("NATGASMINI" of "NATGASMINI 23DEC 500 CE").
+        const target = rows[0];
+        const query = PortfolioPage.positionSymbol(target).split(/\s+/)[0];
+        const wanted = rows.filter(r => PortfolioPage.positionSymbol(r).toUpperCase().includes(query.toUpperCase()));
+        await portfolio.tapPositionsControl('search');
+        const bar = !!(await portfolio.findPositionsSearchBox()) && (await portfolio.isPositionsSearchOpen());
+        console.log(`Search box opened after clicking the search icon: ${verdict(bar)}`);
+        if (!bar) {
+            await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}_search_not_opened`);
+        } else {
+            const text = await portfolio.typePositionsSearch(query);
+            console.log(`Entered "${query}" in the search box - it reads "${text ?? ''}": ${verdict(!!text && text.toUpperCase() === query.toUpperCase())}`);
+            await portfolio.hideKeyboardIfShown();
+            await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}_search`);
+            const listed = await visibleRows(portfolio);
+            const others = listed.filter(r => !PortfolioPage.positionSymbol(r).toUpperCase().includes(query.toUpperCase()));
+            console.log(`Searched symbol listed (${listed.map(r => PortfolioPage.positionSymbol(r)).join(', ') || 'none'}): ${verdict(listed.some(r => rowKey(r) === rowKey(target)))}`);
+            console.log(`Only "${query}" positions listed (${wanted.length} expected, ${listed.length} shown): ${verdict(!others.length && listed.length === wanted.length)}`);
+            if (others.length) console.error(`FAIL: non-matching positions listed for "${query}": ${others.map(r => PortfolioPage.positionSymbol(r)).join(', ')}`);
+
+            // Clear (x) in the search bar: empties the box, the full list is back, still searching.
+            if (await portfolio.tapPositionsSearchButton('clear')) {
+                console.log('Clear button shown in the search bar: PASS');
+                const after = await portfolio.getPositionsSearchText();
+                console.log(`Search box empty after clicking Clear (reads "${after ?? ''}"): ${verdict(after === '')}`);
+                const all = await visibleRows(portfolio);
+                console.log(`Full ${name} list back after Clear (${all.length} row(s) on screen): ${verdict(all.length >= Math.min(rows.length, 3))}`);
+            } else {
+                await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}_search_no_clear`);
+                console.error('FAIL: Clear button not shown in the search bar while it has text');
+            }
+
+            // Cancel = "Exit Search": leaves search mode, the sub-tabs and controls are back.
+            await portfolio.hideKeyboardIfShown();
+            if (await portfolio.tapPositionsSearchButton('exit')) {
+                console.log('Cancel (Exit Search) button shown beside the search bar: PASS');
+                const gone = !(await portfolio.isPositionsSearchOpen());
+                console.log(`Search closed after clicking Cancel: ${verdict(gone)}`);
+                const tabs = await portfolio.getPositionSubTabs();
+                console.log(`Sub-tabs and ${name} list back after Cancel: ${verdict(!!tabs && tabs[name].selected && (await visibleRows(portfolio)).length > 0)}`);
+            } else {
+                console.error('FAIL: Cancel (Exit Search) button not shown beside the search bar');
+            }
+        }
+        await backToPositions(portfolio, name);
+    }
+
+    tc(`${no}c`, `Positions -> ${name}: clicking the filter icon and verifying the filter opens...`);
+    c = await bringControlsIntoView(portfolio);
+    if (!c.filter) {
+        await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}_no_filter`);
+        console.error(`FAIL: filter icon not displayed on ${name}`);
+    } else {
+        await portfolio.tapPositionsControl('filter');
+        const open = await portfolio.isPositionsFilterOpen();
+        await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}_filter`);
+        console.log(`Filter opened: ${verdict(open)}`);
+        await portfolio.driver.back();
+        await portfolio.pause(1000);
+        console.log(`Back on Positions -> ${name}: ${verdict(await backToPositions(portfolio, name))}`);
+    }
+
+    tc(`${no}d`, `Positions -> ${name}: clicking the alert icon and verifying the Alerts screen...`);
+    c = await bringControlsIntoView(portfolio);
+    if (!c.alerts) {
+        await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}_no_alerts`);
+        console.error(`FAIL: alert icon not displayed on ${name}`);
+    } else {
+        await portfolio.tapPositionsControl('alerts');
+        const open = await portfolio.isAlertsScreenOpen();
+        if (!open) await portfolio.dumpPageSource(`portfolio_positions_${name.toLowerCase()}_alerts`);
+        console.log(`Alerts screen displayed: ${verdict(open)}`);
+        console.log(`Back on Positions -> ${name}: ${verdict(await backToPositions(portfolio, name))}`);
+    }
+}
+
+// Exit Positions screen on `name` (its rows read in TC `no`). Open positions only = Quantity not 0.
+//   Exit Positions -> the open positions listed (and no closed one) -> first symbol's checkbox
+//   ticked then unticked -> Select All -> Clear All -> Select All -> Confirm Exit Positions -> the
+//   Yes / No popup -> No -> Cancel -> back on Positions with every position as before.
+// Confirm squares off the selected positions at MARKET PRICE if the app ever skips its popup, so it
+// is tapped only with EXIT_POSITIONS_POPUP_TEST=1; without it the flow stops after the second
+// Select All, clears the selection and cancels. The popup is only ever answered No.
+const isOpenPosition = r => !/Quantity:\s*0(?:\.0+)?\b/i.test(r);
+const exitKey = d => rowKey(d.replace(/^(Selected|Unselected)\.\s*/i, ''));
+const positionSnapshot = rows => rows.map(r => `${rowKey(r)} | Qty ${(r.match(/Quantity:\s*([-\d,]+)/i) || [])[1] ?? '?'}`).sort();
+
+async function checkExitPositionsFlow(portfolio, no, name, rows) {
+    tc(`${no}e`, `Positions -> ${name}: clicking Exit Positions and verifying the open positions are listed...`);
+    const open = rows.filter(isOpenPosition);
+    if (!open.length) {
+        console.log(`No open ${name} positions - Exit Positions flow not applicable`);
+        return;
+    }
+    const before = positionSnapshot(rows);
+    await bringControlsIntoView(portfolio);
+    if (!(await portfolio.enterExitPositionsMode())) {
+        await portfolio.dumpPageSource(`portfolio_exit_positions_${name.toLowerCase()}_not_opened`);
+        console.error(`FAIL: Exit Positions screen did not open on ${name}`);
+        await backToPositions(portfolio, name);
+        return;
+    }
+    console.log('Exit Positions screen opened: PASS');
+    const listed = await portfolio.collectExitModeRows();
+    const listedKeys = new Set(listed.map(r => exitKey(r.desc)));
+    const openKeys = new Set(open.map(rowKey));
+    console.log(`Positions listed on the Exit Positions screen (${listed.length}): ${listed.map(r => PortfolioPage.positionSymbol(r.desc)).join(', ')}`);
+    const missing = open.filter(r => !listedKeys.has(rowKey(r)));
+    const extra = listed.filter(r => !openKeys.has(exitKey(r.desc)));
+    console.log(`Every open position listed (${open.length}): ${verdict(!missing.length)}${missing.length ? ` - missing ${missing.map(r => PortfolioPage.positionSymbol(r)).join(', ')}` : ''}`);
+    console.log(`Only open positions listed (no closed / Qty 0 one): ${verdict(!extra.length)}${extra.length ? ` - also ${extra.map(r => PortfolioPage.positionSymbol(r.desc)).join(', ')}` : ''}`);
+    let s = await portfolio.getExitModeState();
+    console.log(`Counter "${s.counter ? `${s.counter.selected}/${s.counter.total}` : 'n/a'} Positions will be closed" - none selected, total = open positions (${open.length}): ${verdict(!!s.counter && s.counter.selected === 0 && s.counter.total === open.length)}`);
+
+    const counterIs = async (want, label) => {
+        s = await portfolio.getExitModeState();
+        const ok = !!s.counter && s.counter.selected === want;
+        console.log(`${label} - counter ${s.counter ? `${s.counter.selected}/${s.counter.total}` : 'n/a'} (expected ${want}/${s.counter ? s.counter.total : '?'}): ${verdict(ok)}`);
+        return ok;
+    };
+
+    // First symbol's checkbox: tick, then untick.
+    tc(`${no}f`, `Exit Positions: ticking and unticking the first symbol, Select All, Clear All, Select All...`);
+    const first = s.rows[0];
+    if (!first) {
+        await portfolio.dumpPageSource(`portfolio_exit_positions_${name.toLowerCase()}_no_rows`);
+        console.error('FAIL: no position row on the Exit Positions screen');
+    } else {
+        const sym = PortfolioPage.positionSymbol(first.desc);
+        console.log(`First symbol ${sym} unselected to start: ${verdict(!first.selected)}`);
+        await portfolio.tapExitModeRow(first);
+        let r = (await portfolio.getExitModeState()).rows.find(x => exitKey(x.desc) === exitKey(first.desc));
+        console.log(`${sym} checkbox ticked after clicking it: ${verdict(!!r && r.selected)}`);
+        await counterIs(1, `${sym} selected`);
+        await portfolio.tapExitModeRow(r || first);
+        r = (await portfolio.getExitModeState()).rows.find(x => exitKey(x.desc) === exitKey(first.desc));
+        console.log(`${sym} checkbox unticked after clicking it again: ${verdict(!!r && !r.selected)}`);
+        await counterIs(0, `${sym} unselected`);
+    }
+
+    const selectAll = async label => {
+        if (!(await portfolio.tapExitModeButton('selectAll'))) {
+            await portfolio.dumpPageSource(`portfolio_exit_positions_${name.toLowerCase()}_no_select_all`);
+            console.error(`FAIL: Select All not shown (${label})`);
+            return false;
+        }
+        const all = await counterIs(open.length, `${label}: Select All clicked`);
+        s = await portfolio.getExitModeState();
+        console.log(`${label}: every visible row ticked: ${verdict(s.rows.length > 0 && s.rows.every(x => x.selected))}`);
+        console.log(`${label}: Select All changed to Clear All: ${verdict(!!s.clearAll)}`);
+        if (!s.clearAll) await portfolio.dumpPageSource(`portfolio_exit_positions_${name.toLowerCase()}_select_all`);
+        return all;
+    };
+    await selectAll('First');
+    if (await portfolio.tapExitModeButton('clearAll')) {
+        await counterIs(0, 'Clear All clicked');
+        s = await portfolio.getExitModeState();
+        console.log(`Clear All: every visible row unticked: ${verdict(s.rows.every(x => !x.selected))}`);
+        console.log(`Clear All changed back to Select All: ${verdict(!!s.selectAll)}`);
+    } else {
+        console.error('FAIL: Clear All not shown after Select All');
+    }
+    const allSelected = await selectAll('Again');
+
+    // Confirm -> popup -> No.
+    tc(`${no}g`, 'Exit Positions: clicking Exit (Confirm), verifying the Yes / No popup and clicking No...');
+    if (process.env.EXIT_POSITIONS_POPUP_TEST !== '1') {
+        console.log('Confirm Exit Positions NOT clicked - set EXIT_POSITIONS_POPUP_TEST=1 to run this step (it squares off every selected position at market price if the app ever skips its popup)');
+        await portfolio.tapExitModeButton('clearAll');
+    } else if (!allSelected) {
+        console.error('FAIL: not every open position selected - Confirm Exit Positions not clicked');
+    } else {
+        await portfolio.tapConfirmExitPositions();
+        const popup = await portfolio.readExitConfirmPopup();
+        await portfolio.dumpPageSource(`portfolio_exit_positions_${name.toLowerCase()}_confirm_popup`);
+        console.log(`Confirmation popup displayed${popup && popup.message ? ` ("${popup.message.replace(/\n/g, ' ')}")` : ''}: ${verdict(!!popup)}`);
+        if (!popup) {
+            console.error('FAIL: no Yes / No popup after Confirm Exit Positions - CHECK THE ACCOUNT: the selected positions may have been squared off');
+        } else {
+            console.log(`Yes button displayed: ${verdict(!!popup.yes)}`);
+            console.log(`No button displayed: ${verdict(!!popup.no)}`);
+            await portfolio.tapExitConfirmNo(popup);
+            const gone = !(await portfolio.readExitConfirmPopup(1500));
+            console.log(`Popup closed after clicking No: ${verdict(gone)}`);
+            console.log(`Still on the Exit Positions screen: ${verdict(await portfolio.isExitPositionsModeOpen(3000))}`);
+        }
+    }
+
+    // Cancel -> back on Positions, nothing exited.
+    tc(`${no}h`, 'Exit Positions: clicking Cancel and verifying no open position was exited...');
+    if (await portfolio.tapExitModeButton('cancel')) {
+        console.log(`Exit Positions screen closed after Cancel: ${verdict(!(await portfolio.isExitPositionsModeOpen()))}`);
+    } else {
+        console.error('FAIL: Cancel not shown on the Exit Positions screen');
+    }
+    await backToPositions(portfolio, name);
+    const tabs = await portfolio.getPositionSubTabs();
+    const nowRows = await portfolio.collectAllPositionRows();
+    const after = positionSnapshot(nowRows);
+    const changed = before.filter(x => !after.includes(x)).concat(after.filter(x => !before.includes(x)));
+    console.log(`${name} count after Cancel ${tabs ? tabs[name].count : 'n/a'} vs before ${rows.length}: ${verdict(!!tabs && tabs[name].count === rows.length)}`);
+    console.log(`No position exited - every ${name} position listed with the same quantity: ${verdict(!changed.length)}`);
+    if (changed.length) console.error(`FAIL: positions changed after the Exit Positions flow:\n  ${changed.join('\n  ')}`);
 }
 
 // Positions count vs the sub-tabs, same rule as Holdings.test.js / Regression R58: Today = every buy
@@ -773,6 +1139,12 @@ async function run() {
         const positionsCount = topTabs.Positions.count;
         console.log(`Positions count: ${positionsCount}`);
 
+        // A search left open (e.g. by an earlier run) hides the sub-tabs - close it first.
+        if (await portfolio.isPositionsSearchOpen()) {
+            console.log('Positions search was left open - closing it with Exit Search');
+            await portfolio.hideKeyboardIfShown();
+            await portfolio.tapPositionsSearchButton('exit');
+        }
         const subTabs = await portfolio.getPositionSubTabs();
         console.log(`Today / Derivatives sub-tabs shown: ${subTabs ? 'PASS' : 'FAIL'}`);
         if (!subTabs) throw new Error('Positions sub-tabs (Today / Derivatives) not found');
@@ -783,20 +1155,35 @@ async function run() {
         }
 
         const today = await checkPositionSubTab(portfolio, 4, 'Today');
+        if (!PNL_ONLY) {
+            await checkPositionsControls(portfolio, 4, 'Today', today.rows);
+            await checkExitPositionsFlow(portfolio, 4, 'Today', today.rows);
+        }
         const deriv = await checkPositionSubTab(portfolio, 5, 'Derivatives');
+        if (!PNL_ONLY) await checkPositionsControls(portfolio, 5, 'Derivatives', deriv.rows);
         await checkDerivativesSegments(portfolio, deriv.rows);
         checkTodayDerivOnDerivatives(today, deriv);
         checkPositionsCount(positionsCount, today, deriv);
 
         // Today: every row was executed today. Derivatives: a row also on Today was executed today,
         // the rest are carried forward.
-        const doneKeys = new Set(), dumped = new Set();
-        await checkSubTabPositions(portfolio, 6, 'Today', today.rows, () => true, doneKeys, dumped);
-        const todayKeys = new Set(today.rows.map(rowKey));
-        await checkSubTabPositions(portfolio, 7, 'Derivatives', deriv.rows, r => todayKeys.has(rowKey(r)), doneKeys, dumped);
+        if (CONTROLS_ONLY) {
+            console.log('\nCONTROLS_ONLY: TC 6 / 7 (each symbol) and TC 8 skipped');
+        } else {
+            const doneKeys = new Set(), dumped = new Set();
+            await checkSubTabPositions(portfolio, 6, 'Today', today.rows, () => true, doneKeys, dumped);
+            const todayKeys = new Set(today.rows.map(rowKey));
+            await checkSubTabPositions(portfolio, 7, 'Derivatives', deriv.rows, r => todayKeys.has(rowKey(r)), doneKeys, dumped);
+        }
 
-        tc(8, "Verifying no equity symbol from Positions -> Today is listed in Holdings (it moves there the next day)...");
-        await checkTodayNotInHoldings(portfolio, today.rows);
+        if (CONTROLS_ONLY) {
+            // already reported
+        } else if (PNL_ONLY) {
+            console.log('\nPNL_ONLY: TC 8 (Today equity not in Holdings) skipped');
+        } else {
+            tc(8, "Verifying no equity symbol from Positions -> Today is listed in Holdings (it moves there the next day)...");
+            await checkTodayNotInHoldings(portfolio, today.rows);
+        }
 
         console.log('\nPortfolio Positions flow completed');
     } catch (err) {
