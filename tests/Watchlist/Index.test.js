@@ -43,13 +43,14 @@ async function run() {
             await watchlistPage.clickOptionChain();
             await driver.pause(1000);
 
-            console.log('\nTC 7: Searching "tata" in Option Chain search and verifying results...');
+            console.log('\nTC 7: Searching "TATASTEEL" in Option Chain search and verifying results...');
             await watchlistPage.clickOptionChainSearch();
-            await watchlistPage.searchOptionChainSymbol('tata');
+            await watchlistPage.searchOptionChainSymbol('TATASTEEL');
+            await driver.pause(1000);
             const searchResults = await watchlistPage.getOptionChainSearchResults();
             console.log(`Search results: ${searchResults.join(', ')}`);
-            const allMatchTata = searchResults.length > 0 && searchResults.every(name => name.toUpperCase().includes('TATA'));
-            console.log(`"tata" search check: ${allMatchTata ? 'PASS (all results contain TATA)' : 'FAIL'}`);
+            const allMatchTataSteel = searchResults.length > 0 && searchResults.every(name => name.toUpperCase().includes('TATASTEEL'));
+            console.log(`"TATASTEEL" search check: ${allMatchTataSteel ? 'PASS (all results contain TATASTEEL)' : 'FAIL'}`);
 
             for (const tab of ['STOCK', 'F&O', 'COM', 'CDS']) {
                 await watchlistPage.clickOptionChainFilterTab(tab);

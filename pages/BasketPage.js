@@ -198,20 +198,45 @@ class BasketPage extends BasePage {
     // Strings that differ from a `before` string only in their numbers are ignored: the index
     // ticker (NIFTY/SENSEX LTP, change, %) rewrites itself every second and would otherwise look
     // like a new message (observed live - it made a missing toast look like a shown one).
-    // `stopWhen` (optional, async) ends the wait early, e.g. once a dialog has opened.
-    async captureNewMessages(before, timeout = 4000, stopWhen = null) {
+    // `stopWhen` (optional, given that poll's page source) ends the wait early, e.g. once a dialog
+    // has opened.
+    // Each poll is ONE getPageSource(): with enableMultiWindows on, a page source of the Basket
+    // list takes several seconds, and the earlier version (getScreenStrings = two page sources,
+    // plus an isExisting() round trip) managed a single poll ~11s after the New Basket tap -
+    // long after the ~2s "You have created maximum baskets" toast had gone (observed live).
+    // At least `minPolls` polls are made even if `timeout` runs out first.
+    async captureNewMessages(before, timeout = 4000, stopWhen = null, minPolls = 2) {
         const shape = s => s.replace(/[-+]?[\d][\d,]*(\.\d+)?/g, '#');
         const beforeShapes = new Set([...before].map(shape));
         const found = new Set();
-        const end = Date.now() + timeout;
-        while (Date.now() < end) {
-            for (const s of await this.getScreenStrings()) {
+        const start = Date.now();
+        let polls = 0;
+        while (polls < minPolls || Date.now() - start < timeout) {
+            const src = await this.driver.getPageSource();
+            polls++;
+            for (const s of BasketPage.stringsFromSource(src)) {
                 if (!before.has(s) && !beforeShapes.has(shape(s))) found.add(s);
             }
-            if (stopWhen && await stopWhen()) break;
-            await this.driver.pause(200);
+            if (stopWhen && stopWhen(src)) break;
         }
+        console.log(`Watched for messages: ${polls} screen read(s) in ${Date.now() - start}ms`);
         return [...found];
+    }
+
+    // Every non-empty content-desc and text value in a page-source string, in page order -
+    // the same strings getScreenStrings() returns, from a source already fetched.
+    static stringsFromSource(src) {
+        const decode = s => s
+            .replace(/&#10;/g, '\n').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+            .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        const out = [];
+        for (const tag of src.match(/<[\w.]+[^>]*>/g) || []) {
+            for (const re of [/content-desc="([^"]*)"/, /\stext="([^"]*)"/]) {
+                const m = tag.match(re);
+                if (m && m[1]) out.push(decode(m[1]));
+            }
+        }
+        return out.map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean);
     }
 
     // From the Basket list: New Basket -> `name` -> Create Basket. On success the app opens the new
@@ -229,11 +254,12 @@ class BasketPage extends BasePage {
         const before = new Set(await this.getScreenStrings());
         await this.clickNewBasket();
         // Start watching straight after the tap - a refusal toast is short-lived, so waiting for the
-        // dialog first (as before) let it disappear unseen. Stops as soon as the dialog opens.
+        // dialog first (as before) let it disappear unseen. Stops as soon as the dialog opens
+        // (its EditText shows up in the same page source, so no extra round trip per poll).
         const nameField = await this.driver.$(this.basketNameField);
         let tapMessages;
         try {
-            tapMessages = await this.captureNewMessages(before, 4000, () => nameField.isExisting().catch(() => false));
+            tapMessages = await this.captureNewMessages(before, 4000, src => /class="android\.widget\.EditText"/.test(src));
         } finally {
             await this.driver.updateSettings({ enableMultiWindows: false }).catch(() => { });
         }

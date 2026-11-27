@@ -22,7 +22,7 @@ class WatchlistIndexPage extends BasePage {
         // own search entry point - so these need XPath (@hint) rather than a UiSelector.
         this.optionChainSearchButton = '//android.widget.Button[@hint="Search"]';
         this.optionChainSearchInput = '//android.widget.Button[@hint="Add or search stocks"]';
-        this.optionChainCancelButton = 'android=new UiSelector().description("Cancel")';
+        this.optionChainCancelButton = 'android=new UiSelector().className("android.widget.ImageView").instance(1)';
         // The live-price marker row interleaved between the two nearest-the-money strike rows -
         // format "<price>\n<change>\n(<change%>)", e.g. "23939.50\n66.05\n(0.27%)". Its value
         // changes on every load (it's not a fixed strike), and unlike every other row in the
@@ -133,15 +133,17 @@ class WatchlistIndexPage extends BasePage {
         // Chain search (see optionChainSearchInput above), reused verbatim here.
         this.addSymbolsButton = 'android=new UiSelector().description("ADD SYMBOLS")';
         this.addSymbolsSearchInput = '//android.widget.Button[@hint="Add or search stocks"]';
-        // A result row reads "HDFCBANK\nAdd Watchlist, Double tap to open Quote Screen." - tapping
-        // the row itself opens the Quote screen, so adding to the watchlist instead needs the
-        // separate "+" icon node ("Double tap to add to watchlist") that sits to its right, paired
-        // up by matching y-position the same way findInlineValue pairs a label to its value.
-        this.addSymbolsResultRowRegex = /^(\S+)\nAdd Watchlist, Double tap to open Quote Screen\.$/;
-        this.addToWatchlistIconText = 'Double tap to add to watchlist';
+        // A result row reads "HDFCBANK, Double tap to open Quote Screen." (verified live,
+        // ui_dumps/watchlist_add_symbols_hdfc_results.xml - the older "HDFCBANK\nAdd Watchlist, ..."
+        // format is gone). Tapping the row opens the Quote screen, so adding needs the separate
+        // "+" Button inside the row, content-desc "Add Watchlist" (tooltip "Double tap to add to
+        // watchlist"). A row is addable when that button is inside its bounds. NSE and BSE
+        // listings of a symbol are two rows with the same name.
+        this.addSymbolsResultRowRegex = /^(.+?), Double tap to open Quote Screen\.$/;
+        this.addToWatchlistIconText = 'Add Watchlist';
         // On a NON-empty watchlist tab, "Add Symbols" is reached via a persistent search bar
         // instead of the empty-state's "ADD SYMBOLS" button - its own hint carries a live
-        // "(<current>/<max>)" symbol count (e.g. "Search Symbols\nAdd or search stocks (1/50),
+        // "(<current>/<max>)" symbol count (e.g. "Search Symbols\nAdd or search stocks (1/100),
         // Double tap to open Search Symbols."), confirmed live as the app's per-watchlist cap.
         this.searchSymbolsBar = '//android.widget.Button[contains(@hint,"Search Symbols")]';
         this.searchSymbolsCountRegex = /Add or search stocks \((\d+)\/(\d+)\)/;
@@ -349,14 +351,28 @@ class WatchlistIndexPage extends BasePage {
         console.log('Dismissed keyboard');
     }
 
+    // Every search result row on screen, top to bottom: { symbol, rowNode, addIconNode, iconDesc }.
+    // addIconNode is the row's "Add Watchlist" button, or undefined when the symbol is already in
+    // the watchlist; iconDesc is whatever button the row holds (for logging/signatures).
+    _searchResultRows(nodes) {
+        const inside = (n, row) => n !== row && n.y1 >= row.y1 && n.y2 <= row.y2 && n.x1 >= row.x1 && n.x2 <= row.x2;
+        return nodes
+            .filter(n => this.addSymbolsResultRowRegex.test(n.desc))
+            .sort((a, b) => a.y1 - b.y1)
+            .map(row => {
+                const icon = nodes.find(n => inside(n, row) && !this.addSymbolsResultRowRegex.test(n.desc));
+                return {
+                    symbol: row.desc.match(this.addSymbolsResultRowRegex)[1],
+                    rowNode: row,
+                    addIconNode: icon && icon.desc === this.addToWatchlistIconText ? icon : undefined,
+                    iconDesc: icon ? icon.desc : null,
+                };
+            });
+    }
+
+    // Only the rows that can still be added (they carry the "Add Watchlist" button).
     async getAddSymbolsResults() {
-        const nodes = await this.getDescribedElements();
-        const rows = nodes.filter(n => this.addSymbolsResultRowRegex.test(n.desc)).sort((a, b) => a.y1 - b.y1);
-        return rows.map(row => ({
-            symbol: row.desc.match(this.addSymbolsResultRowRegex)[1],
-            rowNode: row,
-            addIconNode: nodes.find(n => n.desc === this.addToWatchlistIconText && Math.abs(n.y1 - row.y1) <= 40),
-        }));
+        return this._searchResultRows(await this.getDescribedElements()).filter(r => r.addIconNode);
     }
 
     // Taps the "+" icon (not the row itself, which opens the Quote screen instead) for whichever
@@ -385,50 +401,61 @@ class WatchlistIndexPage extends BasePage {
         console.log('Opened Search Symbols');
     }
 
-    async closeSearchSymbols(timeout = 5000) {
+    // Closes Add Symbols with its top-right button. `label` ("Done" or "Cancel") taps that
+    // specific button and throws if it isn't shown; without it, whichever is shown is tapped.
+    // Returns the label tapped. The "Watchlist updated Successfully!" toast only follows Done
+    // after symbols were added - Cancel never shows it.
+    async closeSearchSymbols(timeout = 5000, label = null) {
+        const shown = await this.getSearchCloseButtonLabel(timeout);
+        if (label && shown !== label) throw new Error(`Add Symbols shows "${shown}", expected a "${label}" button`);
         await this.click(this.searchDoneOrCancelButton, timeout);
-        console.log('Closed Search Symbols');
+        console.log(`Closed Search Symbols with "${shown}"`);
+        return shown;
+    }
+
+    // "Done" or "Cancel" - whichever top-right button Add Symbols currently shows - or null.
+    async getSearchCloseButtonLabel(timeout = 5000) {
+        try {
+            const el = await this.findElement(this.searchDoneOrCancelButton, timeout);
+            return await el.getAttribute('content-desc');
+        } catch (_) {
+            return null;
+        }
     }
 
     async isWatchlistUpdatedToastShown(timeout = 3000) {
         return this.waitForToast(this.watchlistUpdatedToastText, { timeout });
     }
 
-    // Repeatedly taps the "+" icon on the topmost still-addable search result, scrolling for more
-    // once the visible ones run out, until either the query has no addable results left or the
-    // watchlist's own symbol cap is hit. The app enforces that cap silently - tapping "+" past it
-    // leaves the same row in the "Add Watchlist" (not-yet-added) state instead of flipping it to
-    // "already added" (confirmed live: past 50/50 the same row kept reappearing as the topmost
-    // result forever) - so a row that survives two consecutive taps unchanged is read as "cap
-    // reached" and stops the loop, rather than hammering the same tap for the rest of maxIterations.
+    // Repeatedly taps the "+" ("Add Watchlist") button on the topmost still-addable search
+    // result, scrolling for more once the visible ones run out, until either the query has no
+    // addable results left or the watchlist's symbol cap (100) is hit.
+    // Each tap is verified: an added row stays in place and its button flips from "Add Watchlist"
+    // to the symbol's name ("Remove <SYMBOL> from watchlist" tooltip) - verified live,
+    // ui_dumps/watchlist_add_symbols_after_first_add.xml. The app enforces the cap silently (no
+    // toast): the tapped row simply keeps its "Add Watchlist" button (verified live at 100/100).
+    // So a tap that leaves the row unchanged after a re-check means "cap reached" and ends the
+    // loop; it is not counted as added.
     //
     // "No addable rows visible" is NOT the same as "nothing left to add" - a query like "HDFC"
-    // was observed live to return 6+ screens of already-added NSE/BSE variants before the next
-    // addable one appears, so bailing out as soon as a few scrolls in a row show zero addable rows
-    // (as an earlier version of this method did) stops long before the list is actually exhausted.
-    // Instead, the whole visible row set (added + addable) is signature-compared across scrolls,
-    // the same "did the screen actually change" check scrollToBoundary uses elsewhere - only once
-    // THAT stops changing has the true end of the results been reached.
+    // can return several screens of already-added NSE/BSE variants before the next addable one,
+    // so the whole visible row set (added + addable) is signature-compared across scrolls and only
+    // once THAT stops changing has the end of the results been reached.
     async addSearchResultsUntilCapped(maxIterations = 300) {
         const added = [];
-        let previousTopSymbol = null;
-        let stallCount = 0;
+        let capReached = false;
         let previousRowSignature = null;
         let noProgressScrolls = 0;
+        const stillAddable = async row => {
+            const now = this._searchResultRows(await this.getDescribedElements())
+                .find(r => r.symbol === row.symbol && Math.abs(r.rowNode.y1 - row.rowNode.y1) <= 10);
+            return !!now && !!now.addIconNode;
+        };
 
         for (let i = 0; i < maxIterations; i++) {
-            const nodes = await this.getDescribedElements();
-            const addableRows = nodes
-                .filter(n => this.addSymbolsResultRowRegex.test(n.desc))
-                .sort((a, b) => a.y1 - b.y1)
-                .map(row => ({
-                    symbol: row.desc.match(this.addSymbolsResultRowRegex)[1],
-                    addIconNode: nodes.find(n => n.desc === this.addToWatchlistIconText && Math.abs(n.y1 - row.y1) <= 40),
-                }));
-            const rowSignature = nodes
-                .filter(n => this.addSymbolsResultRowRegex.test(n.desc) || this.addSymbolsAlreadyAddedRowRegex.test(n.desc))
-                .map(n => n.desc)
-                .join('|');
+            const allRows = this._searchResultRows(await this.getDescribedElements());
+            const addableRows = allRows.filter(r => r.addIconNode);
+            const rowSignature = allRows.map(r => `${r.symbol}:${r.iconDesc}@${r.rowNode.y1}`).join('|');
 
             if (!addableRows.length) {
                 if (rowSignature === previousRowSignature) {
@@ -449,28 +476,76 @@ class WatchlistIndexPage extends BasePage {
             previousRowSignature = rowSignature;
 
             const first = addableRows[0];
-            if (first.symbol === previousTopSymbol) {
-                stallCount++;
-                if (stallCount >= 2) {
-                    console.log(`"${first.symbol}" didn't leave the results after 2 taps - watchlist cap likely reached`);
+            await this.tapNode(first.addIconNode);
+            await this.pause(700);
+            if (await stillAddable(first) && (await this.pause(1000), await stillAddable(first))) {
+                // Re-checked after a further second first, so a slow-to-update row isn't tapped
+                // again (a second tap on an added row would remove it). Then one retry in case the
+                // tap itself didn't register, before calling it the cap.
+                await this.tapNode(first.addIconNode);
+                await this.pause(1000);
+                if (await stillAddable(first)) {
+                    capReached = true;
+                    console.log(`"${first.symbol}" stayed "Add Watchlist" after 2 taps - the app refused it (cap reached)`);
                     break;
                 }
-            } else {
-                stallCount = 0;
             }
-            previousTopSymbol = first.symbol;
-
-            if (!first.addIconNode) {
-                await this.scrollDown();
-                await this.pause(400);
-                continue;
-            }
-            await this.tapNode(first.addIconNode);
             added.push(first.symbol);
             console.log(`Added "${first.symbol}" (${added.length} added so far)`);
-            await this.pause(700);
+        }
+        // Whether the loop stopped because the app refused further adds (the cap), as opposed to
+        // running out of results. Exposed on the returned array so existing callers are unaffected.
+        added.capReached = capReached;
+        if (!added.length && !capReached) {
+            // Nothing addable on any screen - either every result really is already added, or the
+            // result row format has changed again. Saved so the row format can be checked.
+            await this.dumpPage('watchlist_add_symbols_no_addable');
         }
         return added;
+    }
+
+    // Watches for a toast containing `text` (string or RegExp) for up to `timeout` ms, with
+    // UiAutomator2's enableMultiWindows on - this app's toasts are drawn in a separate window and
+    // aren't in the default page source. `action` (optional) runs right after the setting is on,
+    // so the watch starts immediately after e.g. a tap. One page source per poll. Returns true
+    // as soon as it is seen.
+    async watchForToast(text, timeout = 4000, action = null) {
+        const matches = src => (text instanceof RegExp ? text.test(src) : src.includes(text));
+        await this.driver.updateSettings({ enableMultiWindows: true }).catch(() => { });
+        try {
+            if (action) await action();
+            const end = Date.now() + timeout;
+            do {
+                if (matches(await this.driver.getPageSource())) return true;
+            } while (Date.now() < end);
+            return false;
+        } finally {
+            await this.driver.updateSettings({ enableMultiWindows: false }).catch(() => { });
+        }
+    }
+
+    // With the watchlist full: taps "Add Watchlist" on the topmost still-addable search result and
+    // watches for the "Maximum 100 scrips can be added" toast. Returns { symbol, toastShown,
+    // refused } - refused is true when the row still reads "Add Watchlist" afterwards. Returns
+    // null if no addable row is on screen.
+    async tapAddExpectingMaxToast(maxSymbols = 100, timeout = 4000) {
+        const first = (await this.getAddSymbolsResults())[0];
+        if (!first) return null;
+        const toastShown = await this.watchForToast(
+            new RegExp(`Maximum ${maxSymbols} scrips can be added`, 'i'), timeout, () => this.tapNode(first.addIconNode));
+        await this.pause(500);
+        const now = this._searchResultRows(await this.getDescribedElements())
+            .find(r => r.symbol === first.symbol && Math.abs(r.rowNode.y1 - first.rowNode.y1) <= 10);
+        return { symbol: first.symbol, toastShown, refused: !!now && !!now.addIconNode };
+    }
+
+    // Saves the current page source to ui_dumps/<name>.xml.
+    async dumpPage(name) {
+        const fs = require('fs');
+        const path = require('path');
+        const file = path.join(__dirname, '..', 'ui_dumps', `${name}.xml`);
+        fs.writeFileSync(file, await this.driver.getPageSource());
+        console.log(`Saved page source to ${file}`);
     }
 
     async openManageWatchlist(timeout = 5000) {
@@ -579,6 +654,33 @@ class WatchlistIndexPage extends BasePage {
         await this.pause(300);
         await this.driver.hideKeyboard().catch(() => { });
         console.log(`Renamed watchlist group to "${newName}"`);
+    }
+
+    // Types `text` into the Edit Watchlist name field one real key event at a time, after
+    // deleting the current name with DEL presses - the way a user types. The app now caps the
+    // name at 15 characters by ignoring further keystrokes (no toast); a single setValue() of the
+    // whole string could instead be rejected as one change, so it wouldn't show the cap.
+    // Returns the name the field shows afterwards.
+    async typeEditWatchlistNameByKeys(text, timeout = 5000) {
+        const input = await this.findElement(this.editWatchlistNameField, timeout);
+        await input.click();
+        await this.pause(300);
+        const current = (await input.getText().catch(() => '')) || '';
+        await this.driver.pressKeyCode(123); // KEYCODE_MOVE_END
+        for (let i = 0; i < current.length + 3; i++) await this.driver.pressKeyCode(67); // KEYCODE_DEL
+        for (const ch of text) {
+            await this.driver.keys(ch);
+            await this.pause(60);
+        }
+        await this.pause(400);
+        const shown = await this.getEditWatchlistNameValue(timeout);
+        console.log(`Typed "${text}" (${text.length} chars) into the watchlist name field - field shows "${shown}" (${shown.length} chars)`);
+        return shown;
+    }
+
+    async getEditWatchlistNameValue(timeout = 5000) {
+        const input = await this.findElement(this.editWatchlistNameField, timeout);
+        return ((await input.getText().catch(() => '')) || '').trim();
     }
 
     async clearEditWatchlistNameField(timeout = 5000) {
@@ -941,13 +1043,11 @@ class WatchlistIndexPage extends BasePage {
         console.log(`Typed "${query}" into Option Chain search`);
     }
 
-    // Result rows read like "TATASTEEL\nAdd Watchlist, Double tap to open Quote Screen." - the
-    // symbol name is whatever precedes that fixed suffix.
+    // Result rows read "TATASTEEL, Double tap to open Quote Screen." - the same rows as the
+    // watchlist Add Symbols search (verified live, ui_dumps/index_oc_search_typed.xml), so they're
+    // read with the same parser. Returns every row's symbol (added to a watchlist or not).
     async getOptionChainSearchResults() {
-        const nodes = await this.getDescribedElements();
-        return nodes
-            .filter(n => n.desc.includes('Add Watchlist, Double tap to open Quote Screen.'))
-            .map(n => n.desc.split('\n')[0].trim());
+        return this._searchResultRows(await this.getDescribedElements()).map(r => r.symbol);
     }
 
     async clickOptionChainFilterTab(label, timeout = 5000) {
@@ -955,9 +1055,13 @@ class WatchlistIndexPage extends BasePage {
         console.log(`Clicked "${label}" filter tab`);
     }
 
+    // Leaves the Option Chain search screen via its "X" icon. The screen no longer has a "Cancel"
+    // button (verified live, ui_dumps/index_oc_search_typed.xml): the top bar is one full-width
+    // search field holding two unlabelled clickable ImageViews - the X is the second one
+    // (optionChainCancelButton, ImageView instance 1).
     async clickOptionChainCancel(timeout = 5000) {
         await this.click(this.optionChainCancelButton, timeout);
-        console.log('Clicked Cancel on Option Chain search');
+        console.log('Clicked the X on Option Chain search');
     }
 
     // Each strike row in the Option Chain table is [Strike Price][Call LTP][Put LTP], laid out
