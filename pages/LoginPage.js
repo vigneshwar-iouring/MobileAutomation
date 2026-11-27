@@ -148,9 +148,40 @@ class LoginPage extends BasePage {
         return await this.isElementVisible(this.riskDisclosureHeading, timeout);
     }
 
+    async isIUnderstandShown(timeout = 3000) {
+        return await this.isElementVisible(this.iUnderstandButton, timeout);
+    }
+
     async acknowledgeRiskDisclosure() {
         await this.click(this.iUnderstandButton);
         console.log('Clicked "I Understand" on Risk Disclosure on Derivatives popup');
+    }
+
+    // Checks the popup heading and the "I Understand" button independently:
+    //  - heading not matched by riskDisclosureHeading -> logged as FAIL (console.error, so the run's
+    //    report status is FAIL too), but the flow is NOT stopped there.
+    //  - "I Understand" displayed -> tapped regardless of the heading result, so the next flow
+    //    can proceed.
+    //  - heading matched but no "I Understand" -> throws, since the popup would block everything after.
+    // Messages are prefixed with `tcLabel` so getFailedTCs() attributes them to the right TC.
+    async handleRiskDisclosure(tcLabel, timeout = 10000) {
+        const headingMatched = await this.isRiskDisclosureShown(timeout);
+        if (headingMatched) {
+            console.log(`${tcLabel} Risk Disclosure popup matched locator - PASS`);
+        } else {
+            console.error(`${tcLabel} Risk Disclosure popup not matched with locator - FAIL`);
+        }
+
+        const buttonShown = await this.isIUnderstandShown(headingMatched ? 5000 : 3000);
+        if (buttonShown) {
+            console.log(`${tcLabel} "I Understand" button displayed - clicking and proceeding...`);
+            await this.acknowledgeRiskDisclosure();
+        } else if (headingMatched) {
+            throw new Error('Risk Disclosure popup shown but "I Understand" button not displayed');
+        } else {
+            console.error(`${tcLabel} "I Understand" button not displayed - FAIL`);
+        }
+        return { headingMatched, accepted: buttonShown };
     }
 
     // The system credential field rejects setValue() outright ("Cannot set the element...") -

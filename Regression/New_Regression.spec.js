@@ -771,13 +771,19 @@ describe('Regression: Login & Authentication Flow — Globe Capital Dev', () => 
     console.log('  ℹ  Waiting for Watchlist screen to load before checking Risk Disclosure...');
     await browser.pause(2000);
     const onRisk = await loginPage.isDisplayed(RISK_SEL.heading, 10000);
-    console.log(`  ℹ  Risk Disclosure popup shown: ${onRisk}`);
-    await assertOrDump(onRisk, 'R8: Risk Disclosure popup not shown', 'Risk Disclosure popup should appear after login');
+    console.log(`  ℹ  Risk Disclosure popup matched locator: ${onRisk}`);
+    // Popup not matched by the locator -> R8 fails, but only AFTER "I Understand" has been tapped
+    // (if displayed), so the app isn't left blocked by the popup and R9 onwards can proceed.
+    // The screen is dumped now, before the tap changes it.
+    if (!onRisk) await dumpScreen('R8: Risk Disclosure popup not matched with locator');
 
-    const accepted = await loginPage.findAndTap(RISK_SEL.acceptBtn, 5000);
-    console.log(`  ℹ  "I Understand" tapped: ${accepted}`);
+    const accepted = await loginPage.findAndTap(RISK_SEL.acceptBtn, onRisk ? 5000 : 3000);
+    console.log(`  ℹ  "I Understand" displayed and tapped: ${accepted}`);
+    if (accepted) await browser.pause(1000);
+
+    expect(onRisk, 'Risk Disclosure popup should match the locator after login').to.be.true;
+    console.log('  ✓  Risk Disclosure popup matched the locator');
     await assertOrDump(accepted, 'R8: "I Understand" button not found', 'Should be able to tap "I Understand" on the Risk Disclosure popup');
-    await browser.pause(1000);
 
     const onWatchlist = await watchlistPage.isLoaded(10000);
     await assertOrDump(onWatchlist, 'R8: Watchlist not reached after login flow', 'Watchlist home screen should be visible after full login flow');

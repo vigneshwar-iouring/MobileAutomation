@@ -43,13 +43,14 @@ async function run() {
             await watchlistPage.clickOptionChain();
             await driver.pause(1000);
 
-            console.log('\nTC 7: Searching "tata" in Option Chain search and verifying results...');
+            console.log('\nTC 7: Searching "TATASTEEL" in Option Chain search and verifying results...');
             await watchlistPage.clickOptionChainSearch();
-            await watchlistPage.searchOptionChainSymbol('tata');
+            await watchlistPage.searchOptionChainSymbol('TATASTEEL');
+            await driver.pause(1000);
             const searchResults = await watchlistPage.getOptionChainSearchResults();
             console.log(`Search results: ${searchResults.join(', ')}`);
-            const allMatchTata = searchResults.length > 0 && searchResults.every(name => name.toUpperCase().includes('TATA'));
-            console.log(`"tata" search check: ${allMatchTata ? 'PASS (all results contain TATA)' : 'FAIL'}`);
+            const allMatchTataSteel = searchResults.length > 0 && searchResults.every(name => name.toUpperCase().includes('TATASTEEL'));
+            console.log(`"TATASTEEL" search check: ${allMatchTataSteel ? 'PASS (all results contain TATASTEEL)' : 'FAIL'}`);
 
             for (const tab of ['STOCK', 'F&O', 'COM', 'CDS']) {
                 await watchlistPage.clickOptionChainFilterTab(tab);
@@ -120,7 +121,7 @@ async function run() {
             console.log('Option Chain not shown for this index - skipping TC 9');
         }
 
-        console.log('\nTC 10: Verifying LTP is the default tab, then checking OI and Greeks scroll to bottom and top...');
+        console.log('\nTC 10: Verifying LTP is the default tab, OI and Greeks scroll to bottom and top, and a strike price opens the chart on LTP, OI and Greeks...');
         if (hasOptionChain) {
             await watchlistPage.clickOptionChain();
             await driver.pause(600);
@@ -128,16 +129,36 @@ async function run() {
             const onLtpByDefault = await watchlistPage.isOptionChainOnLtpTab();
             console.log(`Option Chain launches on LTP tab by default: ${onLtpByDefault ? 'PASS' : 'FAIL'}`);
 
+            // On each tab: click the ATM strike price (the live-price row), verify the chart screen
+            // opens, then go back to Option Chain. The tab is re-selected before each check in case
+            // returning from the chart resets it.
+            const checkStrikeOpensChart = async tab => {
+                await watchlistPage.clickOptionChainTab(tab);
+                await driver.pause(250);
+                const atm = await watchlistPage.clickAtmStrikePrice();
+                const chartOpened = await watchlistPage.isChartOpened(15000);
+                console.log(`${tab}: clicking ATM strike price ${atm} opens the chart screen: ${chartOpened ? 'PASS' : 'FAIL'}`);
+                if (!chartOpened) await watchlistPage.dumpPage(`index_oc_strike_chart_${tab.toLowerCase()}`);
+                await watchlistPage.goBackToOptionChain();   // one Back: chart -> Option Chain
+                await driver.pause(500);
+            };
+
+            await checkStrikeOpensChart('LTP');
+
             await watchlistPage.clickOptionChainTab('OI');
             await driver.pause(250);
             await watchlistPage.scrollOptionChainToBottom();
             await watchlistPage.scrollOptionChainToTop();
+            await checkStrikeOpensChart('OI');
+            await watchlistPage.goBackToOptionChain();
 
             await watchlistPage.clickOptionChainTab('Greeks');
             await driver.pause(250);
             await watchlistPage.scrollOptionChainToBottom();
             await watchlistPage.scrollOptionChainToTop();
+            await checkStrikeOpensChart('Greeks');
 
+            await watchlistPage.goBackToOptionChain();
             await watchlistPage.goBackToQuotes();
         } else {
             console.log('Option Chain not shown for this index - skipping TC 10');

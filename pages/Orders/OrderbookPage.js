@@ -10,27 +10,27 @@ const path = require('path');
 // Double tap to view order details" — symbol can contain spaces (F&O contracts like
 // "GOLD 05OCT FUT") and price can carry Indian comma grouping ("1,47,178.00").
 const SEL = {
-  tabAll:       '//*[contains(@content-desc,"ALL orders")]',
-  tabPending:   '//*[contains(@content-desc,"Pending orders")]',
-  tabExecuted:  '//*[contains(@content-desc,"Executed orders")]',
+  tabAll: '//*[contains(@content-desc,"All orders")]',
+  tabPending: '//*[contains(@content-desc,"Pending orders")]',
+  tabExecuted: '//*[contains(@content-desc,"Executed orders")]',
   tabCancelled: '//*[contains(@content-desc,"Cancelled orders")]',
 
-  searchBox:    '//*[contains(@content-desc,"Search") or contains(@hint,"Search")]',
-  filterBtn:    '//*[contains(@content-desc,"Filter Orders")]',
+  searchBox: '//*[contains(@content-desc,"Search") or contains(@hint,"Search")]',
+  filterBtn: '//*[contains(@content-desc,"Filter Orders")]',
 
-  cancelAllBtn:      '//*[contains(@content-desc,"Cancel All") or contains(@text,"Cancel All")]',
+  cancelAllBtn: '//*[contains(@content-desc,"Cancel All") or contains(@text,"Cancel All")]',
   convertToMarketBtn: '//*[contains(@content-desc,"Convert to Market") or contains(@text,"Convert to Market")]',
 
   // "don't" - confirmed live that the app renders a curly apostrophe (U+2019, "'"), not a
   // straight ASCII one, so a literal "don't" here never matched despite the exact right text
   // being on screen ("You don't have any Orders" / "...Pending Orders" / etc.).
-  emptyState:   '//*[contains(@content-desc,"don’t have any") or contains(@text,"don’t have any")]',
+  emptyState: '//*[contains(@content-desc,"don’t have any") or contains(@text,"don’t have any")]',
 };
 
 const TABS = {
-  all:       SEL.tabAll,
-  pending:   SEL.tabPending,
-  executed:  SEL.tabExecuted,
+  all: SEL.tabAll,
+  pending: SEL.tabPending,
+  executed: SEL.tabExecuted,
   cancelled: SEL.tabCancelled,
 };
 
@@ -59,7 +59,7 @@ class OrderbookPage extends BasePage {
         const m = src.match(new RegExp(`There are (\\d+) ${label} orders`, 'i'));
         return m ? parseInt(m[1], 10) : 0;
       };
-      return { all: get('ALL'), pending: get('Pending'), executed: get('Executed'), cancelled: get('Cancelled') };
+      return { all: get('All'), pending: get('Pending'), executed: get('Executed'), cancelled: get('Cancelled') };
     } catch { return { all: 0, pending: 0, executed: 0, cancelled: 0 }; }
   }
 
@@ -119,7 +119,7 @@ class OrderbookPage extends BasePage {
 
   async getOrderRows() {
     try {
-      const src  = await driver.getPageSource();
+      const src = await driver.getPageSource();
       const rows = [...src.matchAll(/content-desc="([^"]*order for[^"]*)"/gi)].map(m => m[1]);
       return rows.map(raw => {
         // Symbol can contain spaces (F&O contracts like "GOLD 05OCT FUT"), and price
@@ -143,7 +143,7 @@ class OrderbookPage extends BasePage {
       const dumpPath = path.join(__dirname, '../../ui_dumps', `${label}.xml`);
       fs.mkdirSync(path.dirname(dumpPath), { recursive: true });
       fs.writeFileSync(dumpPath, src);
-    } catch {}
+    } catch { }
   }
 }
 

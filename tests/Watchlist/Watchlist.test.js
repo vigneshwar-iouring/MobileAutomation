@@ -5,6 +5,11 @@ const { createLogger, getFailedTCs } = require('../../utils/logger');
 const { logFile, entries } = createLogger('Watchlist');
 console.log(`Logging this run to: ${logFile}`);
 
+// Maximum symbols per watchlist (raised from 50 to 100 in the app).
+const WATCHLIST_SYMBOL_LIMIT = 100;
+// Longest watchlist name the app accepts; it ignores keystrokes past this, with no toast.
+const WATCHLIST_NAME_MAX_LENGTH = 15;
+
 async function run() {
     const driver = await DriverManager.getDriver();
     try {
@@ -48,33 +53,57 @@ async function run() {
         await watchlistPage.clickFirstWatchlistTab();
         let countInfo = await watchlistPage.getWatchlistSymbolCount();
         console.log(countInfo ? `  Current count: ${countInfo.current}/${countInfo.max}` : '  Could not read the watchlist symbol count (list may still be empty).');
+        if (countInfo) {
+            const limitOk = countInfo.max === WATCHLIST_SYMBOL_LIMIT;
+            console.log(`  Watchlist symbol limit: ${countInfo.max} (expected ${WATCHLIST_SYMBOL_LIMIT}) ${limitOk ? 'PASS' : 'FAIL'}`);
+        }
 
-        if (countInfo && countInfo.current < countInfo.max) {
-            console.log('\nTC 6: Adding symbols via "HDFC" search until the cap is reached...');
+        // Runs even when the watchlist is already full: the add attempt is then refused straight
+        // away, which is exactly the cap validation.
+        if (countInfo) {
+            console.log(`\nTC 6: Adding symbols via "HDFC" search until the ${WATCHLIST_SYMBOL_LIMIT}-symbol cap is reached...`);
             await watchlistPage.openSearchSymbols();
             await watchlistPage.searchAddSymbols('HDFC');
             const added = await watchlistPage.addSearchResultsUntilCapped();
             console.log(`  Added ${added.length} symbol(s) via "HDFC" search: ${added.join(', ')}`);
-            await watchlistPage.closeSearchSymbols();
-
-            console.log('\nTC 7: Saving and verifying the update toast...');
-            // Some "leave with unsaved changes" flows in this app (e.g. Manage Indices, Edit
-            // Watchlist) show a DISCARD/CHANGE prompt on exit - live-observed here that the Add
-            // Symbols screen's Done instead saves immediately with its own short-lived success
-            // toast, so this prompt check is kept brief (a real prompt appears near-instantly)
-            // rather than the far longer wait used to check for genuinely absent elements
-            // elsewhere - burning ~2s+ here waiting on a prompt that never shows was observed live
-            // to eat into the toast's own lifetime and make the very next check report a false FAIL.
-            if (await watchlistPage.isElementVisible('android=new UiSelector().description("CHANGE")', 800)) {
-                await watchlistPage.clickSaveChanges();
+            const addedOk = added.length === WATCHLIST_SYMBOL_LIMIT - countInfo.current;
+            console.log(`  Symbols added: ${added.length} (expected ${WATCHLIST_SYMBOL_LIMIT - countInfo.current} to go from ${countInfo.current} to ${WATCHLIST_SYMBOL_LIMIT}) ${addedOk ? 'PASS' : 'FAIL'}`);
+            if (!added.length && !added.capReached) {
+                console.error(`  FAIL: no "HDFC" search result could be added at ${countInfo.current}/${countInfo.max} - see ui_dumps/watchlist_add_symbols_no_addable.xml`);
             }
-            const addToastShown = await watchlistPage.isWatchlistUpdatedToastShown();
-            console.log(`  "Watchlist updated Successfully!" toast shown: ${addToastShown ? 'PASS' : 'FAIL'}`);
+            const capRefused = added.capReached;
+            console.log(`  App refused adding past the ${WATCHLIST_SYMBOL_LIMIT}-symbol cap: ${capRefused ? 'PASS' : 'FAIL'}`);
+
+            // One more add attempt at the cap, watched for the app's limit toast.
+            const maxToastText = `Maximum ${WATCHLIST_SYMBOL_LIMIT} scrips can be added`;
+            const overCap = capRefused ? await watchlistPage.tapAddExpectingMaxToast(WATCHLIST_SYMBOL_LIMIT) : null;
+            if (!overCap) {
+                console.error(`  FAIL: could not attempt an add past the cap to check the "${maxToastText}" toast`);
+            } else {
+                console.log(`  Tapped "Add Watchlist" on "${overCap.symbol}" at ${WATCHLIST_SYMBOL_LIMIT}/${WATCHLIST_SYMBOL_LIMIT} - refused: ${overCap.refused ? 'PASS' : 'FAIL'}`);
+                console.log(`  "${maxToastText}" toast shown: ${overCap.toastShown ? 'PASS' : 'FAIL'}`);
+            }
+
+            // "Watchlist updated Successfully!" is shown only when symbols were added and Add Symbols
+            // is closed with Done. With nothing added (the watchlist was already full) it is closed
+            // with Cancel, and no toast must appear. Watched with multi-window reading on (where
+            // the app's toasts are drawn), so an absent toast is a real result.
+            const expectedButton = added.length ? 'Done' : 'Cancel';
+            console.log(`\nTC 7: Closing Add Symbols with "${expectedButton}" (${added.length} symbol(s) added) and checking the update toast...`);
+            const shownButton = await watchlistPage.getSearchCloseButtonLabel();
+            const buttonOk = shownButton === expectedButton;
+            console.log(`  Close button shows "${shownButton}" (expected "${expectedButton}") ${buttonOk ? 'PASS' : 'FAIL'}`);
+            const updatedToastShown = await watchlistPage.watchForToast(
+                watchlistPage.watchlistUpdatedToastText, 3000, () => watchlistPage.closeSearchSymbols());
+            if (expectedButton === 'Done') {
+                console.log(`  "Watchlist updated Successfully!" toast shown after Done: ${updatedToastShown ? 'PASS' : 'FAIL'}`);
+            } else {
+                console.log(`  "Watchlist updated Successfully!" toast not shown after Cancel: ${!updatedToastShown ? 'PASS' : 'FAIL'}`);
+            }
 
             countInfo = await watchlistPage.getWatchlistSymbolCount();
-            console.log(`  Final count: ${countInfo ? `${countInfo.current}/${countInfo.max}` : 'unknown'}`);
-        } else if (countInfo) {
-            console.log('\nTC 6/7: Already at the cap - nothing to add, skipping.');
+            const capped = !!countInfo && countInfo.current === WATCHLIST_SYMBOL_LIMIT;
+            console.log(`  Final count: ${countInfo ? `${countInfo.current}/${countInfo.max}` : 'unknown'} (expected ${WATCHLIST_SYMBOL_LIMIT}/${WATCHLIST_SYMBOL_LIMIT}) ${capped ? 'PASS' : 'FAIL'}`);
         }
 
         console.log('\nTC 8: Opening Manage Watchlist and Edit Watchlist for the 1st tab\'s group...');
@@ -131,10 +160,17 @@ async function run() {
         await watchlistPage.openManageWatchlist();
         await watchlistPage.openEditWatchlistForGroup(newGroupName);
 
-        const tooLongName = 'ThisNameIsWayTooLongXX';
-        await watchlistPage.renameEditWatchlistGroup(tooLongName);
-        const tooLongToastShown = await watchlistPage.isWatchlistNameTooLongToastShown();
-        console.log(`  "Watchlist name cannot exceed 15 letters" toast shown: ${tooLongToastShown ? 'PASS' : 'FAIL'}`);
+        // The app no longer shows a "too long" toast: it simply stops accepting keystrokes once
+        // the name is 15 characters long. So a 20-character name is typed key by key and the
+        // field must end up holding exactly its first 15 characters.
+        const tooLongName = 'ThisNameIsWayTooLong';
+        const shownName = await watchlistPage.typeEditWatchlistNameByKeys(tooLongName);
+        await driver.hideKeyboard().catch(() => { });
+        const expectedName = tooLongName.slice(0, WATCHLIST_NAME_MAX_LENGTH);
+        const lengthOk = shownName.length === WATCHLIST_NAME_MAX_LENGTH;
+        console.log(`  Name length after typing ${tooLongName.length} characters: ${shownName.length} (expected ${WATCHLIST_NAME_MAX_LENGTH}) ${lengthOk ? 'PASS' : 'FAIL'}`);
+        const textOk = shownName === expectedName;
+        console.log(`  Typing stopped at the ${WATCHLIST_NAME_MAX_LENGTH}th character: "${shownName}" (expected "${expectedName}") ${textOk ? 'PASS' : 'FAIL'}`);
 
         await watchlistPage.clearEditWatchlistNameField();
         await watchlistPage.closeEditWatchlist();

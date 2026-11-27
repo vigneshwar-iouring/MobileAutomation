@@ -284,6 +284,24 @@ async function basketLimitChecks(basketPage, tc) {
 // are compared upper-cased with spaces removed (futures work the same: "CRUDEOIL 19NOV FUT" ->
 // "19NOVFUT"). The header shows one underlying at a time, so only that underlying's legs are
 // listed. Saves the screen to ui_dumps/<dumpName>.xml if anything fails. Returns true if all pass.
+// Net Premium only applies to options (a CE or PE in the symbol name). Verified live: an option
+// leg shows "Net Premium | Pay | 13,659.75" (ui_dumps/basket_strategy_builder_nfo.xml), a futures
+// leg shows "Net Premium | 0.00" with no Pay/Receive (ui_dumps/basket_strategy_builder_multi.xml).
+// The value covers every leg the builder currently shows, so it is expected whenever any shown leg
+// (or, if no legs were read, the clicked symbol) is an option. Returns a [label, ok] check.
+function netPremiumCheck(d, symbolName) {
+    const isOption = s => /\b(CE|PE)$/i.test((s || '').trim());
+    const hasOption = d.legs.length ? d.legs.some(l => isOption(l.instrument)) : isOption(symbolName);
+    const amount = Number((d.netPremium || '').replace(/,/g, ''));
+    const shown = `${d.payOrReceive || ''} ${d.netPremium}`.trim();
+    if (hasOption) {
+        return [`Net Premium: ${shown} (expected Pay/Receive with an amount - option leg)`,
+            !!d.payOrReceive && Number.isFinite(amount) && amount > 0];
+    }
+    return [`Net Premium: ${shown} (expected 0.00 with no Pay/Receive - no CE/PE leg)`,
+        !d.payOrReceive && d.netPremium !== null && amount === 0];
+}
+
 async function checkBuilderForSymbol(basketPage, symbolName, dumpName) {
     const d = await basketPage.getStrategyBuilderDetails();
     const isNum = v => !!v && /^-?[\d,]+(\.\d+)?$/.test(v);
@@ -301,7 +319,7 @@ async function checkBuilderForSymbol(basketPage, symbolName, dumpName) {
         [`Side: ${leg.side} (expected B for a BUY)`, leg.side === 'B'],
         [`Price: ${leg.price}`, isNum(leg.price)],
         [`LTP: ${leg.ltp}`, isNum(leg.ltp)],
-        [`Net Premium: ${d.payOrReceive || ''} ${d.netPremium}`, isNum(d.netPremium)],
+        netPremiumCheck(d, symbolName),
     ];
     for (const [label, ok] of checks) {
         console.log(`${label} ${ok ? 'PASS' : 'FAIL'}`);

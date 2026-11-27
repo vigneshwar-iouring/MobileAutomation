@@ -140,12 +140,10 @@ async function run() {
 
         currentStep = 'TC 9: Checking Risk Disclosure on Derivatives popup...';
         console.log(currentStep);
-        if (!(await loginPage.isRiskDisclosureShown(10000))) {
-            throw new Error('Risk Disclosure on Derivatives popup was expected but not shown');
-        }
-        console.log('Risk Disclosure on Derivatives popup shown - clicking "I Understand"...');
-        await loginPage.acknowledgeRiskDisclosure();
-        await driver.pause(1000);
+        // Popup not matched by the locator -> TC 9 FAIL (logged, not thrown). If "I Understand" is
+        // displayed anyway, it's tapped and the flow proceeds to the home-screen check.
+        const risk = await loginPage.handleRiskDisclosure('TC 9:');
+        if (risk.accepted) await driver.pause(1000);
 
         currentStep = 'Final check: verifying home screen';
         const loggedIn = await loginPage.isLoggedIn();
