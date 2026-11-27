@@ -23,9 +23,12 @@ class WatchlistIndexPage extends BasePage {
         this.optionChainSearchButton = '//android.widget.Button[@hint="Search"]';
         this.optionChainSearchInput = '//android.widget.Button[@hint="Add or search stocks"]';
         this.optionChainCancelButton = 'android=new UiSelector().className("android.widget.ImageView").instance(1)';
+        // Back arrow at the left of the Option Chain search field - closes search.
+        this.optionChainSearchBackArrow = 'android=new UiSelector().className("android.widget.ImageView").instance(0)';
         // The live-price marker row interleaved between the two nearest-the-money strike rows -
         // format "<price>\n<change>\n(<change%>)", e.g. "23939.50\n66.05\n(0.27%)". Its value
         // changes on every load (it's not a fixed strike), and unlike every other row in the
+        this.optionChainTabSelector = 'android=new UiSelector().className("android.view.View").instance(3)';
         // table it is NOT clickable, so it can only be located by matching this shape.
         this.optionChainMarkerRegex = /^\d[\d.]*\n-?\d[\d.]*\n\(-?[\d.]+%\)$/;
         // Expiry date tabs read like "08 Sep 2026\nW2\n(4 D)" - the date/week/days-left all shift
@@ -1055,13 +1058,19 @@ class WatchlistIndexPage extends BasePage {
         console.log(`Clicked "${label}" filter tab`);
     }
 
-    // Leaves the Option Chain search screen via its "X" icon. The screen no longer has a "Cancel"
-    // button (verified live, ui_dumps/index_oc_search_typed.xml): the top bar is one full-width
-    // search field holding two unlabelled clickable ImageViews - the X is the second one
-    // (optionChainCancelButton, ImageView instance 1).
+    // Leaves the Option Chain search screen, back to Option Chain. The screen no longer has a
+    // "Cancel" button (verified live, ui_dumps/index_oc_search_typed.xml): the top bar is one
+    // full-width search field with two unlabelled ImageViews - a back arrow (instance 0) and an X
+    // (instance 1, optionChainCancelButton). The X only CLEARS the query: the screen stays on
+    // search showing "Recent search", and the X itself disappears (verified live,
+    // ui_dumps/index_oc_after_x.xml). So the X is tapped to clear, then the back arrow - by then
+    // the only ImageView, instance 0 - to close search.
     async clickOptionChainCancel(timeout = 5000) {
         await this.click(this.optionChainCancelButton, timeout);
-        console.log('Clicked the X on Option Chain search');
+        console.log('Clicked the X on Option Chain search (clears the query)');
+        await this.pause(500);
+        await this.click(this.optionChainSearchBackArrow, timeout);
+        console.log('Clicked the back arrow on Option Chain search');
     }
 
     // Each strike row in the Option Chain table is [Strike Price][Call LTP][Put LTP], laid out
@@ -1116,6 +1125,26 @@ class WatchlistIndexPage extends BasePage {
     async isOptionChainOnLtpTab() {
         const nodes = await this.getDescribedElements();
         return nodes.some(n => n.desc === 'Call LTP') && nodes.some(n => n.desc === 'Put LTP');
+    }
+
+    // Taps the ATM strike price - the live-price row between the two nearest-the-money strikes,
+    // e.g. "25607.20\n66.05\n(0.27%)" (optionChainMarkerRegex) - on whichever of the LTP/OI/Greeks
+    // tabs is showing, and returns its price. The row isn't marked clickable in the accessibility
+    // tree, so it's tapped by position. If it's off screen (e.g. after scrolling to the top), the
+    // table is scrolled down until it shows.
+    async clickAtmStrikePrice(maxScrolls = 10) {
+        let atm = null;
+        for (let i = 0; i <= maxScrolls; i++) {
+            atm = (await this.getDescribedElements()).find(n => this.optionChainMarkerRegex.test(n.desc));
+            if (atm) break;
+            await this.scrollDown();
+            await this.pause(300);
+        }
+        if (!atm) throw new Error('ATM strike price (live price row) not found in the Option Chain table');
+        const price = atm.desc.split('\n')[0];
+        await this.tapNode(atm);
+        console.log(`Clicked ATM strike price ${price}`);
+        return price;
     }
 
     async clickOptionChainTab(label, timeout = 5000) {
@@ -1378,6 +1407,14 @@ class WatchlistIndexPage extends BasePage {
         await this.driver.back();
         await this.pause(1000);
         console.log('Navigated back to Quotes screen');
+    }
+
+    async goBackToOptionChain() {
+        const optionChainTab = await this.findElement(this.optionChainTabSelector);
+        await this.pause(500);
+        await optionChainTab.click();
+        await this.pause(1000);
+        console.log('Navigated back to Option Chain screen');
     }
 
     // A label row reads like "Open. 23910.90., Displays the Open value." - the value is a plain
